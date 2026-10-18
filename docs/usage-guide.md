@@ -549,12 +549,21 @@ A managed `tao slice-complete` live at the session deadline gets at most ten min
 Tao reports failures and supported mechanical corrections; final
 repository verification is unchanged. See [observed verification](plan-format.md#observed-slice-verification).
 
-Tao-owned slice, final, and merge gates override inherited `GOLANGCI_LINT_CACHE`
-with `.tao/cache/golangci-lint` under the actual execution worktree (the integration
-worktree for batch merges). Lint remains mandatory where declared; only its cache
-is isolated. These caches disappear when their worktrees are removed. Manual
-commands and explicit cache overrides inside commands or build scripts are
-outside this guarantee. The same gates default `PYTHONDONTWRITEBYTECODE=1` so
+Tao-owned slice, final, baseline, and merge gates override inherited
+`GOLANGCI_LINT_CACHE` with a private versioned namespace beneath
+`.tao/cache/golangci-lint` in the actual execution worktree (the integration
+worktree for batch merges). Bounded probes of `go env GOVERSION` and
+`golangci-lint version` select a deterministic namespace: equal Go and linter
+version/build identities reuse it; changed identities isolate entries. Unavailable
+or invalid identities select a fresh private namespace for each dispatch, never a
+shared unknown cache. Existing legacy entries and other version directories are
+retained. These caches disappear when their worktrees are removed.
+
+Probes reflect the dispatch-time cwd and environment, not arbitrary inline shell
+overrides, wrappers, or later directory changes. Lint remains mandatory where
+declared; only its cache is isolated. Standalone Makefile/global lint caches,
+manual commands, and explicit cache overrides inside commands or build scripts
+are outside this guarantee. The same gates default `PYTHONDONTWRITEBYTECODE=1` so
 Python test runs do not leave `__pycache__` in the worktree; an explicit environment
 value or an override inside the command wins (for example,
 `PYTHONDONTWRITEBYTECODE= python3 ...`, which Python treats as unset).

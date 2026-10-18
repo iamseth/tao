@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,11 +18,167 @@ import (
 )
 
 const cacheEnv = "GOLANGCI_LINT_CACHE"
+const testCacheNamespace = "v1-1c1af473682d878505342e160c108ab6c37ee862031b064b336e0d63075da2d9"
+
+//nolint:gosec // G306: fixture tools require private executable permissions.
+func setupIdentityTools(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for name, output := range map[string]string{"go": "go1.26.2", "golangci-lint": "golangci-lint has version 2.1 built with go1.26.2"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+//nolint:gosec // G306: fixture tools require private executable permissions.
+func TestVerificationCacheVersionIdentity(t *testing.T) {
+	setupCacheChild(t)
+	bin := t.TempDir()
+	for name, output := range map[string]string{"go": "go1.26.2", "golangci-lint": "golangci-lint has version 2.1 built with go1.26.2"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	root := t.TempDir()
+	ctx := WithVerificationCache(context.Background(), root)
+	cache := func() string {
+		got, err := cacheChild(ctx, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range got.Environment {
+			if value, ok := strings.CutPrefix(entry, cacheEnv+"="); ok {
+				return value
+			}
+		}
+		t.Fatal("missing cache")
+		return ""
+	}
+	first := cache()
+	if filepath.Dir(first) != filepath.Join(root, ".tao", "cache", "golangci-lint") {
+		t.Fatalf("not namespaced: %s", first)
+	}
+	if cache() != first {
+		t.Fatal("identical identity not reused")
+	}
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\necho go1.27.0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if cache() == first {
+		t.Fatal("Go change reused cache")
+	}
+}
 
 type cacheObservation struct {
 	Environment []string
 	CWD         string
 	Args        []string
+}
+
+func TestVerificationCacheIdentityFailures(t *testing.T) {
+	for _, tool := range []string{"go", "golangci-lint"} {
+		t.Run(tool, func(t *testing.T) {
+			for _, script := range []string{"missing", "exit 1", "true", "echo malformed", "i=0; while [ $i -lt 9000 ]; do printf x; i=$((i+1)); done", "/bin/sleep 30"} {
+				t.Run(script, func(t *testing.T) {
+					bin, root := t.TempDir(), t.TempDir()
+					for name, output := range map[string]string{"go": "go1.26.2", "golangci-lint": "golangci-lint has version 2.1 built with go1.26.2"} {
+						if name != tool {
+							if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho '"+output+"'\n"), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
+								t.Fatal(err)
+							}
+						}
+					}
+					if script != "missing" {
+						if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\n"+script+"\n"), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
+							t.Fatal(err)
+						}
+					}
+					env := []string{"PATH=" + bin, SliceCompletionOwnerEnv + "=secret"}
+					ctx := WithVerificationCache(context.Background(), root)
+					var previous string
+					for range 2 {
+						child, err := verificationCacheEnvironmentAt(ctx, root, env)
+						if err != nil {
+							t.Fatal(err)
+						}
+						cache := strings.TrimPrefix(child[len(child)-1], cacheEnv+"=")
+						if filepath.Dir(cache) != filepath.Join(root, ".tao", "cache", "golangci-lint") || !strings.HasPrefix(filepath.Base(cache), "fresh-") || cache == previous {
+							t.Fatalf("unsafe fallback: %q", cache)
+						}
+						previous = cache
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestVerificationCacheGenericDoesNotProbe(t *testing.T) {
+	bin := t.TempDir()
+	marker := filepath.Join(bin, "probed")
+	for _, name := range []string{"go", "golangci-lint"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho probed > \"$PROBE_MARKER\"\n"), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("PROBE_MARKER", marker)
+	if err := DefaultLocal(context.Background(), bin, "/bin/sh", []string{"-c", "true"}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generic command probed tools: %v", err)
+	}
+}
+
+func TestVerificationCacheDispatchIdentity(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "cwd with spaces")
+	bin := filepath.Join(cwd, "tools")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, script := range map[string]string{
+		"go":            `test -z "$TAO_SLICE_COMPLETION_OWNER" || exit 1; test -f marker || exit 1; printf '%s\n' "$GO_ID"`,
+		"golangci-lint": `printf 'golangci-lint has version %s built with %s\n' "$LINT_ID" "$BUILD_ID"`,
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+script+"\n"), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "marker"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	identity := func(goID, lintID, buildID string) string {
+		return verificationCacheNamespace(context.Background(), cwd, []string{"PATH=tools", "GO_ID=" + goID, "LINT_ID=" + lintID, "BUILD_ID=" + buildID, SliceCompletionOwnerEnv + "=secret"})
+	}
+	first := identity("go1.26.2", "2.1", "go1.26.2")
+	if !strings.HasPrefix(first, "v1-") || len(first) != 67 || identity("go1.26.2", "2.1", "go1.26.2") != first {
+		t.Fatalf("unstable identity: %q", first)
+	}
+	for _, changed := range []string{identity("go1.27.0", "2.1", "go1.26.2"), identity("go1.26.2", "2.2", "go1.26.2"), identity("go1.26.2", "2.1", "go1.27.0"), identity("go1.26.2", "../../unsafe with spaces", "build")} {
+		if changed == first || !strings.HasPrefix(changed, "v1-") || filepath.Base(changed) != changed {
+			t.Fatalf("unsafe or unchanged key: %q", changed)
+		}
+	}
+	legacy := filepath.Join(root, ".tao", "cache", "golangci-lint", "legacy")
+	if _, err := prepareVerificationCache(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("retain"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{first, identity("go1.27.0", "2.1", "go1.26.2")} {
+		if _, err := prepareVerificationCacheNamespace(root, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data, err := os.ReadFile(legacy); err != nil || string(data) != "retain" { //nolint:gosec // G304: legacy entry in a test-owned temporary directory.
+		t.Fatalf("legacy changed: %q %v", data, err)
+	}
 }
 
 func TestVerificationCacheChild(t *testing.T) {
@@ -65,6 +222,9 @@ func cacheChild(ctx context.Context, cwd string) (cacheObservation, error) {
 
 func assertCacheChild(t *testing.T, ctx context.Context, cwd, want string) {
 	t.Helper()
+	if _, managed := ctx.Value(verificationCacheKey{}).(verificationCachePolicy); managed {
+		want = filepath.Join(want, testCacheNamespace)
+	}
 	got, err := cacheChild(ctx, cwd)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +272,7 @@ func assertCacheChild(t *testing.T, ctx context.Context, cwd, want string) {
 
 func setupCacheChild(t *testing.T) {
 	t.Helper()
+	setupIdentityTools(t)
 	t.Setenv("TAO_CACHE_TEST_CHILD", "1")
 	t.Setenv("TAO_CACHE_TEST_KEEP", "kept value")
 	t.Setenv(SliceCompletionOwnerEnv, "must-not-leak")
@@ -148,11 +309,12 @@ func TestVerificationCacheContextsAndReuse(t *testing.T) {
 }
 
 func TestVerificationCacheEnvironmentReplacesEveryEntry(t *testing.T) {
+	setupIdentityTools(t)
 	root := t.TempDir()
-	inherited := []string{"KEEP=one", cacheEnv + "=first", "OTHER=two", cacheEnv + "=second"}
+	inherited := []string{"PATH=" + os.Getenv("PATH"), "KEEP=one", cacheEnv + "=first", "OTHER=two", cacheEnv + "=second"}
 	original := slices.Clone(inherited)
 	got, err := verificationCacheEnvironment(WithVerificationCache(context.Background(), root), inherited)
-	want := []string{"KEEP=one", "OTHER=two", "PYTHONDONTWRITEBYTECODE=1", cacheEnv + "=" + filepath.Join(root, ".tao", "cache", "golangci-lint")}
+	want := []string{"PATH=" + os.Getenv("PATH"), "KEEP=one", "OTHER=two", "PYTHONDONTWRITEBYTECODE=1", cacheEnv + "=" + filepath.Join(root, ".tao", "cache", "golangci-lint", testCacheNamespace)}
 	if err != nil || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(inherited, original) {
 		t.Fatalf("environment = %q, error = %v, original = %q", got, err, inherited)
 	}
@@ -167,8 +329,9 @@ func TestVerificationCacheBytecodeEnvironment(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			setupCacheChild(t)
 			t.Setenv("PYTHONDONTWRITEBYTECODE", value)
-			inherited := make([]string, 1, 8)
+			inherited := make([]string, 2, 8)
 			inherited[0] = "KEEP=one"
+			inherited[1] = "PATH=" + os.Getenv("PATH")
 			if value == "absent" {
 				if err := os.Unsetenv("PYTHONDONTWRITEBYTECODE"); err != nil {
 					t.Fatal(err)
@@ -189,7 +352,7 @@ func TestVerificationCacheBytecodeEnvironment(t *testing.T) {
 						want = append(want, "PYTHONDONTWRITEBYTECODE=1")
 					}
 					cache = filepath.Join(root, ".tao", "cache", "golangci-lint")
-					want = append(want, cacheEnv+"="+cache)
+					want = append(want, cacheEnv+"="+filepath.Join(cache, testCacheNamespace))
 				}
 				got, err := verificationCacheEnvironment(ctx, inherited)
 				if err != nil || !slices.Equal(got, want) {
@@ -248,7 +411,7 @@ func TestVerificationCacheConcurrent(t *testing.T) {
 
 func TestVerificationCacheRejectsUnsafeStorage(t *testing.T) {
 	setupCacheChild(t)
-	for _, component := range []string{".tao", ".tao/cache", ".tao/cache/golangci-lint", ".tao/cache/golangci-lint/.gitignore"} {
+	for _, component := range []string{".tao", ".tao/cache", ".tao/cache/golangci-lint", ".tao/cache/golangci-lint/.gitignore", ".tao/cache/golangci-lint/" + testCacheNamespace} {
 		for _, kind := range []string{"symlink", "conflict"} {
 			t.Run(component+"/"+kind, func(t *testing.T) {
 				root, outside := t.TempDir(), t.TempDir()
@@ -326,7 +489,7 @@ func TestVerificationCacheGitIsolation(t *testing.T) {
 	if err := os.RemoveAll(roots[0]); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(roots[1], ".tao", "cache", "golangci-lint", "entry"))
+	data, err := os.ReadFile(filepath.Join(roots[1], ".tao", "cache", "golangci-lint", testCacheNamespace, "entry"))
 	if err != nil || string(data) != "cached" {
 		t.Fatalf("other root cache changed: %q %v", data, err)
 	}

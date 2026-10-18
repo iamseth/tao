@@ -124,6 +124,7 @@ func TestDefaultLocalTimeoutKillsDescendants(t *testing.T) {
 }
 
 func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
+	setupIdentityTools(t)
 	for _, mode := range []string{"cancellation", "timeout", "detached", "inherited-pipes"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
@@ -131,7 +132,9 @@ func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
 			ctx := WithVerificationCache(context.Background(), root)
 			var cancel context.CancelFunc
 			if mode == "timeout" {
-				ctx, cancel = context.WithTimeout(ctx, 200*time.Millisecond)
+				// Allow both bounded identity probes to finish before testing
+				// the managed command's own deadline.
+				ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
 			} else {
 				ctx, cancel = context.WithCancel(ctx)
 			}
@@ -178,12 +181,85 @@ func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
 						t.Fatalf("cancellation failed: %v, %v", err, ctx.Err())
 					}
 				}
-			case <-time.After(2 * time.Second):
+			case <-time.After(7 * time.Second):
 				cancel()
 				<-result
 				t.Fatal("opt-in command did not finish promptly")
 			}
+			// A deadline may expire before dispatch on a loaded host. There
+			// is no descendant to inspect unless the shell published one.
+			if mode == "timeout" {
+				if _, err := os.Stat(pidPath); errors.Is(err, os.ErrNotExist) {
+					return
+				}
+			}
 			assertCommandDescendantGone(t, pidPath)
+		})
+	}
+}
+
+func TestVerificationIdentityDescendants(t *testing.T) {
+	for _, mode := range []string{"timeout", "cancel", "pipes", "detached"} {
+		t.Run(mode, func(t *testing.T) {
+			root, bin := t.TempDir(), t.TempDir()
+			pid := filepath.Join(root, "pid")
+			script := "sleep 30 & echo $! > \"$PID_FILE\"; wait"
+			if mode == "pipes" {
+				script = "sleep 30 & echo $! > \"$PID_FILE\"; echo go1.26.2"
+			}
+			if mode == "detached" {
+				script = "sleep 30 >/dev/null 2>&1 & echo $! > \"$PID_FILE\"; echo go1.26.2"
+			}
+			if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\n"+script+"\n"), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(WithVerificationCache(context.Background(), root))
+			defer cancel()
+			// Cancellation must follow child publication, not race the
+			// production probe deadline. Timeout coverage retains that bound.
+			timeout := time.Second
+			if mode == "cancel" {
+				timeout = 30 * time.Second
+			}
+			result := make(chan bool, 1)
+			go func() {
+				_, ok := verificationIdentityWithTimeout(ctx, timeout, root, []string{"PATH=" + bin + ":/bin:/usr/bin", "PID_FILE=" + pid}, "go", "env", "GOVERSION")
+				result <- ok
+			}()
+			if mode == "cancel" {
+				deadline := time.Now().Add(15 * time.Second)
+				for {
+					if data, err := os.ReadFile(pid); err == nil && strings.HasSuffix(string(data), "\n") { //nolint:gosec // G304: PID file in the test-owned temporary directory.
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("probe not started")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				cancel()
+			}
+			select {
+			case ok := <-result:
+				if (mode == "cancel" || mode == "timeout" || mode == "pipes") && ok {
+					t.Fatal("incomplete probe returned a usable identity")
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("probe hung")
+			}
+			if mode == "cancel" {
+				if _, err := verificationCacheEnvironmentAt(ctx, root, nil); !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation lost: %v", err)
+				}
+			}
+			if mode != "cancel" {
+				// The one-second probe bound includes process startup. If it
+				// expires before publication, no child cleanup can be asserted.
+				if _, err := os.Stat(pid); errors.Is(err, os.ErrNotExist) {
+					return
+				}
+			}
+			assertCommandDescendantGone(t, pid)
 		})
 	}
 }
@@ -195,7 +271,7 @@ func TestVerificationCachePrivateAndInaccessibleStorage(t *testing.T) {
 	if _, err := cacheChild(ctx, root); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{".tao", ".tao/cache", ".tao/cache/golangci-lint", ".tao/cache/golangci-lint/.gitignore"} {
+	for _, path := range []string{".tao", ".tao/cache", ".tao/cache/golangci-lint", ".tao/cache/golangci-lint/.gitignore", ".tao/cache/golangci-lint/" + testCacheNamespace} {
 		info, err := os.Stat(filepath.Join(root, path))
 		if err != nil {
 			t.Fatal(err)
@@ -211,7 +287,7 @@ func TestVerificationCachePrivateAndInaccessibleStorage(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses permission checks")
 	}
-	cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+	cache := filepath.Join(root, ".tao", "cache", "golangci-lint", testCacheNamespace)
 	if err := os.Chmod(cache, 0500); err != nil { //nolint:gosec // G302: owner-only directory traversal is required for this permission test.
 		t.Fatal(err)
 	}

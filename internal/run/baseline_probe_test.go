@@ -17,6 +17,7 @@ import (
 )
 
 func TestBaselineProbe(t *testing.T) {
+	setupVerificationIdentityTools(t)
 	const output = "--- FAIL: TestX (0.00s)\nFAIL\tgithub.com/iamseth/tao/internal/tui\n"
 	var packages, paths strings.Builder
 	for i := range 64 {
@@ -122,6 +123,30 @@ func TestBaselineProbe(t *testing.T) {
 				}
 				calls++
 				probeDir = cwd
+				if tc.name == "overlap" {
+					bin := t.TempDir()
+					tool := "#!/bin/sh\ntest \"$PWD\" -ef \"$EXPECTED_PROBE_CWD\" || exit 1\necho go1.27.0\n"
+					if err := os.WriteFile(filepath.Join(bin, "go"), []byte(tool), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
+						t.Fatal(err)
+					}
+					t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+					t.Setenv("EXPECTED_PROBE_CWD", cwd)
+					for range 2 {
+						if err := commandrunner.DefaultLocal(ctx, cwd, "sh", []string{"-c", `printf cache >> "$GOLANGCI_LINT_CACHE/entry"`}, io.Discard, stderr); err != nil {
+							t.Fatal(err)
+						}
+					}
+					cache := verificationTestCache(t, cwd)
+					if filepath.Base(cache) == "v1-1c1af473682d878505342e160c108ab6c37ee862031b064b336e0d63075da2d9" {
+						t.Fatal("baseline ignored dispatch-time tool identity")
+					}
+					if data, err := os.ReadFile(filepath.Join(cache, "entry")); err != nil || string(data) != "cachecache" { //nolint:gosec // G304: cache entry in a temporary fixture checkout.
+						t.Fatalf("baseline cache: %q %v", data, err)
+					}
+					if _, err := os.Stat(filepath.Join(root, ".tao", "cache")); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("baseline cache escaped checkout: %v", err)
+					}
+				}
 				_, _ = fmt.Fprint(stdout, tc.base)
 				return tc.baseErr
 			}

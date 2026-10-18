@@ -419,6 +419,7 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 }
 
 func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
+	setupVerificationIdentityTools(t)
 	for _, point := range []string{"before stage", "after stage", "after commit"} {
 		t.Run(point, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, `printf cache > "$GOLANGCI_LINT_CACHE/entry"`)
@@ -459,7 +460,7 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 			// Cache changes cannot invalidate the frozen worktree fingerprint, and
 			// even broken cache setup must not rerun gates during intent recovery.
 			cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
-			if err := os.WriteFile(filepath.Join(cache, "entry"), []byte("changed cache"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(verificationTestCache(t, root), "entry"), []byte("changed cache"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(cache, ".gitignore"), []byte("*\n# changed metadata\n"), 0600); err != nil {
@@ -845,6 +846,7 @@ func TestCompleteVerifiedOwnerEndsDuringGate(t *testing.T) {
 }
 
 func TestCompleteVerifiedCacheExclusion(t *testing.T) {
+	setupVerificationIdentityTools(t)
 	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
 	for _, mode := range []string{"no ignore rule", "ignored tao", "unrelated file", "nested untracked", "tracked changed", "tracked vanished"} {
 		t.Run(mode, func(t *testing.T) {
@@ -913,7 +915,7 @@ func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 			if slice.Completion == nil || slice.Completion.Outcome != plan.SliceCompletionCommitted || slice.CommitIntent.Verification == nil {
 				t.Fatalf("completion=%+v", slice)
 			}
-			cacheFile := filepath.Join(root, ".tao", "cache", "golangci-lint", "entry")
+			cacheFile := filepath.Join(verificationTestCache(t, root), "entry")
 			if data, err := os.ReadFile(cacheFile); err != nil || string(data) != "cache contents" { //nolint:gosec // G304: fixed file in a test-owned temporary worktree.
 				t.Fatalf("cache contents=%q err=%v", data, err)
 			}

@@ -18,6 +18,7 @@ import (
 )
 
 func TestVerifyCompletedBranchCache(t *testing.T) {
+	setupVerificationIdentityTools(t)
 	shared := t.TempDir()
 	t.Setenv("GOLANGCI_LINT_CACHE", shared)
 	// GNU make 4.x prints Entering/Leaving directory lines whenever it is a
@@ -72,7 +73,7 @@ func TestVerifyCompletedBranchCache(t *testing.T) {
 				t.Fatalf("verification=%+v", verification)
 			}
 			if mode == "passed" {
-				cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+				cache := verificationTestCache(t, root)
 				if strings.TrimSpace(verification.Details) != cache {
 					t.Fatalf("cache output=%q, want %q", verification.Details, cache)
 				}

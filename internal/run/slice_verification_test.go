@@ -295,7 +295,42 @@ func TestSliceVerifierMissingShellAndEmptyDeclaration(t *testing.T) {
 	}
 }
 
+//nolint:gosec // G306: fixture tools require private executable permissions.
+func setupVerificationIdentityTools(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for name, output := range map[string]string{"go": "go1.26.2", "golangci-lint": "golangci-lint has version 2.1 built with go1.26.2"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func verificationTestCache(t *testing.T, root string) string {
+	t.Helper()
+	parent := filepath.Join(root, ".tao", "cache", "golangci-lint")
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if selected != "" || !strings.HasPrefix(entry.Name(), "v1-") {
+				t.Fatalf("unexpected namespaces: %v", entries)
+			}
+			selected = filepath.Join(parent, entry.Name())
+		}
+	}
+	if selected == "" {
+		t.Fatal("missing namespace")
+	}
+	return selected
+}
+
 func TestSliceVerifierCacheAcrossWorktreesAndSteps(t *testing.T) {
+	setupVerificationIdentityTools(t)
 	shared := t.TempDir()
 	t.Setenv("GOLANGCI_LINT_CACHE", shared)
 	repo := initSliceCompletionRepo(t)
@@ -327,7 +362,7 @@ func TestSliceVerifierCacheAcrossWorktreesAndSteps(t *testing.T) {
 		if err != nil || len(runs) != 3 {
 			t.Fatalf("runs=%+v err=%v", runs, err)
 		}
-		cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+		cache := verificationTestCache(t, root)
 		for _, run := range runs {
 			if run.Result != "passed" || !strings.Contains(run.Details, "\n"+cache+"\n") {
 				t.Fatalf("wrong cache: %+v; want %s", run, cache)
@@ -351,6 +386,7 @@ func TestSliceVerifierCacheAcrossWorktreesAndSteps(t *testing.T) {
 }
 
 func TestSliceVerifierCacheMechanicalCorrection(t *testing.T) {
+	setupVerificationIdentityTools(t)
 	root := sliceVerifierRoot(t)
 	sub := filepath.Join(root, "pkg")
 	if err := os.Mkdir(sub, 0700); err != nil {
@@ -361,7 +397,7 @@ func TestSliceVerifierCacheMechanicalCorrection(t *testing.T) {
 	}
 	bin := t.TempDir()
 	// A deterministic tool failure exercises the real shell and correction classifier.
-	tool := "#!/bin/sh\nprintf '%s\\n' \"$GOLANGCI_LINT_CACHE\"\nif [ \"$2\" = pkg/example_test.go ]; then echo 'No test files found' >&2; exit 1; fi\n"
+	tool := "#!/bin/sh\nif [ \"$1 $2\" = 'env GOVERSION' ]; then echo go1.26.2; exit; fi\nprintf '%s\\n' \"$GOLANGCI_LINT_CACHE\"\nif [ \"$2\" = pkg/example_test.go ]; then echo 'No test files found' >&2; exit 1; fi\n"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(tool), 0700); err != nil { //nolint:gosec // G306: owner-only executable permission for the test tool.
 		t.Fatal(err)
 	}
@@ -373,7 +409,7 @@ func TestSliceVerifierCacheMechanicalCorrection(t *testing.T) {
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("runs=%+v err=%v", runs, err)
 	}
-	cache := filepath.Join(root, ".tao", "cache", "golangci-lint")
+	cache := verificationTestCache(t, root)
 	for _, run := range runs {
 		if run.CWD != sub || !strings.Contains(run.Details, cache) {
 			t.Fatalf("correction lost root cache: %+v", run)

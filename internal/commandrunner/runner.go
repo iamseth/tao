@@ -27,7 +27,7 @@ func DefaultLocal(ctx context.Context, cwd string, name string, args []string, s
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	environ, err := verificationCacheEnvironment(ctx, withoutSliceCompletionOwner(os.Environ()))
+	environ, err := verificationCacheEnvironmentAt(ctx, cwd, withoutSliceCompletionOwner(os.Environ()))
 	if err != nil {
 		return err
 	}

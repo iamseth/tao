@@ -273,8 +273,25 @@ func TestMergeDetectsDefaultVerifyCommand(t *testing.T) {
 // delegated runners must preserve the policy context, not emulate the override.
 const mergeCacheProbe = `printf '%s\n' "$GOLANGCI_LINT_CACHE"; printf cache > "$GOLANGCI_LINT_CACHE/entry" || exit 1; `
 
+//nolint:gosec // G306: fixture tools require private executable permissions.
+func setupMergeIdentityTools(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for name, output := range map[string]string{"go": "go1.26.2", "golangci-lint": "golangci-lint has version 2.1 built with go1.26.2"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func mergeTestCache(root string) string {
+	return filepath.Join(root, ".tao", "cache", "golangci-lint", "v1-1c1af473682d878505342e160c108ab6c37ee862031b064b336e0d63075da2d9")
+}
+
 func cacheCheckingMergeRunner(t *testing.T, wantRoot string) commandrunner.Runner {
 	t.Helper()
+	setupMergeIdentityTools(t)
 	return func(ctx context.Context, root, name string, args []string, stdout, stderr io.Writer) error {
 		t.Helper()
 		if root != wantRoot {
@@ -286,7 +303,7 @@ func cacheCheckingMergeRunner(t *testing.T, wantRoot string) commandrunner.Runne
 		}
 		var output bytes.Buffer
 		err := commandrunner.DefaultLocal(ctx, root, name, args, io.MultiWriter(stdout, &output), stderr)
-		wantCache := filepath.Join(wantRoot, ".tao", "cache", "golangci-lint")
+		wantCache := mergeTestCache(wantRoot)
 		if !strings.HasPrefix(output.String(), wantCache+"\n") {
 			t.Fatalf("gate cache output = %q, want prefix %q (error %v)", output.String(), wantCache, err)
 		}
@@ -304,6 +321,7 @@ func requireNoMergeCache(t *testing.T, roots ...string) {
 }
 
 func TestMergeVerificationCacheSubprocess(t *testing.T) {
+	setupMergeIdentityTools(t)
 	shared := t.TempDir()
 	t.Setenv("GOLANGCI_LINT_CACHE", shared)
 	for _, broken := range []bool{false, true} {
@@ -340,7 +358,7 @@ func TestMergeVerificationCacheSubprocess(t *testing.T) {
 				t.Fatalf("merge verification = %+v, %v", verification, err)
 			}
 			events.requireSingle(t, plan.EventTypePlanMerged)
-			if data, readErr := os.ReadFile(filepath.Join(root, ".tao", "cache", "golangci-lint", "entry")); readErr != nil || string(data) != "cache" { //nolint:gosec // test path is rooted in t.TempDir.
+			if data, readErr := os.ReadFile(filepath.Join(mergeTestCache(root), "entry")); readErr != nil || string(data) != "cache" {
 				t.Fatalf("cache write = %q, %v", data, readErr)
 			}
 		})
@@ -351,6 +369,7 @@ func TestMergeVerificationCacheSubprocess(t *testing.T) {
 }
 
 func TestMergeVerificationCacheDistinctIntegrationRoots(t *testing.T) {
+	setupMergeIdentityTools(t)
 	fixture := newRealGitWorktree(t)
 	service := NewService(fixture.repoRoot, nil)
 	for i, inheritedRoot := range []string{fixture.repoRoot, fixture.worktreePath} {
