@@ -3,7 +3,7 @@
 ## Commands
 - `make verify` is the canonical repository-wide gate; it runs build, test, lint, verify-no-deps, and build-targets. `make build-targets` cross-builds and vets all four GoReleaser targets (darwin and linux on amd64 and arm64).
 - `make build` builds `bin/tao` from `./cmd/tao`.
-- `make test` runs `go test -coverprofile=coverage.out ./...` and prints coverage with `go tool cover -func`.
+- `make test` runs `go test $(GO_TEST_FLAGS) -coverprofile=coverage.out ./...` and prints sorted per-package statement coverage using awk. Its recipe alone sets `HOME` and `XDG_CONFIG_HOME` to separate directories in unique absolute scratch storage under ignored `bin/`, with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. It preserves effective `GOCACHE`, `GOPATH`, and `GOMODCACHE` (explicit values or Go defaults) resolved before changing HOME, and cleans scratch on exit, failure, and catchable termination. Uncatchable termination may leave scratch for `make clean`; concurrent coverage-file writes are not isolated. `make verify` and Tao gates invoking `make test` inherit this boundary; arbitrary gates, direct `go test`, and other Make targets do not.
 - `make update-golden` regenerates the golden fixtures under `internal/cli/testdata` by running tests matching `Golden` with `-update`; it is scoped to `./internal/cli` because the flag is defined only there, and it is never part of `make verify`.
 - Run focused tests with `go test ./internal/<package> -run TestName` for ordinary implementation slices; examples: `go test ./internal/plan -run TestFormatDuration`, `go test ./internal/cli -run TestRunHandlesNoArgsAndGlobalFlagErrors`.
 - `make install` copies `./bin/tao` to `~/.bin/tao`; do not assume this path exists.

@@ -41,8 +41,20 @@ clean:
 	@rm -rvf bin $(COVERAGE_FILE)
 
 test:
-	@go test $(GO_TEST_FLAGS) -coverprofile=$(COVERAGE_FILE) ./...
-	@awk 'NR>1 { \
+	@set -e; \
+	mkdir -p bin; \
+	scratch=$$(mktemp -d "$$(pwd -P)/bin/test-env.XXXXXX"); \
+	trap 'status=$$?; trap - 0; rm -rf "$$scratch"; exit "$$status"' 0; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	mkdir "$$scratch/home" "$$scratch/xdg"; \
+	cache=$$(go env GOCACHE); \
+	gopath=$$(go env GOPATH); \
+	modcache=$$(go env GOMODCACHE); \
+	export GOCACHE="$$cache" GOPATH="$$gopath" GOMODCACHE="$$modcache"; \
+	export HOME="$$scratch/home" XDG_CONFIG_HOME="$$scratch/xdg"; \
+	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; \
+	go test $(GO_TEST_FLAGS) -coverprofile=$(COVERAGE_FILE) ./...; \
+	awk 'NR>1 { \
 		n=split($$1,p,"/"); pkg=p[1]; \
 		for(i=2;i<n;i++) pkg=pkg"/"p[i]; \
 		stmts[pkg]+=$$2; if($$3>0) cov[pkg]+=$$2 \
