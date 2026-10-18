@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -119,7 +120,8 @@ func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
 	repository := plan.NewFileRepository("")
 	var events []plan.Event
 	runner := newAgentSessionRunner(agentSessionRunnerConfig{
-		runtimeEnv:     runEnvSnapshot(map[string]string{"TAO_SESSION_WARN_PERCENT": "10"}),
+		runtimeEnv: runEnvSnapshot(map[string]string{"TAO_SESSION_WARN_PERCENT": "10"}),
+		// Behavioral warning/timeout budget, not a synchronization backstop.
 		sessionTimeout: 500 * time.Millisecond,
 		descriptor:     agent.Descriptor{Label: "fake", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
 		logAppender:    repository, eventAppender: eventAppenderFunc(func(_ string, event plan.Event) error { events = append(events, event); return nil }),
@@ -219,7 +221,7 @@ func TestSliceCompletionLifetimeActiveChildDeath(t *testing.T) {
 	if err := child.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	_ = child.cmd.Wait()
+	_ = child.wait(t)
 	if sliceCompletionActive(dir) {
 		t.Fatal("killed child retained active lock")
 	}
@@ -250,7 +252,7 @@ func TestSliceCompletionLifetimeDirect(t *testing.T) {
 	if got := helper.line(t); got != "direct admitted" {
 		t.Fatal(got)
 	}
-	if err := helper.cmd.Wait(); err != nil {
+	if err := helper.wait(t); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -258,7 +260,7 @@ func TestSliceCompletionLifetimeDirect(t *testing.T) {
 func TestSliceCompletionLifetimeManaged(t *testing.T) {
 	clearSliceCompletionOwnerEnv(t)
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	_, closeOwner, err := startSliceCompletionLifetime(ctx, dir, "001")
 	if err != nil {
@@ -281,7 +283,7 @@ func TestSliceCompletionLifetimeManaged(t *testing.T) {
 	cancel()
 	select {
 	case <-guard.Context().Done():
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("owner cancellation did not cross lifetime boundary")
 	}
 	if guard.Check() == nil {
@@ -327,6 +329,8 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 			defer func() { _ = lock.Release() }()
 		}
 		ctx := context.Background()
+		// These two-second deadlines exercise real owner expiration, not
+		// observer scheduling. Handshake/read/reap backstops are separate.
 		if mode == "timeout-owner" || mode == "verified-timeout-owner" {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
@@ -345,6 +349,9 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
 			switch scanner.Text() {
+			case "expired":
+				<-ctx.Done()
+				fmt.Println("expired")
 			case "end":
 				if err := closeOwner(); err != nil {
 					t.Fatal(err)
@@ -388,6 +395,7 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 			if sliceVerificationCommandTimeout != 10*time.Minute {
 				t.Fatal("production command cap changed")
 			}
+			// Behavioral command cap, independent of the observer's 30s budget.
 			runs, err = (SliceVerifier{}).verify(guard.Context(), request, 150*time.Millisecond)
 			if !errors.Is(err, context.DeadlineExceeded) || guard.Check() != nil {
 				t.Fatalf("command cap lost or expired session: %v", err)
@@ -427,9 +435,32 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 }
 
 type completionHelper struct {
-	cmd   *exec.Cmd
-	input io.WriteCloser
-	lines *bufio.Scanner
+	cmd      *exec.Cmd
+	input    io.WriteCloser
+	output   io.ReadCloser
+	lines    *bufio.Scanner
+	waitOnce sync.Once
+	waitDone chan struct{}
+	waitErr  error
+}
+
+// Wait starts after protocol reads finish, so StdoutPipe retains the final line.
+// Cleanup shares the same reaper, including after a failed handshake.
+func (h *completionHelper) wait(t *testing.T) error {
+	t.Helper()
+	h.waitOnce.Do(func() {
+		go func() {
+			h.waitErr = h.cmd.Wait()
+			close(h.waitDone)
+		}()
+	})
+	select {
+	case <-h.waitDone:
+		return h.waitErr
+	case <-time.After(30 * time.Second):
+		t.Fatal("helper reaping timed out")
+		return nil
+	}
 }
 
 func startCompletionHelper(t *testing.T, dir, mode, token string) *completionHelper {
@@ -453,8 +484,14 @@ func startCompletionHelper(t *testing.T, dir, mode, token string) *completionHel
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = input.Close(); _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	return &completionHelper{cmd: cmd, input: input, lines: bufio.NewScanner(output)}
+	h := &completionHelper{cmd: cmd, input: input, output: output, lines: bufio.NewScanner(output), waitDone: make(chan struct{})}
+	t.Cleanup(func() {
+		_ = input.Close()
+		_ = cmd.Process.Kill()
+		_ = output.Close()
+		_ = h.wait(t)
+	})
+	return h
 }
 
 func (h *completionHelper) line(t *testing.T) string {
@@ -470,7 +507,13 @@ func (h *completionHelper) line(t *testing.T) string {
 	select {
 	case line := <-result:
 		return line
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
+		_ = h.output.Close() // Release Scan even if the helper never publishes.
+		select {
+		case <-result:
+		case <-time.After(30 * time.Second):
+			t.Error("helper reader did not stop after pipe closure")
+		}
 		t.Fatal("helper handshake timed out")
 		return ""
 	}
@@ -478,7 +521,8 @@ func (h *completionHelper) line(t *testing.T) string {
 
 func waitCompletionHeartbeat(t *testing.T, dir string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// File publication has no portable notification; poll only as an observer.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if data, _ := os.ReadFile(filepath.Join(dir, "heartbeat")); len(data) > 0 { // #nosec G304,G703 -- test-local handshake.
 			return
@@ -494,6 +538,7 @@ func assertCompletionHeartbeatStopped(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Negative observation window: no new heartbeat may follow cancellation.
 	time.Sleep(100 * time.Millisecond)
 	after, err := os.ReadFile(filepath.Join(dir, "heartbeat")) // #nosec G304,G703 -- test-local handshake.
 	if err != nil || string(before) != string(after) {
@@ -523,7 +568,7 @@ func TestSliceCompletionLifetimeAcrossProcesses(t *testing.T) {
 				if err := owner.cmd.Process.Kill(); err != nil {
 					t.Fatal(err)
 				}
-				if err := owner.cmd.Wait(); err == nil {
+				if err := owner.wait(t); err == nil {
 					t.Fatal("owner unexpectedly succeeded")
 				}
 			case "normal-end":
@@ -540,13 +585,13 @@ func TestSliceCompletionLifetimeAcrossProcesses(t *testing.T) {
 			if got := nested.line(t); got != "verification stopped" {
 				t.Fatal(got)
 			}
-			if err := nested.cmd.Wait(); err != nil {
+			if err := nested.wait(t); err != nil {
 				t.Fatal(err)
 			}
 			assertCompletionHeartbeatStopped(t, dir)
 			if mode != "death" {
 				_, _ = fmt.Fprintln(owner.input, "quit")
-				if err := owner.cmd.Wait(); err != nil {
+				if err := owner.wait(t); err != nil {
 					t.Fatal(err)
 				}
 				entries, err := os.ReadDir(dir)
@@ -632,6 +677,25 @@ func TestSliceCompletionLifetimeLocalProviders(t *testing.T) {
 				root := t.TempDir()
 				dir := writeMetricsPlan(t, root, "plan-a")
 				repository := plan.NewFileRepository(filepath.Dir(dir))
+				t.Cleanup(func() {
+					if err := os.WriteFile(filepath.Join(dir, "release-holder"), nil, 0o600); err != nil {
+						t.Error(err)
+					}
+					if _, err := os.Stat(filepath.Join(dir, "nested-log")); errors.Is(err, os.ErrNotExist) {
+						return // Provider never launched its descendants.
+					}
+					deadline := time.Now().Add(30 * time.Second)
+					for {
+						if _, err := os.Stat(filepath.Join(dir, "holder-stopped")); err == nil {
+							break
+						}
+						if time.Now().After(deadline) {
+							t.Error("provider pipe holder did not acknowledge cleanup")
+							break
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+				})
 				timeout := time.Duration(0)
 				if outcome == "timeout" {
 					timeout = 2 * time.Second
@@ -656,7 +720,7 @@ func TestSliceCompletionLifetimeLocalProviders(t *testing.T) {
 				executor := testAgentExecutor(kind, agentExecutorOptions{SessionTimeout: timeout, Deps: agent.RuntimeDeps{ProcessStarter: starter}}, repository, repository)
 				// Bound test failure even if a dead provider leaves inherited pipes
 				// open forever. This is not a new session timeout setting.
-				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				err := executor.RunSlice(ctx, SliceRun{PlanDir: dir, RepoRoot: root, SliceID: "001"})
 				if outcome == "normal" && err != nil {
@@ -674,7 +738,7 @@ func TestSliceCompletionLifetimeLocalProviders(t *testing.T) {
 						t.Fatalf("timeout classification = %v", err)
 					}
 				}
-				deadline := time.Now().Add(3 * time.Second)
+				deadline := time.Now().Add(30 * time.Second)
 				for {
 					if result, _ := os.ReadFile(filepath.Join(dir, "nested-result")); string(result) == "stopped" { // #nosec G304,G703 -- test-local result handshake.
 						break
@@ -715,8 +779,9 @@ func completionFakeProvider(t *testing.T, dir, mode string) {
 		waitCompletionHeartbeat(t, dir)
 		// Retain provider pipes until nested verification has actually stopped.
 		// Waiting for inherited-pipe EOF before observing death would deadlock.
-		// The bound is only a test failure cleanup backstop.
-		holder := exec.Command("sh", "-c", `i=0; while [ ! -f "$1/nested-result" ] && [ "$i" -lt 500 ]; do sleep 0.02; i=$((i+1)); done`, "sh", dir) // #nosec G204,G702 -- fixed test script with test-owned directory passed as a positional argument.
+		// Explicit failure cleanup prevents natural pipe expiry from hiding
+		// a failure to observe provider death.
+		holder := exec.Command("sh", "-c", `while [ ! -f "$1/nested-result" ] && [ ! -f "$1/release-holder" ]; do sleep 0.02; done; touch "$1/holder-stopped"`, "sh", dir) // #nosec G204,G702 -- fixed test script with test-owned directory passed as a positional argument.
 		holder.Stdout, holder.Stderr = os.Stdout, os.Stderr
 		if err := holder.Start(); err != nil {
 			t.Fatal(err)
@@ -815,7 +880,7 @@ func TestSliceCompletionLifetimeDeadOwnerCleanup(t *testing.T) {
 	if err := owner.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	_ = owner.cmd.Wait()
+	_ = owner.wait(t)
 	// A concurrent dead-owner probe must not masquerade as a live owner.
 	probe, err := os.OpenFile(filepath.Join(dir, token), os.O_RDWR, 0) // #nosec G304 -- test-owned lease path.
 	if err != nil {
@@ -900,14 +965,14 @@ func TestCompleteVerifiedConcurrentChildren(t *testing.T) {
 	if got := second.line(t); !strings.Contains(got, "refused:") || !strings.Contains(got, "ownership unavailable") {
 		t.Fatalf("second writer: %s", got)
 	}
-	if err := second.cmd.Wait(); err != nil {
+	if err := second.wait(t); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = fmt.Fprintln(first.input, "continue")
 	if got := first.line(t); got != "completed" {
 		t.Fatal(got)
 	}
-	if err := first.cmd.Wait(); err != nil {
+	if err := first.wait(t); err != nil {
 		t.Fatal(err)
 	}
 	detail := reloadVerifiedCompletion(t, request).Detail()
@@ -951,7 +1016,7 @@ func TestCompleteVerifiedParentLossAcrossProcesses(t *testing.T) {
 				switch loss {
 				case "death":
 					_ = owner.cmd.Process.Kill()
-					_ = owner.cmd.Wait()
+					_ = owner.wait(t)
 				case "supersession":
 					_, _ = fmt.Fprintln(owner.input, "replace")
 					if got := owner.line(t); got != "replaced" {
@@ -959,11 +1024,10 @@ func TestCompleteVerifiedParentLossAcrossProcesses(t *testing.T) {
 					}
 				case "expiration":
 					if point == "verified-boundary" {
-						marker, err := readCompletionOwner(request.Record.Dir())
-						if err != nil {
-							t.Fatal(err)
+						_, _ = fmt.Fprintln(owner.input, "expired")
+						if got := owner.line(t); got != "expired" {
+							t.Fatal(got)
 						}
-						time.Sleep(time.Until(marker.Deadline) + 50*time.Millisecond)
 					}
 				}
 				if point == "verified-boundary" {
@@ -972,7 +1036,7 @@ func TestCompleteVerifiedParentLossAcrossProcesses(t *testing.T) {
 				if got := child.line(t); !strings.HasPrefix(got, "refused:") {
 					t.Fatal(got)
 				}
-				if err := child.cmd.Wait(); err != nil {
+				if err := child.wait(t); err != nil {
 					t.Fatal(err)
 				}
 				if point == "verified-gate" {

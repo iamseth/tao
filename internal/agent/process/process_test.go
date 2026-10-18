@@ -19,7 +19,7 @@ func TestSessionLifetimeObservesExitWithoutWait(t *testing.T) {
 	ctx := WithSessionLifetime(context.Background(), nil, func() { close(ended) })
 	// Runtime readers may wait for EOF before calling Wait. A descendant holding
 	// the pipes must not keep the dead provider's nested completion alive.
-	proc, err := DefaultProcessStarter(ctx, dir, "sh", []string{"-c", `(while [ ! -f release ]; do sleep 0.02; done) & exit 0`})
+	proc, err := DefaultProcessStarter(ctx, dir, "sh", []string{"-c", `(while [ ! -f release ]; do sleep 0.02; done; echo done > writer-done) & exit 0`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,16 +28,18 @@ func TestSessionLifetimeObservesExitWithoutWait(t *testing.T) {
 			t.Error(err)
 		}
 		_ = proc.Kill()
-		_ = waitForProcess(t, proc, 3*time.Second)
+		_ = waitForProcess(t, proc, 30*time.Second)
+		waitForWriterRelease(t, dir)
 	})
 	select {
 	case <-ended:
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("provider exit observation depends on caller Wait or inherited-pipe EOF")
 	}
 }
 
 func TestSessionLifetimePropagationAndExitBeforePipeDrain(t *testing.T) {
+	dir := t.TempDir()
 	t.Setenv("TAO_PROCESS_GENERIC_ENV", "old")
 	readerDone := make(chan struct{})
 	observed := make(chan bool, 1)
@@ -53,28 +55,65 @@ func TestSessionLifetimePropagationAndExitBeforePipeDrain(t *testing.T) {
 	env[0] = "TAO_PROCESS_GENERIC_ENV=mutated"
 	// The descendant retains stdout after its parent exits. Observing process
 	// death must precede bounded pipe draining, not depend on EOF from descendants.
-	proc, err := DefaultProcessStarter(ctx, "", "sh", []string{"-c", `printf '%s\n' "$TAO_PROCESS_GENERIC_ENV"; sleep 1 & exit 0`})
+	proc, err := DefaultProcessStarter(ctx, dir, "sh", []string{"-c", `printf '%s\n' "$TAO_PROCESS_GENERIC_ENV"; (while [ ! -f release ]; do sleep 0.02; done; echo done > writer-done) & exit 0`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = proc.Kill() }()
+	t.Cleanup(func() {
+		if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o600); err != nil {
+			t.Error(err)
+		}
+		_ = proc.Kill()
+		waitForWriterRelease(t, dir)
+	})
 	output := make(chan string, 1)
 	go func() {
 		data, _ := io.ReadAll(proc.Stdout())
 		close(readerDone)
 		output <- string(data)
 	}()
-	if err := waitForProcess(t, proc, 3*time.Second); err != nil {
+	if err := waitForProcess(t, proc, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if !<-observed {
-		t.Fatal("lifetime ended only after inherited pipes drained")
+	select {
+	case beforeDrain := <-observed:
+		if !beforeDrain {
+			t.Fatal("lifetime ended only after inherited pipes drained")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("lifetime callback did not run")
 	}
-	if got := <-output; got != "invocation\n" {
-		t.Fatalf("private environment = %q", got)
+	select {
+	case got := <-output:
+		if got != "invocation\n" {
+			t.Fatalf("private environment = %q", got)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("stdout reader did not finish after Wait")
 	}
 	if ctx.Err() != nil {
 		t.Fatal("provider exit changed runtime context semantics")
+	}
+}
+
+// Do not remove the release file until the orphaned pipe holder has observed it.
+// Its short-lived sleep children are reaped by the shell; the OS reaps the orphan.
+func waitForWriterRelease(t *testing.T, dir string) {
+	t.Helper()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond) // External-state observation.
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "writer-done")); err == nil {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Error("pipe holder did not acknowledge release")
+			return
+		}
 	}
 }
 
@@ -124,7 +163,7 @@ func TestDefaultProcessStarterConcurrentWaitDrainsOutput(t *testing.T) {
 			done <- output{data, err}
 		}()
 	}
-	if err := waitForProcess(t, proc, 3*time.Second); err != nil {
+	if err := waitForProcess(t, proc, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	for label, done := range map[string]chan output{"stdout": stdout, "stderr": stderr} {
@@ -134,7 +173,7 @@ func TestDefaultProcessStarterConcurrentWaitDrainsOutput(t *testing.T) {
 			if got.err != nil || string(got.data) != want {
 				t.Fatalf("%s truncated: got %d bytes, want %d, error %v", label, len(got.data), len(want), got.err)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatalf("%s reader did not finish after Wait", label)
 		}
 	}
@@ -161,7 +200,7 @@ func TestDefaultProcessStarterTerminatesOnContextCancel(t *testing.T) {
 	}
 
 	cancel()
-	waitErr := waitForProcess(t, proc, 2*time.Second)
+	waitErr := waitForProcess(t, proc, 30*time.Second)
 	if waitErr == nil {
 		t.Fatal("expected cancelled process to exit with an error")
 	}
@@ -275,6 +314,9 @@ type processEnvSnapshot struct {
 	PWDValue               string
 }
 
+// Retain the caller-supplied budget for tests that need different backstops.
+//
+//nolint:unparam // Existing helper signature is intentionally preserved.
 func waitForProcess(t *testing.T, proc Process, timeout time.Duration) error {
 	t.Helper()
 	done := make(chan error, 1)
@@ -286,6 +328,11 @@ func waitForProcess(t *testing.T, proc Process, timeout time.Duration) error {
 		return err
 	case <-time.After(timeout):
 		_ = proc.Kill()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("process did not reap after kill")
+		}
 		t.Fatalf("process did not exit within %s", timeout)
 		return nil
 	}

@@ -181,10 +181,27 @@ func collectReadResults(stdout io.Reader) []readResult {
 func TestWarningWritePreservesLiveSessionUntilCancellation(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
-	s := &session{stdin: writer}
+	started := make(chan struct{})
+	s := &session{stdin: warningStartWriter{writer, func() { close(started) }}}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer func() {
+		cancel()
+		_ = writer.Close()
+		_ = reader.Close()
+		select {
+		case <-s.warningWriteDone:
+		case <-time.After(30 * time.Second):
+			t.Error("warning writer did not stop during cleanup")
+		}
+	}()
 	s.startWarning(ctx, "wrap up")
+	select {
+	case <-started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("warning write did not start")
+	}
+	// Intentional non-occurrence window: a live, blocked write must survive
+	// the former destructive write timeout. Start observing only after Write.
 	select {
 	case <-s.warningWriteDone:
 		t.Fatal("warning closed stdin while session was live")
@@ -193,13 +210,25 @@ func TestWarningWritePreservesLiveSessionUntilCancellation(t *testing.T) {
 	cancel()
 	select {
 	case <-s.warningWriteDone:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		_ = writer.Close()
 		t.Fatal("warning work was not bounded")
 	}
 	if _, err := writer.Write([]byte("another command")); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("stalled pipe remained writable: %v", err)
 	}
+}
+
+// warningStartWriter signals entry to Write, not successful completion.
+// The unread pipe keeps the write blocked until cancellation closes it.
+type warningStartWriter struct {
+	io.WriteCloser
+	started func()
+}
+
+func (w warningStartWriter) Write(p []byte) (int, error) {
+	w.started()
+	return w.WriteCloser.Write(p)
 }
 
 func TestWarningDoesNotOverrideBufferedTerminal(t *testing.T) {

@@ -18,11 +18,78 @@ import (
 )
 
 func TestDefaultLocalCompletionKillsDetachedDescendants(t *testing.T) {
-	pidPath := filepath.Join(t.TempDir(), "child.pid")
-	if err := DefaultLocal(context.Background(), "", "sh", []string{"-c", `sleep 30 >/dev/null 2>&1 & echo $! > "$1"`, "sh", pidPath}, io.Discard, io.Discard); err != nil {
-		t.Fatalf("DefaultLocal failed: %v", err)
+	pidPath := commandTestPIDPath(t, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	commandResult(t, cancel, result)
+	go func() {
+		defer close(result)
+		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 3600 >/dev/null 2>&1 & echo $! > "$1"`, "sh", pidPath}, io.Discard, io.Discard)
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("DefaultLocal failed: %v", err)
+		}
+	case <-time.After(commandTestWait):
+		t.Fatal("detached command did not finish")
 	}
 	assertCommandDescendantGone(t, pidPath)
+}
+
+// Children outlive every observation budget; only runner cleanup (or failure
+// cleanup registered before launch) can end them, never natural fixture expiry.
+const commandTestWait = 30 * time.Second
+
+func commandTestPIDPath(t *testing.T, root string) string {
+	t.Helper()
+	path := filepath.Join(root, "child.pid")
+	t.Cleanup(func() {
+		data, err := os.ReadFile(path) //nolint:gosec // G304: test-owned PID file.
+		if err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	return path
+}
+
+func waitCommandPID(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(commandTestWait)
+	for {
+		data, err := os.ReadFile(path) //nolint:gosec // G304: test-owned PID file.
+		if err == nil && strings.HasSuffix(string(data), "\n") {
+			return
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("inspect child pid file: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child command did not publish its PID")
+		}
+		// PID publication and process disappearance have no portable event.
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A test-owned deadline is armed only after startup, so its short behavioral
+// stimulus cannot be consumed by scheduling or verification identity probes.
+type commandDeadlineContext struct{ context.Context }
+
+func (c commandDeadlineContext) Err() error { return context.Cause(c.Context) }
+
+func commandResult[T any](t *testing.T, cancel context.CancelFunc, result <-chan T) {
+	t.Helper()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-result:
+		case <-time.After(commandTestWait):
+			t.Error("command result did not drain during cleanup")
+		}
+	})
 }
 
 func assertCommandDescendantGone(t *testing.T, pidPath string) {
@@ -35,10 +102,14 @@ func assertCommandDescendantGone(t *testing.T, pidPath string) {
 	if err != nil {
 		t.Fatalf("parse child pid: %v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(commandTestWait)
 	for {
 		err := syscall.Kill(pid, 0)
 		if errors.Is(err, syscall.ESRCH) {
+			// Disarm fallback cleanup before this PID can be reused.
+			if err := os.Remove(pidPath); err != nil {
+				t.Fatal(err)
+			}
 			break
 		}
 		if err != nil {
@@ -52,12 +123,14 @@ func assertCommandDescendantGone(t *testing.T, pidPath string) {
 }
 
 func TestDefaultLocalCompletionBoundsInheritedPipes(t *testing.T) {
-	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	pidPath := commandTestPIDPath(t, t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
+	commandResult(t, cancel, result)
 	go func() {
-		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 30 & echo $! > "$1"`, "sh", pidPath}, io.Discard, io.Discard)
+		defer close(result)
+		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 3600 & echo $! > "$1"`, "sh", pidPath}, io.Discard, io.Discard)
 	}()
 	select {
 	case err := <-result:
@@ -65,39 +138,25 @@ func TestDefaultLocalCompletionBoundsInheritedPipes(t *testing.T) {
 			t.Fatalf("incomplete output error = %v, want ErrWaitDelay", err)
 		}
 		assertCommandDescendantGone(t, pidPath)
-	case <-time.After(2 * time.Second):
-		cancel()
-		<-result
+	case <-time.After(commandTestWait):
 		t.Fatal("command completion hung on inherited output pipes")
 	}
 }
 
 func TestDefaultLocalCancellationKillsDescendants(t *testing.T) {
-	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	pidPath := commandTestPIDPath(t, t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	result := make(chan error, 1)
+	commandResult(t, cancel, result)
 	go func() {
+		defer close(result)
 		var stdout bytes.Buffer
-		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 30 & echo $! > "$1"; wait`, "sh", pidPath}, &stdout, io.Discard)
+		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 3600 & echo $! > "$1"; wait`, "sh", pidPath}, &stdout, io.Discard)
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		// File creation precedes the shell's PID write; cancel only after publication.
-		if data, err := os.ReadFile(pidPath); err == nil { //nolint:gosec // G304: test-owned temporary PID file.
-			if strings.HasSuffix(string(data), "\n") {
-				break
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("inspect child pid file: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("child command did not start")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitCommandPID(t, pidPath)
 
 	cancel()
 	select {
@@ -105,20 +164,33 @@ func TestDefaultLocalCancellationKillsDescendants(t *testing.T) {
 		if err == nil || !errors.Is(ctx.Err(), context.Canceled) {
 			t.Fatalf("DefaultLocal returned %v with context error %v, want cancellation failure", err, ctx.Err())
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(commandTestWait):
 		t.Fatal("DefaultLocal did not terminate after cancellation")
 	}
 	assertCommandDescendantGone(t, pidPath)
 }
 
 func TestDefaultLocalTimeoutKillsDescendants(t *testing.T) {
-	pidPath := filepath.Join(t.TempDir(), "child.pid")
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	err := DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 30 & echo $! > "$1"; wait`, "sh", pidPath}, io.Discard, io.Discard)
-	if err == nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) || time.Since(started) > 2*time.Second {
-		t.Fatalf("timeout failed: %v, %v", err, ctx.Err())
+	pidPath := commandTestPIDPath(t, t.TempDir())
+	base, expire := context.WithCancelCause(context.Background())
+	ctx := commandDeadlineContext{base}
+	cancel := func() { expire(context.Canceled) }
+	result := make(chan error, 1)
+	commandResult(t, cancel, result)
+	go func() {
+		defer close(result)
+		result <- DefaultLocal(ctx, "", "sh", []string{"-c", `sleep 3600 & echo $! > "$1"; wait`, "sh", pidPath}, io.Discard, io.Discard)
+	}()
+	waitCommandPID(t, pidPath)
+	timer := time.AfterFunc(200*time.Millisecond, func() { expire(context.DeadlineExceeded) })
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		if err == nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Fatalf("timeout failed: %v, %v", err, ctx.Err())
+		}
+	case <-time.After(commandTestWait):
+		t.Fatal("DefaultLocal did not terminate after deadline")
 	}
 	assertCommandDescendantGone(t, pidPath)
 }
@@ -128,42 +200,33 @@ func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
 	for _, mode := range []string{"cancellation", "timeout", "detached", "inherited-pipes"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
-			pidPath := filepath.Join(root, "child.pid")
+			pidPath := commandTestPIDPath(t, root)
 			ctx := WithVerificationCache(context.Background(), root)
-			var cancel context.CancelFunc
-			if mode == "timeout" {
-				// Allow both bounded identity probes to finish before testing
-				// the managed command's own deadline.
-				ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
-			} else {
-				ctx, cancel = context.WithCancel(ctx)
-			}
+			base, expire := context.WithCancelCause(ctx)
+			ctx = commandDeadlineContext{base}
+			cancel := func() { expire(context.Canceled) }
 			defer cancel()
-			script := `sleep 30 & echo $! > "$1"; wait`
+			script := `sleep 3600 & echo $! > "$1"; wait`
 			switch mode {
 			case "detached":
-				script = `sleep 30 >/dev/null 2>&1 & echo $! > "$1"`
+				script = `sleep 3600 >/dev/null 2>&1 & echo $! > "$1"`
 			case "inherited-pipes":
-				script = `sleep 30 & echo $! > "$1"`
+				script = `sleep 3600 & echo $! > "$1"`
 			}
 			result := make(chan error, 1)
+			commandResult(t, cancel, result)
 			go func() {
+				defer close(result)
 				result <- DefaultLocal(ctx, root, "sh", []string{"-c", script, "sh", pidPath}, io.Discard, io.Discard)
 			}()
-			if mode == "cancellation" {
-				deadline := time.Now().Add(5 * time.Second)
-				for {
-					if data, err := os.ReadFile(pidPath); err == nil { //nolint:gosec // G304: test-owned temporary PID file.
-						if strings.HasSuffix(string(data), "\n") {
-							break
-						}
-					}
-					if time.Now().After(deadline) {
-						t.Fatal("child command did not start")
-					}
-					time.Sleep(10 * time.Millisecond)
+			if mode == "cancellation" || mode == "timeout" {
+				waitCommandPID(t, pidPath)
+				if mode == "timeout" {
+					timer := time.AfterFunc(200*time.Millisecond, func() { expire(context.DeadlineExceeded) })
+					defer timer.Stop()
+				} else {
+					cancel()
 				}
-				cancel()
 			}
 			select {
 			case err := <-result:
@@ -177,21 +240,16 @@ func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
 						t.Fatalf("want ErrWaitDelay, got %v", err)
 					}
 				default:
-					if err == nil || ctx.Err() == nil {
+					want := context.Canceled
+					if mode == "timeout" {
+						want = context.DeadlineExceeded
+					}
+					if err == nil || !errors.Is(ctx.Err(), want) {
 						t.Fatalf("cancellation failed: %v, %v", err, ctx.Err())
 					}
 				}
-			case <-time.After(7 * time.Second):
-				cancel()
-				<-result
+			case <-time.After(commandTestWait):
 				t.Fatal("opt-in command did not finish promptly")
-			}
-			// A deadline may expire before dispatch on a loaded host. There
-			// is no descendant to inspect unless the shell published one.
-			if mode == "timeout" {
-				if _, err := os.Stat(pidPath); errors.Is(err, os.ErrNotExist) {
-					return
-				}
 			}
 			assertCommandDescendantGone(t, pidPath)
 		})
@@ -202,13 +260,13 @@ func TestVerificationIdentityDescendants(t *testing.T) {
 	for _, mode := range []string{"timeout", "cancel", "pipes", "detached"} {
 		t.Run(mode, func(t *testing.T) {
 			root, bin := t.TempDir(), t.TempDir()
-			pid := filepath.Join(root, "pid")
-			script := "sleep 30 & echo $! > \"$PID_FILE\"; wait"
+			pid := commandTestPIDPath(t, root)
+			script := "sleep 3600 & echo $! > \"$PID_FILE\"; wait"
 			if mode == "pipes" {
-				script = "sleep 30 & echo $! > \"$PID_FILE\"; echo go1.26.2"
+				script = "sleep 3600 & echo $! > \"$PID_FILE\"; echo go1.26.2"
 			}
 			if mode == "detached" {
-				script = "sleep 30 >/dev/null 2>&1 & echo $! > \"$PID_FILE\"; echo go1.26.2"
+				script = "sleep 3600 >/dev/null 2>&1 & echo $! > \"$PID_FILE\"; echo go1.26.2"
 			}
 			if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\n"+script+"\n"), 0700); err != nil { //nolint:gosec // G306: private executable test fixture.
 				t.Fatal(err)
@@ -217,26 +275,19 @@ func TestVerificationIdentityDescendants(t *testing.T) {
 			defer cancel()
 			// Cancellation must follow child publication, not race the
 			// production probe deadline. Timeout coverage retains that bound.
-			timeout := time.Second
-			if mode == "cancel" {
-				timeout = 30 * time.Second
+			timeout := 2 * commandTestWait
+			if mode == "timeout" {
+				timeout = time.Second // Behavioral probe timeout, including startup.
 			}
 			result := make(chan bool, 1)
+			commandResult(t, cancel, result)
 			go func() {
+				defer close(result)
 				_, ok := verificationIdentityWithTimeout(ctx, timeout, root, []string{"PATH=" + bin + ":/bin:/usr/bin", "PID_FILE=" + pid}, "go", "env", "GOVERSION")
 				result <- ok
 			}()
 			if mode == "cancel" {
-				deadline := time.Now().Add(15 * time.Second)
-				for {
-					if data, err := os.ReadFile(pid); err == nil && strings.HasSuffix(string(data), "\n") { //nolint:gosec // G304: PID file in the test-owned temporary directory.
-						break
-					}
-					if time.Now().After(deadline) {
-						t.Fatal("probe not started")
-					}
-					time.Sleep(10 * time.Millisecond)
-				}
+				waitCommandPID(t, pid)
 				cancel()
 			}
 			select {
@@ -244,7 +295,7 @@ func TestVerificationIdentityDescendants(t *testing.T) {
 				if (mode == "cancel" || mode == "timeout" || mode == "pipes") && ok {
 					t.Fatal("incomplete probe returned a usable identity")
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(commandTestWait):
 				t.Fatal("probe hung")
 			}
 			if mode == "cancel" {
@@ -252,7 +303,7 @@ func TestVerificationIdentityDescendants(t *testing.T) {
 					t.Fatalf("cancellation lost: %v", err)
 				}
 			}
-			if mode != "cancel" {
+			if mode == "timeout" {
 				// The one-second probe bound includes process startup. If it
 				// expires before publication, no child cleanup can be asserted.
 				if _, err := os.Stat(pid); errors.Is(err, os.ErrNotExist) {

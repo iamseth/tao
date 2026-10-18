@@ -83,7 +83,7 @@ func TestDetailInspectionStartsAfterLoadCancelsOnCloseAndSkipsUnchangedReload(t 
 	app.openDetail(ctx, &state, monitor.Row{PlanID: "plan-a", PlanDir: "/plans/a"})
 	select {
 	case <-inspector.started:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second): // Scheduler backstop; startup is channel-driven.
 		t.Fatal("detail inspection did not start")
 	}
 	if state.detail == nil || state.detail.inspection.status != detailInspectionLoading {
@@ -97,7 +97,7 @@ func TestDetailInspectionStartsAfterLoadCancelsOnCloseAndSkipsUnchangedReload(t 
 	state.closeDetail()
 	select {
 	case <-inspector.canceled:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("closing detail did not cancel inspection")
 	}
 }

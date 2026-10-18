@@ -27,7 +27,7 @@ func TestProvidersStopTurnsDuringCompletionGrace(t *testing.T) {
 	for _, provider := range []string{"pi", "claude"} {
 		t.Run(provider, func(t *testing.T) {
 			dir := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
 			write := func(name string) {
 				t.Helper()
@@ -35,9 +35,10 @@ func TestProvidersStopTurnsDuringCompletionGrace(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			defer write("allow-gate")
 			waitFile := func(name string) {
 				t.Helper()
+				deadline := time.NewTimer(30 * time.Second)
+				defer deadline.Stop()
 				for {
 					if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 						return
@@ -45,7 +46,9 @@ func TestProvidersStopTurnsDuringCompletionGrace(t *testing.T) {
 					select {
 					case <-ctx.Done():
 						t.Fatalf("waiting for %s: %v", name, ctx.Err())
-					case <-time.After(10 * time.Millisecond):
+					case <-deadline.C:
+						t.Fatalf("waiting for %s: observation budget exhausted", name)
+					case <-time.After(10 * time.Millisecond): // Poll interval, not a failure deadline.
 					}
 				}
 			}
@@ -86,10 +89,24 @@ func TestProvidersStopTurnsDuringCompletionGrace(t *testing.T) {
 				newSoftTimer: func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} },
 			}
 			done := make(chan error, 1)
+			finished := make(chan struct{})
+			t.Cleanup(func() {
+				// Release managed work even when a readiness assertion fails.
+				if err := os.WriteFile(filepath.Join(dir, "allow-gate"), nil, 0o600); err != nil {
+					t.Error(err)
+				}
+				cancel()
+				select {
+				case <-finished:
+				case <-time.After(30 * time.Second):
+					t.Error("provider did not reap during cleanup")
+				}
+			})
 			go func() {
+				defer close(finished)
 				_, err := runtime.RunSession(ctx, Session{
 					RepoRoot: dir, Prompt: "work", Timeout: time.Minute,
-					Grace: &SessionGrace{Max: time.Minute, Active: active.Load},
+					Grace: &SessionGrace{Max: 2 * time.Minute, Active: active.Load},
 					BindLifetime: func(ctx context.Context) (context.Context, func() error, error) {
 						return process.WithSessionLifetime(ctx, nil, func() { close(ended) }), func() error { return nil }, nil
 					},
@@ -100,13 +117,14 @@ func TestProvidersStopTurnsDuringCompletionGrace(t *testing.T) {
 			ticks <- time.Now()
 			select {
 			case <-suspended:
-			case <-ctx.Done():
+			case <-time.After(30 * time.Second):
 				t.Fatal("provider was not suspended at soft deadline")
 			}
 			write("attempt-turn")
 			write("allow-gate")
 			waitFile("gate-done")
-			// Give an unsuspended provider ample opportunity to execute its turn.
+			// This short negative-assertion window probes forbidden turns;
+			// it is deliberately not a scheduling allowance or a success wait.
 			time.Sleep(100 * time.Millisecond)
 			if _, err := os.Stat(filepath.Join(dir, "new-turn")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("provider executed a turn during grace: %v", err)
@@ -125,7 +143,7 @@ func TestProvidersStopTurnsDuringCompletionGrace(t *testing.T) {
 				if !errors.As(err, &timeout) {
 					t.Fatalf("session error = %v", err)
 				}
-			case <-ctx.Done():
+			case <-time.After(30 * time.Second):
 				t.Fatal("session did not stop after completion settled")
 			}
 		})

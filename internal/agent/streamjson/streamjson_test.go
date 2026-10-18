@@ -467,7 +467,24 @@ func TestRunnerCloseJoinsBlockedEventDelivery(t *testing.T) {
 		close(wrote)
 	}()
 	runner := New("test", "json", proc, nil, collect)
-	<-wrote
+	defer func() {
+		proc.finish(nil)
+		cleaned := make(chan struct{})
+		go func() {
+			runner.Close()
+			close(cleaned)
+		}()
+		select {
+		case <-cleaned:
+		case <-time.After(30 * time.Second):
+			t.Error("Close did not finish during cleanup")
+		}
+	}()
+	select {
+	case <-wrote:
+	case <-time.After(30 * time.Second):
+		t.Fatal("unread event was not written")
+	}
 	closed := make(chan struct{})
 	go func() {
 		runner.Close()
@@ -475,7 +492,7 @@ func TestRunnerCloseJoinsBlockedEventDelivery(t *testing.T) {
 	}()
 	select {
 	case <-closed:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Close blocked on unread event")
 	}
 	select {

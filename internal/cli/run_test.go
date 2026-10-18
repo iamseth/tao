@@ -1588,7 +1588,7 @@ func TestRunSinglePlanHoldsLockAcrossReopenBoundary(t *testing.T) {
 				if !errors.Is(err, run.ErrCannotStart) {
 					t.Fatalf("competing lock error = %v, want ErrCannotStart", err)
 				}
-			case <-time.After(time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("timed out waiting for competing plan lock")
 			}
 		} else {

@@ -985,7 +985,7 @@ func TestDetailNavigationEnterBackspaceAndEscape(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second): // Scheduler backstop; the follower signals readiness.
 		t.Fatal("detail follower did not start")
 	}
 
@@ -1022,7 +1022,7 @@ func TestDetailNavigationEnterBackspaceAndEscape(t *testing.T) {
 	}
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("detail follower was not canceled")
 	}
 	if quit := app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyEsc}); quit {

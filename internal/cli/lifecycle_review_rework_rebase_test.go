@@ -24,19 +24,25 @@ func TestLifecycleReworkRunLockHandoff(t *testing.T) {
 	executed := false
 	oldExecutor := executeSinglePlan
 	executeSinglePlan = func(service runpkg.Service, ctx context.Context, request runpkg.Request) error {
+		locked := fixture.reload(t)
 		go func() { //nolint:gosec // G118: an independent context is the contention condition under test.
-			locked := fixture.reload(t)
 			competitorDone <- runpkg.WithPlanRunLock(context.Background(), locked, fixture.now, func(context.Context) error {
 				close(competitorEntered)
 				return nil
 			})
 		}()
-		select {
-		case <-competitorEntered:
-			return errors.New("competing lifecycle driver entered during rework --run")
-		default:
-		}
 		return service.WithPlanRunLock(ctx, request, func(context.Context) error {
+			// Observe refusal while ownership is still held, not after Run returns.
+			select {
+			case <-competitorEntered:
+				return errors.New("competing lifecycle driver entered during rework --run")
+			case err := <-competitorDone:
+				if !errors.Is(err, runpkg.ErrCannotStart) {
+					return fmt.Errorf("competing lifecycle driver error = %w, want lock refusal", err)
+				}
+			case <-time.After(30 * time.Second):
+				return errors.New("competing lifecycle driver did not observe lock ownership")
+			}
 			current := fixture.reload(t)
 			if current.State.Status != plan.StatusInProgress || len(current.State.Plan.PendingSlices) != 1 {
 				return fmt.Errorf("rework was not reopened before execution: status=%s pending=%v", current.State.Status, current.State.Plan.PendingSlices)
@@ -65,14 +71,6 @@ func TestLifecycleReworkRunLockHandoff(t *testing.T) {
 	}
 	if !executed {
 		t.Fatal("rework --run did not execute the generated slice")
-	}
-	select {
-	case err := <-competitorDone:
-		if !errors.Is(err, runpkg.ErrCannotStart) {
-			t.Fatalf("competing lifecycle driver error = %v, want lock refusal", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("competing lifecycle driver did not observe lock ownership")
 	}
 	releasedRan := false
 	if err := runpkg.WithPlanRunLock(context.Background(), fixture.reload(t), fixture.now, func(context.Context) error {

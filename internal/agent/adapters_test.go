@@ -24,10 +24,14 @@ func TestClaudeInheritedStdoutExit(t *testing.T) {
 	for _, outcome := range []string{"success", "failure"} {
 		t.Run(outcome, func(t *testing.T) {
 			ready := filepath.Join(t.TempDir(), "ready")
+			ctx, cancel := context.WithCancel(context.Background())
+			finished := make(chan struct{})
+			t.Cleanup(func() { cleanupInheritedWriter(t, ready, cancel, finished) })
 			starter := func(ctx context.Context, cwd, _ string, _ []string) (process.Process, error) {
 				return process.DefaultProcessStarter(ctx, cwd, "sh", []string{"-c", `
  cat >/dev/null
- sleep 30 </dev/null &
+ # No natural EOF: only test cleanup releases the inherited writer.
+ (while [ ! -f "$1.release" ]; do sleep 0.02; done; echo done > "$1.finished") </dev/null &
  echo $! > "$1"
  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
  printf '%s\n' '{"type":"result","subtype":"success","session_id":"terminal"}'
@@ -41,11 +45,13 @@ func TestClaudeInheritedStdoutExit(t *testing.T) {
 			}
 			done := make(chan completion, 1)
 			go func() {
-				result, err := (claudeRuntime{starter: starter}).RunSession(context.Background(), Session{Prompt: "work", CollectMetrics: true})
+				defer close(finished)
+				result, err := (claudeRuntime{starter: starter}).RunSession(ctx, Session{Prompt: "work", CollectMetrics: true})
 				done <- completion{result, err}
 			}()
 			var pid int
-			for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+			// External PID publication requires bounded polling, not a success sleep.
+			for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 				data, _ := os.ReadFile(ready) // #nosec G304 -- test-owned PID file under t.TempDir.
 				pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
 				if pid > 0 {
@@ -60,7 +66,7 @@ func TestClaudeInheritedStdoutExit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = child.Kill(); _ = child.Release() }()
+			defer func() { _ = child.Release() }()
 			select {
 			case got := <-done:
 				if got.result.Output != "done" || got.result.FinalText != "done" || got.result.Metrics == nil || got.result.Metrics.SessionID != "terminal" {
@@ -72,11 +78,11 @@ func TestClaudeInheritedStdoutExit(t *testing.T) {
 				if outcome == "failure" && (got.err == nil || !strings.Contains(got.err.Error(), "exit status 7") || !strings.Contains(got.err.Error(), "provider-diagnostic")) {
 					t.Fatalf("exit status or diagnostic lost: %v", got.err)
 				}
-			case <-time.After(2 * time.Second):
-				_ = child.Kill()
+			case <-time.After(30 * time.Second):
+				_ = os.WriteFile(ready+".release", nil, 0o600)
 				select {
 				case <-done:
-				case <-time.After(2 * time.Second):
+				case <-time.After(30 * time.Second):
 					t.Fatal("session did not stop even after child cleanup")
 				}
 				t.Fatal("session waited for surviving stdout writer without a context timeout")
@@ -96,31 +102,41 @@ func TestAdaptersInheritedStderrShutdown(t *testing.T) {
 			t.Run(provider+"/"+outcome, func(t *testing.T) {
 				ready := filepath.Join(t.TempDir(), "ready")
 				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
+				finished := make(chan struct{})
+				t.Cleanup(func() { cleanupInheritedWriter(t, ready, cancel, finished) })
 				starter := func(ctx context.Context, cwd, _ string, _ []string) (process.Process, error) {
 					return process.DefaultProcessStarter(ctx, cwd, "sh", []string{"-c", `
- sleep 30 </dev/null >/dev/null &
+ # No natural EOF: only test cleanup releases the inherited writer.
+ (while [ ! -f "$1.release" ]; do sleep 0.02; done; echo done > "$1.finished") </dev/null >/dev/null &
  echo provider-diagnostic >&2
  echo $! > "$1"
  if [ "$2" = exit ]; then exit 1; fi
- exec sleep 30
+ exec sleep 86400
 `, "sh", ready, outcome})
 				}
 				var runtime Runtime = piRuntime{starter: starter}
 				if provider == "claude" {
 					runtime = claudeRuntime{starter: starter}
 				}
+				// Fire the behavioral timeout only after the writer is observable;
+				// startup scheduling must not consume the timeout stimulus.
+				ticks := make(chan time.Time, 1)
+				bounded := timeoutRuntime{inner: runtime, newSoftTimer: func(time.Duration) (<-chan time.Time, func()) {
+					return ticks, func() {}
+				}}
 				session := Session{Prompt: "work"}
 				if outcome == "timeout" {
 					session.Timeout = time.Second
 				}
 				done := make(chan error, 1)
 				go func() {
-					_, err := WithSessionTimeout(runtime).RunSession(ctx, session)
+					defer close(finished)
+					_, err := bounded.RunSession(ctx, session)
 					done <- err
 				}()
 				var pid int
-				for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+				// External PID publication requires bounded polling, not a success sleep.
+				for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 					data, _ := os.ReadFile(ready) // #nosec G304 -- test-owned PID file under t.TempDir.
 					pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
 					if pid > 0 {
@@ -135,18 +151,21 @@ func TestAdaptersInheritedStderrShutdown(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = child.Kill(); _ = child.Release() }()
-				if outcome == "cancel" {
+				defer func() { _ = child.Release() }()
+				switch outcome {
+				case "cancel":
 					cancel()
+				case "timeout":
+					ticks <- time.Now()
 				}
 				select {
 				case err = <-done:
-				case <-time.After(2 * time.Second):
+				case <-time.After(30 * time.Second):
 					cancel()
-					_ = child.Kill()
+					_ = os.WriteFile(ready+".release", nil, 0o600)
 					select {
 					case <-done:
-					case <-time.After(2 * time.Second):
+					case <-time.After(30 * time.Second):
 						t.Fatal("session did not stop even after child cleanup")
 					}
 					t.Fatal("session shutdown waited for the surviving stderr writer")
@@ -170,6 +189,39 @@ func TestAdaptersInheritedStderrShutdown(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Register before starting the session so PID-publication failures also clean up.
+// Providers are reaped by RunSession; orphaned writers are released here and
+// reaped by the OS (they are not direct children of the test process).
+func cleanupInheritedWriter(t *testing.T, ready string, cancel context.CancelFunc, finished <-chan struct{}) {
+	t.Helper()
+	// This also releases a writer if cancellation races its PID publication.
+	if err := os.WriteFile(ready+".release", nil, 0o600); err != nil {
+		t.Error(err)
+	}
+	defer cancel()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond) // External PID-file observation only.
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(ready + ".finished"); err == nil {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Error("writer did not acknowledge release during cleanup")
+			return
+		}
+	}
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(30 * time.Second):
+		t.Error("provider was not reaped after writer cleanup")
 	}
 }
 
@@ -262,7 +314,7 @@ func TestAdaptersOptionalWarningCompatibility(t *testing.T) {
 			if provider == "claude" {
 				runtime = claudeRuntime{starter: starter}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			result, err := runtime.RunSession(ctx, Session{Prompt: "work", Warning: &SessionWarning{Percent: 80, Message: "policy"}, WarningMessages: warnings, CollectMetrics: true})
 			<-serverDone
@@ -366,8 +418,13 @@ func TestAdaptersRetainMeasurementsOnFailureAndTimeout(t *testing.T) {
 				if provider == "pi" {
 					runtime = piRuntime{starter: starter}
 				}
+				// One second is the timeout-under-test, not a synchronization budget.
 				result, err := WithSessionTimeout(runtime).RunSession(context.Background(), Session{Prompt: "work", CollectMetrics: true, Timeout: time.Second})
-				<-serverDone
+				select {
+				case <-serverDone:
+				case <-time.After(30 * time.Second):
+					t.Fatal("fake provider did not finish after session return")
+				}
 				if outcome == "timeout" {
 					var timeout *SessionTimeoutError
 					if !errors.As(err, &timeout) || !errors.Is(err, context.DeadlineExceeded) {

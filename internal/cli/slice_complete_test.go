@@ -241,7 +241,7 @@ func TestSliceCompleteCommandSignalCancelsGate(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("gate ignored signal")
 			return nil
 		}

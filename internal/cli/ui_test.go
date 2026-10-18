@@ -375,7 +375,19 @@ func testDetachedUICommand(t *testing.T, mode string) {
 	}
 
 	started := make(chan error, 1)
+	finished := make(chan struct{})
+	// Release the hold even if PID publication fails. The child deliberately
+	// has no self-expiry: expiry must not make a blocking launch look detached.
+	t.Cleanup(func() {
+		_ = os.Remove(holdPath)
+		select {
+		case <-finished:
+		case <-time.After(30 * time.Second):
+			t.Error("detached launcher did not finish after releasing child")
+		}
+	})
 	go func() {
+		defer close(finished)
 		started <- startDetachedUICommand(tui.CommandRequest{
 			Executable: executable,
 			StderrPath: stderrPath,
@@ -390,13 +402,14 @@ func testDetachedUICommand(t *testing.T, mode string) {
 		if err := syscall.Kill(pid, 0); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
+		waitForDetachedUIReap(t, pid)
 	})
 	select {
 	case err := <-started:
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("detached command launch blocked on the child")
 	}
 	if err := syscall.Kill(pid, 0); err != nil {
@@ -406,20 +419,7 @@ func testDetachedUICommand(t *testing.T, mode string) {
 	if err := os.Remove(holdPath); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		err := syscall.Kill(pid, 0)
-		if err == syscall.ESRCH {
-			break
-		}
-		if err != nil {
-			t.Fatalf("inspect detached command: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("detached command was not reaped")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForDetachedUIReap(t, pid)
 	if mode == "log" {
 		contents, err := os.ReadFile(stderrPath) //nolint:gosec // G304: stderrPath is rooted in the test-owned temporary directory.
 		if err != nil {
@@ -435,6 +435,25 @@ func testDetachedUICommand(t *testing.T, mode string) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("log permissions = %v", info.Mode().Perm())
 		}
+	}
+}
+
+func waitForDetachedUIReap(t *testing.T, pid int) {
+	t.Helper()
+	// Poll process existence: detached reaping has no portable parent event.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		err := syscall.Kill(pid, 0)
+		if err == syscall.ESRCH {
+			return
+		}
+		if err != nil {
+			t.Fatalf("inspect detached command: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("detached command was not reaped")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -473,7 +492,8 @@ func TestUIDetachedUICommandHelperProcess(t *testing.T) {
 
 func waitForDetachedUIPID(t *testing.T, path string) int {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// PID publication is external file state, so retain bounded polling.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		contents, err := os.ReadFile(path) //nolint:gosec // G304: path is a test-owned temporary file.
 		// The helper creates the file before it writes the PID, so an empty

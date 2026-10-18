@@ -254,7 +254,7 @@ func TestMergeCommandRuntimeStatusLifetime(t *testing.T) {
 				ticker.ticks <- startedAt
 				select {
 				case <-publisher.heartbeatCalled:
-				case <-time.After(time.Second):
+				case <-time.After(30 * time.Second):
 					t.Fatal("merge was not heartbeated")
 				}
 			}}

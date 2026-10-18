@@ -1097,6 +1097,7 @@ func TestClientWarningStalledStdinDoesNotBlockCancellationOrTerminal(t *testing.
 	for _, terminal := range []bool{false, true} {
 		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
 			proc := newFakeProcess(t)
+			defer proc.finish()
 			warnings := make(chan string, 1)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -1117,9 +1118,20 @@ func TestClientWarningStalledStdinDoesNotBlockCancellationOrTerminal(t *testing.
 				return stoppingFakeProcess{proc}, nil
 			}}
 			done := make(chan error, 1)
+			completed := make(chan struct{})
 			go func() {
+				defer close(completed)
 				_, err := client.RunAgentSession(ctx, Request{Prompt: "work", WarningMessages: warnings})
 				done <- err
+			}()
+			defer func() {
+				cancel()
+				proc.finish()
+				select {
+				case <-completed:
+				case <-time.After(30 * time.Second):
+					t.Error("client did not stop during cleanup")
+				}
 			}()
 			select {
 			case err := <-done:
@@ -1129,7 +1141,7 @@ func TestClientWarningStalledStdinDoesNotBlockCancellationOrTerminal(t *testing.
 				if !terminal && !errors.Is(err, context.Canceled) {
 					t.Fatalf("cancellation: %v", err)
 				}
-			case <-time.After(2 * time.Second):
+			case <-time.After(30 * time.Second):
 				proc.finish()
 				t.Fatal("blocked warning prevented shutdown")
 			}

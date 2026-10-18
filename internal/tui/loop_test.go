@@ -521,6 +521,7 @@ func TestRunMovesSelectionAndRestoresTerminal(t *testing.T) {
 
 	var frames []string
 	for len(output.writes) > 0 {
+		// Run has returned and this buffered channel has no other consumer.
 		value := <-output.writes
 		if strings.HasPrefix(value, "\x1b[1;1H") {
 			frames = append(frames, value)
@@ -577,7 +578,7 @@ func TestRunCollectsNotesInitiallyAndOnRefresh(t *testing.T) {
 	if _, err := io.WriteString(writer, "q"); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
+	if err := receiveChanges(t, done); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -635,7 +636,7 @@ func TestRunRefreshesAndHandlesResize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("event loop did not quit")
 	}
 }
@@ -727,6 +728,7 @@ func TestRunRestoresTerminalOnContextCancellation(t *testing.T) {
 	defer func() { _ = reader.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		done <- (App{Input: reader, Output: output, Terminal: terminal, Ticker: ticker, Collector: collector}).Run(ctx)
@@ -739,7 +741,7 @@ func TestRunRestoresTerminalOnContextCancellation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("event loop did not exit after cancellation")
 	}
 	_ = writer.Close()
@@ -1743,6 +1745,7 @@ func TestRootQuitKeysAndWIPDefault(t *testing.T) {
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); quit {
 		t.Fatal("first root Escape unexpectedly quit")
 	}
+	// These injected clock advances exercise the double-Escape window, not scheduling.
 	now = base.Add(500 * time.Millisecond)
 	if quit := state.handleKey(term.KeyEvent{Key: term.KeyEsc}); !quit {
 		t.Fatal("second root Escape within one second did not quit")
@@ -1862,7 +1865,8 @@ func TestNotePlanningParksInputAndDiscoversSnapshotsOnExistingTick(t *testing.T)
 	output := &recordingWriter{writes: make(chan string, 64)}
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close(); _ = writer.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Failure backstop only; frames and launcher signals order the test.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	launched := make(chan struct{})
 	done := make(chan error, 1)
@@ -1937,7 +1941,7 @@ func TestNotePlanningParksInputAndDiscoversSnapshotsOnExistingTick(t *testing.T)
 
 func waitForFrame(t *testing.T, writes <-chan string) string {
 	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
+	timer := time.NewTimer(30 * time.Second) // Failure backstop, not a frame-rate assertion.
 	defer timer.Stop()
 	for {
 		select {

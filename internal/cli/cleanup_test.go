@@ -291,8 +291,13 @@ func TestCleanupSkipsLiveBatchOwnership(t *testing.T) {
 				}()
 				t.Cleanup(func() {
 					cancel()
-					if err := <-done; !errors.Is(err, context.Canceled) {
-						t.Errorf("paused batch returned %v", err)
+					select {
+					case err := <-done:
+						if !errors.Is(err, context.Canceled) {
+							t.Errorf("paused batch returned %v", err)
+						}
+					case <-time.After(30 * time.Second):
+						t.Error("paused batch did not stop after cancellation")
 					}
 				})
 				var state mergepkg.BatchState
@@ -301,7 +306,7 @@ func TestCleanupSkipsLiveBatchOwnership(t *testing.T) {
 				case err := <-done:
 					done <- err
 					t.Fatalf("batch failed before pause: %v", err)
-				case <-time.After(10 * time.Second):
+				case <-time.After(30 * time.Second):
 					t.Fatal("batch did not reach integration pause")
 				}
 				activeID, err := store.ActiveID()

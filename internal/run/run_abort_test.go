@@ -151,6 +151,12 @@ func TestRunAbortEnrichmentBounded(t *testing.T) {
 				if !stalledGit {
 					return nil
 				}
+				// The independent 250ms HEAD budget is behavior under test;
+				// the observer below allows scheduling delay, not a larger budget.
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > 250*time.Millisecond {
+					t.Error("diagnostic HEAD lookup lost its independent timeout")
+				}
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -165,7 +171,11 @@ func TestRunAbortEnrichmentBounded(t *testing.T) {
 				_ = filelock.Unlock(mutationLock)
 				_ = mutationLock.Close()
 				close(unblock)
-				<-finished
+				select {
+				case <-finished:
+				case <-time.After(30 * time.Second):
+					t.Error("run diagnostic cleanup did not finish")
+				}
 			}()
 			go func() {
 				defer close(finished)
@@ -181,7 +191,7 @@ func TestRunAbortEnrichmentBounded(t *testing.T) {
 				if got != original { //nolint:errorlint // Error identity must survive diagnostics.
 					t.Fatalf("returned %v, want original error", got)
 				}
-			case <-time.After(2 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("diagnostic enrichment blocked original error and run lock release")
 			}
 			select {
@@ -213,7 +223,12 @@ func TestRunAbortEnrichmentBounded(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			time.Sleep(20 * time.Millisecond)
+			// Join the driver rather than guessing when diagnostic writes settle.
+			select {
+			case <-finished:
+			case <-time.After(30 * time.Second):
+				t.Fatal("run diagnostic driver did not finish")
+			}
 			after, err := os.ReadFile(plan.LogPath(dir))
 			if err != nil {
 				t.Fatal(err)

@@ -44,7 +44,7 @@ func TestRuntimeStatusReporterHeartbeatsAndCleansUp(t *testing.T) {
 		ticker.ticks <- startedAt.Add(runstatus.PublicationInterval)
 		select {
 		case <-publisher.heartbeatCalled:
-		case <-time.After(time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("heartbeat was not published")
 		}
 		return expectedErr
@@ -78,7 +78,7 @@ func TestRuntimeStatusReporterSuppressesPublisherFailures(t *testing.T) {
 		ticker.ticks <- time.Now()
 		select {
 		case <-publisher.heartbeatCalled:
-		case <-time.After(time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("heartbeat was not attempted")
 		}
 		return expectedErr

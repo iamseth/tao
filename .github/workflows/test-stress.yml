@@ -1,0 +1,121 @@
+name: Weekly race diagnostics
+
+on:
+  schedule:
+    # Sundays at 07:23 UTC; intentionally not a push/PR gate.
+    - cron: '23 7 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-stress:
+    name: Repeated race tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+    # The 20m test timeout is per package; bound the entire repeated run too.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: Report toolchain and runner
+        run: |
+          set -euo pipefail
+          {
+            uname -a
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              sw_vers
+            else
+              cat /etc/os-release
+            fi
+            go version
+            go env GOOS GOARCH CGO_ENABLED
+            command -v git
+            git --version
+          } 2>&1 | tee "$RUNNER_TEMP/tao-stress-tests.log"
+
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          {
+            sudo timeout --kill-after=30s 3m apt-get -o Acquire::Retries=3 update
+            sudo timeout --kill-after=30s 3m apt-get -o Acquire::Retries=3 install -y bubblewrap
+          } 2>&1 | tee "$RUNNER_TEMP/tao-confinement-setup.log"
+
+      - name: Allow bubblewrap user namespaces on the ephemeral runner
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          {
+            before="$(sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined kernel.unprivileged_userns_clone user.max_user_namespaces)"
+            test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+            test "$(command -v bwrap)" = /usr/bin/bwrap
+            test "$(readlink -f /usr/bin/bwrap)" = /usr/bin/bwrap
+            test "$(stat -c %u /usr/bin/bwrap)" = 0
+            test ! -u /usr/bin/bwrap
+            test -z "$(find /usr/bin/bwrap -perm /022 -print)"
+            # An executable-scoped userns exception, not an additional sandbox.
+            # Keep global restrictions and Tao's namespace/mount isolation intact.
+            printf '%s\n' \
+              'abi <abi/4.0>,' \
+              'include <tunables/global>' \
+              'profile tao-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' \
+              '  userns,' \
+              '}' > "$RUNNER_TEMP/tao-ci-bwrap"
+            sudo install -o root -g root -m 0644 "$RUNNER_TEMP/tao-ci-bwrap" /etc/apparmor.d/tao-ci-bwrap
+            sudo apparmor_parser -r /etc/apparmor.d/tao-ci-bwrap
+            sudo grep -F 'tao-ci-bwrap ' /sys/kernel/security/apparmor/profiles
+            after="$(sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined kernel.unprivileged_userns_clone user.max_user_namespaces)"
+            printf '%s\n' "$after"
+            test "$before" = "$after"
+          } 2>&1 | tee -a "$RUNNER_TEMP/tao-confinement-setup.log"
+
+      - name: Require Linux process sandbox availability
+        if: runner.os == 'Linux'
+        env:
+          TAO_REQUIRE_CONFINEMENT_TESTS: "1"
+        run: |
+          set -euo pipefail
+          {
+            test "$(id -u)" -ne 0
+            go test -count=1 -v ./internal/merge -run '^TestSingleMergeProcessSandboxHidesTaoParent$'
+          } 2>&1 | tee "$RUNNER_TEMP/tao-confinement-result.log"
+          grep -q '^--- PASS: TestSingleMergeProcessSandboxHidesTaoParent ' "$RUNNER_TEMP/tao-confinement-result.log"
+
+      - name: Repeat all tests with the race detector
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            export TAO_REQUIRE_CONFINEMENT_TESTS=1
+          fi
+          go test -count=5 -race -timeout 20m ./... 2>&1 | tee -a "$RUNNER_TEMP/tao-stress-tests.log"
+
+      - name: Preserve failed test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-stress-diagnostics-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/tao-stress-tests.log
+            ${{ runner.temp }}/tao-confinement-setup.log
+            ${{ runner.temp }}/tao-confinement-result.log
+          if-no-files-found: ignore
+          retention-days: 7

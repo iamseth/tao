@@ -17,6 +17,15 @@ import (
 	"github.com/iamseth/tao/internal/note"
 )
 
+// State-transition backstops, not behavioral timers: success always requires an
+// explicit signal, child message, or launcher result.
+const planningSignalWait = 30 * time.Second
+
+// Three rounds can each wait for command, ready, interrupt, and completion.
+// Allow two final signal waits, failure cleanup, startup, and race shutdown too,
+// so an inner timeout can print diagnostics before the isolated group is killed.
+const planningSignalControllerBudget = 8 * time.Minute
+
 type planningLaunchFunc func(context.Context, note.CatalogNote) error
 
 func (f planningLaunchFunc) Launch(ctx context.Context, item note.CatalogNote) error {
@@ -123,8 +132,8 @@ func awaitPlanningCancellation(t *testing.T, ctx context.Context) {
 	t.Helper()
 	select {
 	case <-ctx.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("cancellation did not arrive")
+	case <-time.After(planningSignalWait):
+		t.Fatalf("cancellation did not arrive (context: %v)", ctx.Err())
 	}
 }
 
@@ -133,7 +142,7 @@ func awaitPlanningCancellation(t *testing.T, ctx context.Context) {
 func TestUIPlanningSignalsIsolatedProcesses(t *testing.T) {
 	for _, scenario := range []string{"interrupt", "native-interrupt", "repeat", "start-failure", "exit-error", "term", "cancel"} {
 		t.Run(scenario, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), planningSignalControllerBudget)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestUIPlanningSignalHelper$") //nolint:gosec // G204: only the current test binary, with fixed helper arguments.
 			cmd.Env = append(os.Environ(), "TAO_UI_PLANNING_HELPER="+scenario)
@@ -142,7 +151,7 @@ func TestUIPlanningSignalsIsolatedProcesses(t *testing.T) {
 			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 			output, err := cmd.CombinedOutput()
 			if err != nil {
-				t.Fatalf("helper %s: %v\n%s", scenario, err, output)
+				t.Fatalf("helper %s: %v (context: %v)\n%s", scenario, err, ctx.Err(), output)
 			}
 			if !strings.Contains(string(output), "planning-helper-ok") {
 				t.Fatalf("helper did not finish: %s", output)
@@ -179,6 +188,7 @@ func TestUIPlanningSignalHelper(t *testing.T) {
 		rounds = 3
 	}
 	for round := 0; round < rounds; round++ {
+		t.Logf("scenario %s, round %d/%d", scenario, round+1, rounds)
 		runPlanningSignalChild(t, scope, cancel, scenario)
 		if scenario == "term" || scenario == "cancel" {
 			break
@@ -204,7 +214,7 @@ func TestUIPlanningSignalHelper(t *testing.T) {
 	}
 	select {
 	case <-restored:
-	case <-time.After(5 * time.Second):
+	case <-time.After(planningSignalWait):
 		t.Fatal("signal subscription not restored")
 	}
 	fmt.Println("planning-helper-ok")
@@ -270,16 +280,38 @@ func runPlanningSignalChild(t *testing.T, scope *uiPlanningSignals, cancel conte
 	app.UINotePlanningLauncher = adapter
 	launcher := app.uiNotePlanningLauncher(input, scope)
 	finished := make(chan error, 1)
-	go func() { finished <- launcher.Launch(scope.Context(), item) }()
-	cmd := <-commands
+	childCtx, cancelChild := context.WithCancel(scope.Context())
+	go func() { finished <- launcher.Launch(childCtx, item) }()
+	waited := false
+	defer func() {
+		cancelChild()
+		_ = feed.Close()
+		_ = input.Close()
+		_ = emit.Close()
+		_ = output.Close()
+		if !waited {
+			select {
+			case <-finished:
+			case <-time.After(planningSignalWait):
+				t.Errorf("scenario %s: cleanup did not reap launcher (context: %v)", scenario, childCtx.Err())
+			}
+		}
+	}()
+	var cmd *exec.Cmd
+	select {
+	case cmd = <-commands:
+	case <-time.After(planningSignalWait):
+		t.Fatalf("scenario %s: command not delivered (context: %v)", scenario, childCtx.Err())
+	}
 	if scenario == "start-failure" {
 		select {
 		case err := <-finished:
+			waited = true
 			if err == nil {
 				t.Fatal("missing startup error")
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("startup did not finish")
+		case <-time.After(planningSignalWait):
+			t.Fatalf("scenario %s: startup did not finish (context: %v)", scenario, childCtx.Err())
 		}
 		return
 	}
@@ -287,7 +319,11 @@ func runPlanningSignalChild(t *testing.T, scope *uiPlanningSignals, cancel conte
 	go func() {
 		scanner := bufio.NewScanner(output)
 		for scanner.Scan() {
-			lines <- scanner.Text()
+			select {
+			case lines <- scanner.Text():
+			case <-childCtx.Done():
+				return
+			}
 		}
 		close(lines)
 	}()
@@ -298,8 +334,8 @@ func runPlanningSignalChild(t *testing.T, scope *uiPlanningSignals, cancel conte
 			if got != want {
 				t.Fatalf("child said %q, want %q", got, want)
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("waiting for child %s", want)
+		case <-time.After(planningSignalWait):
+			t.Fatalf("scenario %s: waiting for child %s (context: %v)", scenario, want, childCtx.Err())
 		}
 	}
 	expect("ready")
@@ -334,12 +370,13 @@ func runPlanningSignalChild(t *testing.T, scope *uiPlanningSignals, cancel conte
 	}
 	select {
 	case err := <-finished:
+		waited = true
 		wantError := scenario == "term" || scenario == "cancel" || scenario == "exit-error" || scenario == "native-interrupt"
 		if (err != nil) != wantError {
 			t.Fatalf("child result = %v", err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("child not waited/reaped")
+	case <-time.After(planningSignalWait):
+		t.Fatalf("scenario %s: child not waited/reaped (context: %v)", scenario, childCtx.Err())
 	}
 	if cmd.ProcessState == nil {
 		t.Fatal("missing waited process state")

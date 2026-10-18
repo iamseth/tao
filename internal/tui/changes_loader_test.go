@@ -20,7 +20,7 @@ func receiveChanges[T any](t *testing.T, ch <-chan T) T {
 	select {
 	case v := <-ch:
 		return v
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second): // Failure backstop, not a behavioral deadline.
 		t.Fatal("loader did not settle")
 		var zero T
 		return zero
@@ -167,11 +167,13 @@ func TestChangesEqualSignatureKeepsPendingDiffAndFreshMetadata(t *testing.T) {
 
 // gatedReader serves its first reader to EOF, then blocks until gate closes
 // before serving the rest. It lets a scripted input stream wait for a loader to
-// start before it delivers the keys that exit the loop.
+// start before it delivers the keys that exit the loop. Optional stop releases a
+// blocked read during cleanup even if startup never happens.
 type gatedReader struct {
 	first io.Reader
 	gate  <-chan struct{}
 	rest  io.Reader
+	stop  <-chan struct{}
 }
 
 func (r *gatedReader) Read(p []byte) (int, error) {
@@ -186,11 +188,53 @@ func (r *gatedReader) Read(p []byte) (int, error) {
 		}
 		return n, err
 	}
-	<-r.gate
-	return r.rest.Read(p)
+	select {
+	case <-r.stop:
+		return 0, io.EOF
+	case <-r.gate:
+		return r.rest.Read(p)
+	}
+}
+
+func TestGatedReaderReleaseAndCancellation(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		t.Run(fmt.Sprint("release=", release), func(t *testing.T) {
+			gate := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r := &gatedReader{first: strings.NewReader("a"), gate: gate, rest: strings.NewReader("q"), stop: ctx.Done()}
+			buf := make([]byte, 1)
+			if n, err := r.Read(buf); n != 1 || err != nil || string(buf) != "a" {
+				t.Fatalf("first read = %d, %v, %q", n, err, buf)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := r.Read(buf)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				t.Fatalf("held gate returned: %v", err)
+			default:
+			}
+			if release {
+				close(gate)
+				if err := receiveChanges(t, done); err != nil || string(buf) != "q" {
+					t.Fatalf("released read = %v, %q", err, buf)
+				}
+			} else {
+				cancel() // Startup never occurs: cleanup must still unblock Read.
+				if err := receiveChanges(t, done); !errors.Is(err, io.EOF) {
+					t.Fatalf("canceled read = %v, want EOF", err)
+				}
+			}
+		})
+	}
 }
 
 func TestChangesRunExitCancelsLoader(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	starts := make(chan context.Context, 1)
 	started := make(chan struct{})
 	var once sync.Once
@@ -198,17 +242,27 @@ func TestChangesRunExitCancelsLoader(t *testing.T) {
 	// Quit only after the loader has observably started: exiting earlier cancels the
 	// loader context before its goroutine runs, and Snapshot returns on ctx.Err()
 	// without ever invoking SnapshotFunc.
-	input := &gatedReader{first: strings.NewReader("\r\t\t\t"), gate: started, rest: strings.NewReader("q")}
+	input := &gatedReader{first: strings.NewReader("\r\t\t\t"), gate: started, rest: strings.NewReader("q"), stop: runCtx.Done()}
 	a := App{Input: input, Output: io.Discard, Terminal: &fakeTerminal{size: term.Size{Width: 120, Height: 30}}, Ticker: &fakeTicker{}, Collector: &fakeCollector{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{row}}}}, Details: &fakeDetailRepository{detail: &plan.PlanDetail{}}, Changes: DetailChangesFuncs{SnapshotFunc: func(ctx context.Context, _ *plan.PlanDetail, _ string) (DetailChangesSnapshot, error) {
 		starts <- ctx
 		once.Do(func() { close(started) })
 		<-ctx.Done()
 		return DetailChangesSnapshot{}, ctx.Err()
 	}}}
-	if err := a.Run(context.Background()); err != nil {
+	done := make(chan error, 1)
+	settled := make(chan struct{})
+	go func() {
+		defer close(settled)
+		done <- a.Run(runCtx)
+	}()
+	t.Cleanup(func() {
+		cancel() // Also releases the input gate if the loader never started.
+		receiveChanges(t, settled)
+	})
+	ctx := receiveChanges(t, starts)
+	if err := receiveChanges(t, done); err != nil {
 		t.Fatal(err)
 	}
-	ctx := receiveChanges(t, starts)
 	if ctx.Err() == nil {
 		t.Fatal("exit left loader running")
 	}
@@ -271,7 +325,7 @@ func TestChangesActivationAndEqualSignature(t *testing.T) {
 	s.detail.activeTab = detailTabChanges
 	a.syncDetailChanges(&s)
 	a.syncDetailChanges(&s)
-	u := <-s.changesUpdates()
+	u := receiveChanges(t, s.changesUpdates())
 	a.acceptDetailChanges(&s, u)
 	if len(calls) != 1 {
 		t.Fatal("not single flight")
@@ -280,15 +334,15 @@ func TestChangesActivationAndEqualSignature(t *testing.T) {
 		t.Fatal("projection changed identity or retained escape")
 	}
 	a.startDetailFileDiff(&s, true)
-	d := <-s.fileDiffUpdates()
+	d := receiveChanges(t, s.fileDiffUpdates())
 	a.acceptDetailFileDiff(&s, d)
 	if s.detail.changes.Diff.Lines[0].Text != "ok " {
 		t.Fatal("unsanitized diff")
 	}
 	s.detail.changesForce = true
 	a.syncDetailChanges(&s)
-	a.acceptDetailChanges(&s, <-s.changesUpdates())
-	a.acceptDetailFileDiff(&s, <-s.fileDiffUpdates())
+	a.acceptDetailChanges(&s, receiveChanges(t, s.changesUpdates()))
+	a.acceptDetailFileDiff(&s, receiveChanges(t, s.fileDiffUpdates()))
 	if s.detail.changes.DiffStatus != "ready" {
 		t.Fatal("equal signature stranded diff")
 	}

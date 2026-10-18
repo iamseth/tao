@@ -154,14 +154,31 @@ func TestLogFollowsAppendedOutput(t *testing.T) {
 	appended := framed.String()
 	wantAppended := "✓ test\nappended\n"
 	out := newNotifyingBuffer(wantAppended)
+	initialOut := newNotifyingBuffer("assistant: initial\n")
 	var errOut bytes.Buffer
-	app := App{Out: out, Err: &errOut}
+	app := App{Out: io.MultiWriter(out, initialOut), Err: &errOut}
 	errCh := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		errCh <- app.Run(ctx, []string{"--plans-dir", fixture.root, "log", fixture.id, "-f"})
 	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(30 * time.Second):
+			t.Error("log follower did not stop after cancellation")
+		}
+	})
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-initialOut.done:
+	case err := <-errCh:
+		t.Fatalf("log follower exited before initial output: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatalf("expected initial output, got %q", out.String())
+	}
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // G304: test-controlled log path
 	if err != nil {
 		t.Fatal(err)
@@ -176,13 +193,20 @@ func TestLogFollowsAppendedOutput(t *testing.T) {
 
 	select {
 	case <-out.done:
-	case <-time.After(2 * time.Second):
+	case err := <-errCh:
+		t.Fatalf("log follower exited before appended output: %v", err)
+	case <-time.After(30 * time.Second):
 		cancel()
 		t.Fatalf("expected appended output, got %q", out.String())
 	}
 	cancel()
-	if err := <-errCh; !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation, got %v", err)
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("log follower ignored cancellation")
 	}
 	if got, want := out.String(), "assistant: initial\n"+wantAppended; !strings.Contains(got, want) {
 		t.Fatalf("unexpected followed output %q", got)
@@ -220,7 +244,8 @@ func TestLogBatch(t *testing.T) {
 	want := mergepkg.FormatBatchTransitionLine(mergepkg.BatchTransition{At: "2026-09-26T21:00:00Z", Sequence: 1, To: state.Status, State: state}) + "\n"
 	for _, args := range [][]string{{"--batch"}, {"--batch", "batch-a"}, {"--batch", "--follow"}, {"--batch", "-f", "batch-a"}} {
 		out.Reset()
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		// Completed batches must return without relying on context expiry.
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := app.Run(ctx, append([]string{"--plans-dir", t.TempDir(), "log"}, args...))
 		cancel()
 		if err != nil || out.String() != want {
