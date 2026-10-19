@@ -89,7 +89,8 @@ make build
 export PATH="$(pwd)/bin:$PATH"
 ```
 
-Install Tao's managed prompts, then inspect agent discovery and setup issues:
+Ordinary Tao commands quietly install missing prompts and refresh managed prompts
+for detected Pi and Claude runtimes before dispatch. For immediate setup and diagnostics:
 
 ```sh
 tao install-prompts
@@ -97,7 +98,14 @@ tao doctor
 ```
 
 `tao doctor` provides diagnostic guidance rather than a guaranteed success
-check. Follow any actionable setup guidance.
+check. Follow any actionable setup guidance. Startup maintenance skips help,
+version, doctor, explicit installation/checks, and unknown/non-command paths.
+Custom unmanaged files and unrecognized extension targets are preserved; failures
+warn on stderr without stopping your command. Inspect with `tao install-prompts
+--check` and retry with `tao install-prompts`; use `--force` only to intentionally
+replace custom targets. Pi extension source requirements are unchanged (no
+automatic build/download). Running agent sessions may need a normal reload or
+restart. See [installation guidance](docs/configuration.md#prompt-installation).
 
 Build prompts (`/tao-note`, `/tao-slice`, `/tao-run`, `/tao-fix-plan`, `/tao-commit`,
 `/tao-pr`) write artifacts, code, or Git state; planning prompts are read-only.

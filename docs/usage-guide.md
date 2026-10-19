@@ -127,8 +127,10 @@ Nothing is applied, installed, fetched or planned. Review the proposed literal
 commands before separately authorizing changes. Edits replace the whole body,
 and `--tag` replaces the entire tag set (omitting it preserves tags). Any later
 application must reread the full current note and preserve unrelated text/tags;
-do not blindly apply a stale proposal. Refresh managed prompts through the normal
-`tao install-prompts` setup outside the grooming session.
+do not blindly apply a stale proposal. Ordinary Tao startup maintains managed
+prompts; for immediate refresh use `tao install-prompts` outside the grooming
+session. See [prompt installation](configuration.md#prompt-installation) for
+exclusions, preserved custom targets, and non-fatal diagnostic recovery.
 
 ### `/tao-steal <git-url>` — scout a foreign repository for ideas
 
@@ -307,8 +309,9 @@ asking the user"* and to keep that inspection targeted.
 - **Answer only the final question shown.** Tao renders `/tao-plan` once, but some
   agent hosts may show task, progress, or status text before the final assistant
   response. If a clarification looks duplicated, answer only the question in the
-  final response. After updating Tao, rerun `tao install-prompts` to apply the
-  latest managed prompt instructions.
+  final response. After updating Tao, ordinary command startup refreshes managed
+  prompts; `tao install-prompts` applies them immediately. Running agent sessions
+  may need a normal reload/restart.
 - **Let it converge.** It stops when the plan is *specific enough to slice*, not
   when it's exhaustive. Don't push for more detail than `/tao-slice` needs.
 
@@ -403,8 +406,9 @@ remotes. It inspects metadata first, then bounded file summaries and targeted
 diffs; it discloses sampling/truncation and shallow or unavailable history rather
 than claiming exhaustive coverage. An empty window stays empty, never silently
 expanding to older work. This is orientation, not a review or evidence of remote
-integration. Refresh the managed prompts with `tao install-prompts` after updating
-Tao.
+integration. Ordinary Tao startup refreshes managed prompts after updates;
+use `tao install-prompts` for immediate refresh and `tao install-prompts --check`
+for inspection.
 
 ### `/tao-insights-review [focus]` — review Tao-wide experience evidence
 
@@ -1210,8 +1214,10 @@ rather than Tao lifecycle bookkeeping and returns the PR URL.
 
 **When to use:** after a run's work is committed and you want a PR by hand.
 `/tao-pr` remains agent-driven, accepts additional user direction, and does not
-record or mutate Tao plan lifecycle state. Refresh installed prompt copies after
-an update with `tao install-prompts --force`.
+record or mutate Tao plan lifecycle state. Ordinary startup refreshes managed
+prompt copies after updates; use `tao install-prompts` for immediate refresh.
+Only use `--force` when intentionally replacing custom targets, never as a routine
+update step.
 
 Equivalent automated path: `tao run --pull-request`, which is gated — it's
 rejected with `--commit-policy none`, or when the run is not in

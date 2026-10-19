@@ -1,6 +1,7 @@
 package promptinstall
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,67 @@ func InstallDiscovered(descriptors []agentpkg.Descriptor, force bool) ([]Result,
 	return operateDiscovered(descriptors, func(descriptor agentpkg.Descriptor) ([]Result, error) {
 		return installDescriptor(descriptor, force)
 	})
+}
+
+// ReconcileDiscovered maintains managed targets without force authority. Failures
+// are collected per target so unrelated prompts and agents still make progress.
+func ReconcileDiscovered(descriptors []agentpkg.Descriptor) ([]Result, error) {
+	var results []Result
+	var failures []error
+	for _, descriptor := range descriptors {
+		target, dirErr := descriptor.PromptDir()
+		if dirErr != nil {
+			failures = append(failures, fmt.Errorf("%s prompt directory: %w", descriptor.Label, dirErr))
+		}
+		for _, prompt := range prompts.Definitions() {
+			var path, status string
+			var err error
+			if descriptor.UsesExtensionPrompts && isPiExtensionPrompt(prompt.Name) {
+				path, err = piExtensionTarget()
+				if err == nil {
+					status, err = reconcilePiExtension(path)
+				}
+			} else {
+				if dirErr != nil {
+					continue
+				}
+				path = Path(target, prompt.CommandName)
+				var content string
+				content, err = installContent(descriptor, prompt)
+				if err == nil {
+					status, err = reconcileMarkdown(path, content)
+				}
+			}
+			if err != nil {
+				failures = append(failures, fmt.Errorf("%s prompt %s (%s): %w", descriptor.Label, prompt.CommandName, path, err))
+				continue
+			}
+			results = append(results, Result{Agent: descriptor.Kind, Name: prompt.CommandName, Path: path, Status: status})
+		}
+	}
+	return results, errors.Join(failures...)
+}
+
+func reconcilePiExtension(path string) (string, error) {
+	status, err := piExtensionStatus(path)
+	if errors.Is(err, errPiExtensionSourceNotFound) {
+		return "skipped", nil
+	}
+	if err != nil || status != "missing" {
+		// In particular, a mismatched (stale) symlink is not ownership proof.
+		return status, err
+	}
+	if err := installPiExtension(path, false); err != nil {
+		if errors.Is(err, errPiExtensionSourceNotFound) {
+			return "skipped", nil
+		}
+		// Another startup may have published the same symlink first.
+		if current, checkErr := piExtensionStatus(path); checkErr == nil && current == "current" {
+			return current, nil
+		}
+		return "", err
+	}
+	return "installed", nil
 }
 
 func installDescriptor(descriptor agentpkg.Descriptor, force bool) ([]Result, error) {
@@ -179,11 +241,14 @@ func piExtensionTarget() (string, error) {
 	return filepath.Join(agentDir, "extensions", "tao"), nil
 }
 
+var errPiExtensionSourceNotFound = errors.New("could not find Tao Pi extension package")
+
 func piExtensionSource() (string, error) {
 	if dir := os.Getenv("TAO_PI_EXTENSION_DIR"); dir != "" {
 		if ok, err := isPiExtensionSource(dir); ok || err != nil {
 			return dir, err
 		}
+		return "", fmt.Errorf("TAO_PI_EXTENSION_DIR %q is not a Tao Pi extension package", dir)
 	}
 
 	searched := make([]string, 0, 4)
@@ -214,10 +279,11 @@ func piExtensionSource() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("could not find Tao Pi extension package from %s", strings.Join(searched, ", "))
+	return "", fmt.Errorf("%w from %s", errPiExtensionSourceNotFound, strings.Join(searched, ", "))
 }
 
-func findPiExtensionSourceFrom(dir string) (string, bool) {
+// Lookup seam allows tests to model binaries without a discoverable source checkout.
+var findPiExtensionSourceFrom = func(dir string) (string, bool) {
 	for {
 		candidate := filepath.Join(dir, "extensions", "pi")
 		if ok, _ := isPiExtensionSource(candidate); ok {

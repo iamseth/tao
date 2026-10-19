@@ -37,7 +37,7 @@ type App struct {
 	RepoHealthCheck          func(context.Context, taodata.Repo) taodata.RepoHealth
 	AcquireNotePromotionLock NotePromotionLockAcquirer
 	WorkspaceManager         WorkspaceManagerFactory
-	PromptFreshnessCheck     PromptFreshnessChecker
+	PromptMaintenance        PromptMaintainer
 	MonitorCollector         MonitorSnapshotCollector
 	MonitorTicker            func(time.Duration) MonitorTicker
 	MonitorIsTerminal        func(io.Writer) bool
@@ -194,7 +194,7 @@ func (a App) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("command %q is not executable", metadata.name)
 	}
 	if metadata.name != "version" && metadata.name != doctorCommand.name && metadata.name != installPromptsCommand.name {
-		a.warnIfStalePrompts()
+		a.maintainPrompts()
 	}
 	return metadata.execute(a.newCommandContext(metadata, ctx, plansDir, args[1:]))
 }

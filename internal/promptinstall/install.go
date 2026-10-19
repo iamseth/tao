@@ -77,6 +77,67 @@ func Install(path string, content string, force bool) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
+// reconcileMarkdown publishes only complete files. Missing targets use a hard
+// link for no-clobber publication; managed updates use a same-directory rename.
+// Explicit installation retains its existing behavior separately.
+func reconcileMarkdown(path string, content string) (string, error) {
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		// Preserve the link, as Install does, rather than replacing it with a file.
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", err
+		}
+		path = resolved
+	}
+	status, err := Status(path, content)
+	if err != nil || status == "current" || status == "unmanaged" {
+		return status, err
+	}
+	mode := os.FileMode(0o600)
+	if status == "stale" {
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		mode = info.Mode().Perm()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".tao-prompt-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	// Recheck ownership and freshness after preparing the replacement.
+	status, err = Status(path, content)
+	if err != nil || status == "current" || status == "unmanaged" {
+		return status, err
+	}
+	if status == "missing" {
+		if err := os.Link(file.Name(), path); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return Status(path, content)
+			}
+			return "", err
+		}
+	} else if err := os.Rename(file.Name(), path); err != nil {
+		return "", err
+	}
+	return "installed", nil
+}
+
 func removeManaged(path string, name string) (bool, error) {
 	existing, err := os.ReadFile(path) //nolint:gosec // G304: path is a caller-provided install target
 	if errors.Is(err, os.ErrNotExist) {

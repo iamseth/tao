@@ -17,7 +17,9 @@ import (
 )
 
 func init() {
-	defaultPromptFreshnessCheck = func() ([]promptinstall.Result, error) { return nil, nil }
+	// Startup must never install into developer configuration during CLI tests.
+	// Integration tests explicitly inject maintenance with a temporary HOME.
+	defaultPromptMaintenance = func() ([]promptinstall.Result, error) { return nil, nil }
 }
 
 func TestDefaultPlanLookupFromLinkedLaunchDirectory(t *testing.T) {

@@ -623,44 +623,31 @@ func doctorToolStatus(tool doctorTool) (string, string) {
 	return "warning", "missing"
 }
 
-type PromptFreshnessChecker func() ([]promptinstall.Result, error)
+type PromptMaintainer func() ([]promptinstall.Result, error)
 
-var defaultPromptFreshnessCheck PromptFreshnessChecker = installedPromptFreshness
+var defaultPromptMaintenance PromptMaintainer = maintainInstalledPrompts
 
-func (a App) warnIfStalePrompts() {
-	check := a.PromptFreshnessCheck
-	if check == nil {
-		check = defaultPromptFreshnessCheck
+func (a App) maintainPrompts() {
+	maintain := a.PromptMaintenance
+	if maintain == nil {
+		maintain = defaultPromptMaintenance
 	}
-	results, err := check()
-	if err != nil {
+	_, err := maintain()
+	if err == nil || a.Err == nil {
 		return
 	}
-	var stale []string
-	seen := make(map[runtimeconfig.AgentKind]bool)
-	for _, result := range results {
-		if result.Status != "stale" || seen[result.Agent] {
-			continue
-		}
-		seen[result.Agent] = true
-		stale = append(stale, string(result.Agent))
+	// Joined per-target errors may be large; keep startup diagnostics bounded
+	// and on one line, without allowing filesystem text to control the terminal.
+	detail := []rune(err.Error())
+	const maxDetail = 1024
+	if len(detail) > maxDetail {
+		detail = append(detail[:maxDetail], []rune("...")...)
 	}
-	if len(stale) == 0 || a.Err == nil {
-		return
-	}
-	_, _ = fmt.Fprintf(a.Err, "warning: stale Tao-managed prompts for %s; run tao install-prompts\n", strings.Join(stale, ", "))
+	_, _ = fmt.Fprintf(a.Err, "warning: Tao prompt maintenance failed: %q; run tao install-prompts --check to inspect, then tao install-prompts to retry\n", string(detail))
 }
 
-func installedPromptFreshness() ([]promptinstall.Result, error) {
-	var results []promptinstall.Result
-	for _, descriptor := range agentpkg.Installed() {
-		checked, err := promptinstall.CheckDiscovered([]agentpkg.Descriptor{descriptor})
-		if err != nil {
-			continue
-		}
-		results = append(results, checked...)
-	}
-	return results, nil
+func maintainInstalledPrompts() ([]promptinstall.Result, error) {
+	return promptinstall.ReconcileDiscovered(agentpkg.Installed())
 }
 
 func promptInstallResults(installed []agentpkg.Descriptor, check bool, force bool) ([]promptinstall.Result, error) {

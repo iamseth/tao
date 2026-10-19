@@ -345,8 +345,25 @@ Missing selected executables get setup guidance; an unused second runtime is not
 required. Pi's bounded passive readiness probe runs once when either role selects
 Pi; Claude retains executable and prompt checks. These checks do not authenticate
 remotely or prove provider availability or compatibility with the review model.
+## Prompt installation
+
 `install-prompts` and `install-prompts --check` cover every installed supported
 runtime regardless of the selected roles, and install nothing if none is found.
+Ordinary command startup also reconciles detected Pi and Claude targets before
+command dispatch: missing prompts are installed, managed prompts refreshed, and
+current files left untouched. Help, version, doctor, explicit install/check,
+unknown commands, and non-command paths do not trigger maintenance.
+
+Success is silent. Failures produce bounded stderr guidance without changing the
+requested command's stdout or outcome. Unmanaged files and unrecognized Pi
+extension targets are preserved, not automatically force-replaced. Inspect with
+`tao install-prompts --check`, resolve filesystem/source problems, then retry with
+`tao install-prompts`. Use `tao install-prompts --force` only when deliberately
+replacing custom targets. No setting or install/update hook is required.
+
+Pi extension source availability requirements are unchanged: startup neither
+builds nor downloads the extension. Already-running agent sessions may need their
+normal reload/restart to observe installed changes.
 
 ## Model selection
 

@@ -22,16 +22,16 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
-func TestRunWarnsOnceForStaleManagedPromptsAndExecutesCommand(t *testing.T) {
+func TestPromptMaintenanceSuccessIsQuiet(t *testing.T) {
 	var out, errOut bytes.Buffer
 	app := App{
 		Out: &out,
 		Err: &errOut,
-		PromptFreshnessCheck: func() ([]promptinstall.Result, error) {
+		PromptMaintenance: func() ([]promptinstall.Result, error) {
 			return []promptinstall.Result{
-				{Agent: runtimeconfig.AgentPi, Status: "missing"},
-				{Agent: runtimeconfig.AgentPi, Status: "stale"},
-				{Agent: runtimeconfig.AgentPi, Status: "stale"},
+				{Agent: runtimeconfig.AgentPi, Status: "installed"},
+				{Agent: runtimeconfig.AgentPi, Status: "updated"},
+				{Agent: runtimeconfig.AgentPi, Status: "current"},
 				{Agent: runtimeconfig.AgentKind("other"), Status: "unmanaged"},
 				{Agent: runtimeconfig.AgentClaude, Status: "stale"},
 			}, nil
@@ -44,20 +44,20 @@ func TestRunWarnsOnceForStaleManagedPromptsAndExecutesCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "You are in PLAN mode") {
 		t.Fatalf("expected requested command to execute, got %q", out.String())
 	}
-	want := "warning: stale Tao-managed prompts for pi, claude; run tao install-prompts\n"
+	want := ""
 	if got := errOut.String(); got != want {
-		t.Fatalf("stale warning = %q, want %q", got, want)
+		t.Fatalf("maintenance diagnostic = %q, want %q", got, want)
 	}
 }
 
-func TestPromptFreshnessFailuresDoNotBlockCommand(t *testing.T) {
+func TestPromptMaintenanceFailuresDoNotBlockCommand(t *testing.T) {
 	for _, failure := range []string{"executable lookup", "prompt directory", "Pi extension inspection"} {
 		t.Run(failure, func(t *testing.T) {
 			var out, errOut bytes.Buffer
 			app := App{
 				Out: &out,
 				Err: &errOut,
-				PromptFreshnessCheck: func() ([]promptinstall.Result, error) {
+				PromptMaintenance: func() ([]promptinstall.Result, error) {
 					return nil, errors.New(failure)
 				},
 			}
@@ -67,14 +67,14 @@ func TestPromptFreshnessFailuresDoNotBlockCommand(t *testing.T) {
 			if out.Len() == 0 {
 				t.Fatal("expected requested command output")
 			}
-			if errOut.Len() != 0 {
-				t.Fatalf("freshness failure should be silent, got %q", errOut.String())
+			if !strings.Contains(errOut.String(), failure) || !strings.Contains(errOut.String(), "tao install-prompts --check") {
+				t.Fatalf("expected actionable maintenance diagnostic, got %q", errOut.String())
 			}
 		})
 	}
 }
 
-func TestPromptFreshnessWarningSkipsDirectStatusAndNonCommandPaths(t *testing.T) {
+func TestPromptMaintenanceSkipsDirectStatusAndNonCommandPaths(t *testing.T) {
 	clearTaoEnv(t)
 	setPathExecutables(t)
 	calls := 0
@@ -85,18 +85,109 @@ func TestPromptFreshnessWarningSkipsDirectStatusAndNonCommandPaths(t *testing.T)
 	for _, args := range [][]string{
 		{"doctor"},
 		{"install-prompts", "--check"},
+		{"install-prompts"},
+		{"version"},
+		{"help"},
+		{"--help"},
+		{"-h"},
+		{"complete"},
+		{},
+		{"--invalid"},
 		{"prompt", "--help"},
 		{"--version"},
 		{"unknown"},
 	} {
 		var out, errOut bytes.Buffer
-		_ = (App{Out: &out, Err: &errOut, PromptFreshnessCheck: check}).Run(context.Background(), args)
+		_ = (App{Out: &out, Err: &errOut, PromptMaintenance: check}).Run(context.Background(), args)
 		if errOut.Len() != 0 {
-			t.Fatalf("%v emitted duplicate stale warning: %q", args, errOut.String())
+			t.Fatalf("%v emitted maintenance diagnostic: %q", args, errOut.String())
 		}
 	}
 	if calls != 0 {
-		t.Fatalf("freshness check called %d times on excluded paths", calls)
+		t.Fatalf("maintenance called %d times on excluded paths", calls)
+	}
+}
+
+func TestPromptMaintenanceNilWriterAndBoundedFailure(t *testing.T) {
+	maintain := func() ([]promptinstall.Result, error) {
+		return nil, errors.New(strings.Repeat("bad\n\x1b", 2000))
+	}
+	var baseline bytes.Buffer
+	if err := (App{Out: &baseline}).Run(context.Background(), []string{"prompt", "plan"}); err != nil {
+		t.Fatal(err)
+	}
+	var out, diagnostics bytes.Buffer
+	for _, app := range []App{
+		{Out: &out, PromptMaintenance: maintain},
+		{Out: &out, Err: &diagnostics, PromptMaintenance: maintain},
+	} {
+		out.Reset()
+		if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != baseline.String() {
+			t.Fatal("maintenance changed stdout")
+		}
+	}
+	if diagnostics.Len() > 7000 || strings.Count(diagnostics.String(), "\n") != 1 || strings.Contains(diagnostics.String(), "\x1b") {
+		t.Fatalf("unbounded or unsafe diagnostic: %q", diagnostics.String())
+	}
+}
+
+func TestPromptMaintenanceDetectedRuntimes(t *testing.T) {
+	clearTaoEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setPathExecutables(t, "pi", "claude")
+	var out, diagnostics bytes.Buffer
+	app := App{Out: &out, Err: &diagnostics, PromptMaintenance: maintainInstalledPrompts}
+	run := func() {
+		t.Helper()
+		out.Reset()
+		diagnostics.Reset()
+		if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
+			t.Fatal(err)
+		}
+		if diagnostics.Len() != 0 {
+			t.Fatalf("successful maintenance was not quiet: %s", &diagnostics)
+		}
+	}
+	run()
+	baseline := out.String()
+	for _, dir := range []string{filepath.Join(home, ".pi", "agent", "prompts"), filepath.Join(home, ".claude", "commands")} {
+		path := filepath.Join(dir, "tao-plan.md")
+		content, err := os.ReadFile(path) //nolint:gosec // G304: fixed prompt name under test-owned temporary HOME.
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(content, []byte("\nstale content")...), 0o600); err != nil { //nolint:gosec // G703: fixed prompt name under test-owned temporary HOME.
+			t.Fatal(err)
+		}
+		run()
+		repaired, err := os.ReadFile(path) //nolint:gosec // G304: fixed prompt name under test-owned temporary HOME.
+		if err != nil || !bytes.Equal(content, repaired) {
+			t.Fatalf("managed prompt not repaired: %v", err)
+		}
+		before, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run()
+		after, err := os.Stat(path)
+		if err != nil || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+			t.Fatalf("current prompt was rewritten: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("custom unmanaged prompt"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run()
+		custom, err := os.ReadFile(path) //nolint:gosec // G304: fixed prompt name under test-owned temporary HOME.
+		if err != nil || string(custom) != "custom unmanaged prompt" {
+			t.Fatalf("unmanaged prompt changed: %v", err)
+		}
+	}
+	if out.String() != baseline {
+		t.Fatal("maintenance changed stdout")
 	}
 }
 
@@ -361,7 +452,7 @@ func TestGroomNotesEvidenceCommandsAreReadOnly(t *testing.T) {
 			}
 			beforeRoot, beforeData := groomingSnapshot(t, root), groomingSnapshot(t, dataHome)
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, PromptFreshnessCheck: func() ([]promptinstall.Result, error) { return nil, nil }}
+			app := App{Out: &out, Err: &out, PromptMaintenance: func() ([]promptinstall.Result, error) { return nil, nil }}
 			read := func(args ...string) (string, error) {
 				out.Reset()
 				err := app.Run(context.Background(), args)
