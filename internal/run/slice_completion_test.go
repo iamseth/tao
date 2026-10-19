@@ -804,6 +804,16 @@ func sliceCompletionProposal() *commitcontract.Proposal {
 func initSliceCompletionRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	if canCopySliceRepo() {
+		source, err := sharedSliceTemplate.source(buildSliceRepoTemplate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := copySliceRepo(source, root); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
 	runCommitTestGitCommand(t, root, "init")
 	runCommitTestGitCommand(t, root, "config", "user.email", "tao@example.com")
 	runCommitTestGitCommand(t, root, "config", "user.name", "Tao Test")
