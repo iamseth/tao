@@ -15,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 const cacheEnv = "GOLANGCI_LINT_CACHE"
@@ -34,6 +37,7 @@ func setupIdentityTools(t *testing.T) {
 
 //nolint:gosec // G306: fixture tools require private executable permissions.
 func TestVerificationCacheVersionIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupCacheChild(t)
 	bin := t.TempDir()
 	for name, output := range map[string]string{"go": "go1.26.2", "golangci-lint": "golangci-lint has version 2.1 built with go1.26.2"} {
@@ -79,6 +83,11 @@ type cacheObservation struct {
 }
 
 func TestVerificationCacheIdentityFailures(t *testing.T) {
+	testenv.SkipIfShort(t)
+	// This test covers the production probe deadline that TestMain relaxes.
+	previous := verificationIdentityTimeout
+	verificationIdentityTimeout = time.Second
+	t.Cleanup(func() { verificationIdentityTimeout = previous })
 	for _, tool := range []string{"go", "golangci-lint"} {
 		t.Run(tool, func(t *testing.T) {
 			for _, script := range []string{"missing", "exit 1", "true", "echo malformed", "i=0; while [ $i -lt 9000 ]; do printf x; i=$((i+1)); done", "/bin/sleep 30"} {
@@ -280,6 +289,7 @@ func setupCacheChild(t *testing.T) {
 }
 
 func TestVerificationCacheContextsAndReuse(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupCacheChild(t)
 	parent := context.Background()
 	root := filepath.Join(t.TempDir(), "execution root with spaces")
@@ -325,6 +335,7 @@ func TestVerificationCacheEnvironmentReplacesEveryEntry(t *testing.T) {
 }
 
 func TestVerificationCacheBytecodeEnvironment(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, value := range []string{"absent", "", "0", "custom"} {
 		t.Run(value, func(t *testing.T) {
 			setupCacheChild(t)
@@ -410,6 +421,7 @@ func TestVerificationCacheConcurrent(t *testing.T) {
 }
 
 func TestVerificationCacheRejectsUnsafeStorage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupCacheChild(t)
 	for _, component := range []string{".tao", ".tao/cache", ".tao/cache/golangci-lint", ".tao/cache/golangci-lint/.gitignore", ".tao/cache/golangci-lint/" + testCacheNamespace} {
 		for _, kind := range []string{"symlink", "conflict"} {
@@ -453,6 +465,7 @@ func TestVerificationCacheRejectsUnsafeStorage(t *testing.T) {
 }
 
 func TestVerificationCacheGitIsolation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupCacheChild(t)
 	t.Setenv("TAO_CACHE_TEST_WRITE", "1")
 	roots := []string{t.TempDir(), t.TempDir()}

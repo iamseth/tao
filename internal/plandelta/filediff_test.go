@@ -12,6 +12,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestParseUnifiedDiff(t *testing.T) {
@@ -101,6 +103,7 @@ func TestFileDiffSelection(t *testing.T) {
 }
 
 func TestFileDiffBranchWithSameNamedTag(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root := t.TempDir()
 	git := localDeltaGit(t, root)
 	git("init", "-b", "main")

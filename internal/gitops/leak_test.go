@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
@@ -154,6 +156,7 @@ func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 }
 
 func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()

@@ -22,6 +22,8 @@ import (
 	"github.com/iamseth/tao/internal/atomicfile"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type recordingSingleResolutionStore struct {
@@ -102,6 +104,7 @@ func (a *preflightSingleMergeAgent) Resolve(ctx context.Context, request BatchAg
 }
 
 func TestGuardedSingleConflictResolverPreflightsBeforeRequestedEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	_, request, git := preparedSingleResolutionFixture(t)
 	store := &recordingSingleResolutionStore{current: request.Intent}
 	probeErr := errors.New("bubblewrap is unavailable")
@@ -117,6 +120,7 @@ func TestGuardedSingleConflictResolverPreflightsBeforeRequestedEvidence(t *testi
 }
 
 func TestGuardedSingleConflictResolverRearmsOnlyProvenPreAcceptanceFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name       string
 		acceptance agent.PromptAcceptance
@@ -157,6 +161,7 @@ func TestGuardedSingleConflictResolverRearmsOnlyProvenPreAcceptanceFailure(t *te
 }
 
 func TestGuardedSingleConflictResolverPreservesRequestedAuthorityWhenRearmSettlementFails(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name     string
 		wrapGit  func(GitClient) GitClient
@@ -197,6 +202,7 @@ func TestGuardedSingleConflictResolverPreservesRequestedAuthorityWhenRearmSettle
 }
 
 func TestGuardedSingleConflictResolverExplicitRerunSucceedsAfterRearm(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, git := preparedSingleResolutionFixture(t)
 	store := &recordingSingleResolutionStore{current: request.Intent}
 	resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: &preflightSingleMergeAgent{resolve: func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
@@ -220,6 +226,7 @@ func TestGuardedSingleConflictResolverExplicitRerunSucceedsAfterRearm(t *testing
 }
 
 func TestGuardedSingleConflictResolverProviderProbeIsReadOnlyAndOutputBoundedBeforeRequestedEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name             string
 		script           string
@@ -320,6 +327,7 @@ exit 23
 }
 
 func TestGuardedSingleConflictResolverRejectsCleanTrackedExternalHardLink(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_AGENT", "claude")
 	var external string
 	fixture, request, git := preparedSingleResolutionFixtureWithSetup(t, func(fixture realGitWorktree) {
@@ -368,6 +376,7 @@ func TestGuardedSingleConflictResolverRejectsCleanTrackedExternalHardLink(t *tes
 }
 
 func TestMergeCapabilityPreflightFailureRestoresRetryableBoundary(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name                       string
 		providerLookPath           agent.LookPath
@@ -525,6 +534,7 @@ func TestMergeCapabilityPreflightFailureRestoresRetryableBoundary(t *testing.T) 
 }
 
 func TestMergeRearmsRejectedAttributedStartupForExactLaterExplicitSuccess(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, _, _, _ := batchAgentConflictFixture(t)
 	sourceHead := strings.TrimSpace(realGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
 	defaultHead := strings.TrimSpace(realGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD"))
@@ -652,6 +662,7 @@ func TestGuardedSingleConflictResolverResolvesAndSettlesExactCommit(t *testing.T
 }
 
 func TestGuardedSingleConflictResolverRejectsResidualConflictMarkersAndRollsBack(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name       string
 		content    string
@@ -702,6 +713,7 @@ func TestGuardedSingleConflictResolverRejectsResidualConflictMarkersAndRollsBack
 }
 
 func TestGuardedSingleConflictResolverRejectsOriginalWidthMarkersAfterAttributesChange(t *testing.T) {
+	testenv.SkipIfShort(t)
 	const originalMarkerSize = 12
 	fixture, request, git := preparedSingleResolutionFixtureWithSourceMarkerSize(t, originalMarkerSize)
 	prepared, err := os.ReadFile(filepath.Join(fixture.repoRoot, "README.md"))
@@ -765,6 +777,7 @@ func TestSingleResolutionSettlementRejectsOriginalWidthMarkersAfterAttributesCha
 }
 
 func TestSingleResolutionSettlementRejectsResidualConflictMarkersAndRollsBack(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name       string
 		content    string
@@ -830,6 +843,7 @@ func TestSingleResolutionSettlementRejectsResidualConflictMarkersAndRollsBack(t 
 }
 
 func TestMergeForceRefusesConflictResolutionWithPreExistingTrackedAndUntrackedDirt(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, _, _, _ := batchAgentConflictFixture(t)
 	trackedPath := filepath.Join(fixture.repoRoot, "local.txt")
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "local.txt"), []byte("shared\n"), 0o600); err != nil {
@@ -957,6 +971,7 @@ func TestSingleResolutionSettlementRecoversExactCommittedResultWithoutAgent(t *t
 }
 
 func TestSingleResolutionSettlementDisablesPostCommitHookSideEffects(t *testing.T) {
+	testenv.SkipIfShort(t)
 	var hook string
 	fixture, request, git := preparedSingleResolutionFixtureWithSetup(t, func(fixture realGitWorktree) {
 		hook = filepath.Join(fixture.repoRoot, ".githooks", "post-commit")
@@ -1013,6 +1028,7 @@ func TestSingleResolutionSettlementDisablesPostCommitHookSideEffects(t *testing.
 }
 
 func TestSingleResolutionSettlementRejectsRecoveryWithInexactCommittedTree(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name   string
 		mutate func(string) error
@@ -1125,6 +1141,7 @@ func TestSingleResolutionSettlementRefusesChangedPathDriftAfterResolvedCrashWith
 }
 
 func TestGuardedSingleConflictResolverRejectsUnsafeMalformedNoopAndProviderFailures(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name string
 		run  func(string) (string, error)
@@ -1214,6 +1231,7 @@ func TestGuardedSingleConflictResolverRejectsOversizedOutputAndRollsBack(t *test
 }
 
 func TestGuardedSingleConflictResolverRejectsAndRestoresIgnoredMutationWithOtherwiseValidResolution(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mutation := range ignoredMutationTestCases() {
 		t.Run(mutation.name, func(t *testing.T) {
 			fixture, request, git := preparedSingleResolutionFixture(t)
@@ -1339,6 +1357,7 @@ func ignoredMutationTestCases() []ignoredMutationTestCase {
 }
 
 func TestIgnoredWorktreeSnapshotStreamsLargeTreeThroughBoundedBacking(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, _, git := preparedSingleResolutionFixture(t)
 	configureSingleAgentIgnoredPaths(t, fixture.repoRoot, "cache/")
 	cacheRoot := filepath.Join(fixture.repoRoot, "cache")
@@ -1432,6 +1451,7 @@ func TestWorktreeSnapshotBackingIsUnlinkedAndVerifiedBeforeRestoration(t *testin
 }
 
 func TestGuardedSingleConflictResolverHidesSnapshotBackingFromProvider(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, git := preparedSingleResolutionFixture(t)
 	configureSingleAgentIgnoredPaths(t, fixture.repoRoot, ".env")
 	ignored := filepath.Join(fixture.repoRoot, ".env")
@@ -1608,6 +1628,7 @@ func TestGuardedSingleConflictResolverPreservesConcurrentDefaultRef(t *testing.T
 }
 
 func TestGuardedSingleConflictResolverRejectsAndPreservesGitMetadataAndUnlistedRefs(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name   string
 		setup  func(*testing.T, realGitWorktree, SingleResolutionRequest) func(*testing.T)
@@ -1730,6 +1751,7 @@ func TestGitSessionBoundaryDetectsAndPreservesNestedGitControlDrift(t *testing.T
 }
 
 func TestGuardedSingleConflictResolverRejectsAndPreservesConcurrentNestedSubmoduleGitControl(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name   string
 		mutate func(string) error
@@ -1818,6 +1840,7 @@ func TestGuardedSingleConflictResolverRejectsAndPreservesConcurrentNestedSubmodu
 }
 
 func TestGuardedSingleConflictResolverRollsBackCreatedUnsupportedNestedGitControls(t *testing.T) {
+	testenv.SkipIfShort(t)
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("unsupported nested Git control fixtures require Unix filesystem types")
 	}
@@ -2065,6 +2088,7 @@ func assertObjectModes(t *testing.T, paths []string, want map[string]os.FileMode
 }
 
 func TestGuardedSingleConflictResolverRejectsObjectDatabaseWritesAndPreservesHistory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mutation := range objectDatabaseMutationTestCases() {
 		t.Run(mutation.name, func(t *testing.T) {
 			fixture, request, git := preparedSingleResolutionFixture(t)

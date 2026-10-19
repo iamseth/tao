@@ -20,6 +20,8 @@ import (
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestMergeModelSelection(t *testing.T) {
@@ -107,6 +109,7 @@ func TestMergeModelFlagRejectsInvalidValue(t *testing.T) {
 }
 
 func TestSingleMergeProposalTelemetryProviders(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, outcome := range []string{"reported", "partial", "unavailable", "malformed", "failure", "timeout", "start-failure"} {
 			for _, appendFails := range []bool{false, true} {
@@ -215,6 +218,7 @@ func (a *mergeBatchMetricsAppender) AppendAgentEvent(event mergepkg.BatchAgentEv
 }
 
 func TestBatchMergeTelemetryProviders(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, op := range []mergepkg.BatchAgentOperation{mergepkg.BatchAgentOperationCandidateResolution, mergepkg.BatchAgentOperationAggregateReview, mergepkg.BatchAgentOperationAggregateRework, mergepkg.BatchAgentOperationProposalGeneration} {
 			for _, outcome := range []string{"reported", "partial", "unavailable", "failure", "timeout", "start-failure"} {

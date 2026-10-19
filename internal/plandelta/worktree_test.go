@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestWorktreeOptionalStatusAndCancellation(t *testing.T) {
@@ -42,6 +44,7 @@ func TestWorktreeOptionalStatusAndCancellation(t *testing.T) {
 }
 
 func TestWorktreeLocalGitSignaturesAndReverts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("Git unavailable")
 	}

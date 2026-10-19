@@ -14,6 +14,8 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func verifiedCompletionFixture(t *testing.T, policy CommitPolicy, commands ...string) SliceCompletionRequest {
@@ -88,6 +90,7 @@ func reloadVerifiedCompletion(t *testing.T, request SliceCompletionRequest) *pla
 }
 
 func TestCompletionTimingLoss(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, policy := range []CommitPolicy{CommitPolicySlice, CommitPolicyNone} {
 		for _, point := range []string{"before gates", "during gates", "after commit", "frozen intent", "existing outcome"} {
@@ -170,6 +173,7 @@ type timingErrorWriter struct{}
 func (timingErrorWriter) Write(p []byte) (int, error) { return 0, errors.New("output unavailable") }
 
 func TestCompletionTimingPostGateRefusal(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
 	service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
@@ -187,6 +191,7 @@ func TestCompletionTimingPostGateRefusal(t *testing.T) {
 }
 
 func TestCompletionTimingCancelled(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -201,6 +206,7 @@ func TestCompletionTimingCancelled(t *testing.T) {
 }
 
 func TestCompletionTimingPreflight(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, conflicting := range []bool{false, true} {
 		t.Run(fmt.Sprint(conflicting), func(t *testing.T) {
@@ -230,6 +236,7 @@ func TestCompletionTimingPreflight(t *testing.T) {
 }
 
 func TestHistoricalSettlementRefusesNewTransaction(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "exit 1")
 	if err := (SliceCompletionService{}).settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "recorded historical intent") {
@@ -238,6 +245,7 @@ func TestHistoricalSettlementRefusesNewTransaction(t *testing.T) {
 }
 
 func TestCompleteRejectsClaimOnlySuccess(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "exit 1")
 	request.VerificationResults = []plan.VerificationRun{{Command: "exit 1", Result: "passed"}}
@@ -252,6 +260,7 @@ func TestCompleteRejectsClaimOnlySuccess(t *testing.T) {
 }
 
 func TestCompleteVerifiedRejectsProposalBeforeGates(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	request.CommitProposal.Summary = ""
@@ -275,6 +284,7 @@ func TestCompleteVerifiedRejectsProposalBeforeGates(t *testing.T) {
 }
 
 func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, failure := range []string{"exit", "unknown", "cache setup", "unsafe correction", "cancelled", "content drift", "binary drift", "index drift", "head drift", "declaration drift", "snapshot write"} {
 		t.Run(failure, func(t *testing.T) {
@@ -378,6 +388,7 @@ func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
 }
 
 func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, outcome := range []string{plan.SliceCompletionCommitted, plan.SliceCompletionNoChanges, plan.SliceCompletionManualUncommitted} {
 		t.Run(outcome, func(t *testing.T) {
 			policy := CommitPolicySlice
@@ -427,6 +438,7 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 }
 
 func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
 	for _, point := range []string{"before stage", "after stage", "after commit"} {
 		t.Run(point, func(t *testing.T) {
@@ -504,6 +516,7 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 }
 
 func TestCompleteVerifiedNoneInterruptedBoundaryRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, drift := range []string{"unchanged", "branch", "head"} {
 		t.Run(drift, func(t *testing.T) {
@@ -569,6 +582,7 @@ func TestCompleteVerifiedNoneInterruptedBoundaryRecovery(t *testing.T) {
 }
 
 func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, legacy := range []bool{true, false} {
 		t.Run(map[bool]string{true: "legacy", false: "message-bound"}[legacy], func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "must never run")
@@ -629,6 +643,7 @@ func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
 }
 
 func TestCompleteVerifiedRetryAndDiagnostics(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "first", "go test pkg/example_test.go", "last")
 	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
@@ -713,6 +728,7 @@ func TestCompleteVerifiedRetryAndDiagnostics(t *testing.T) {
 }
 
 func TestCompleteVerifiedOptionalClaimsNeverAuthorizeOrLeak(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, mode := range []string{"absent", "matched", "mismatched", "unmatched"} {
 		t.Run(mode, func(t *testing.T) {
@@ -769,6 +785,7 @@ func TestCompleteVerifiedOptionalClaimsNeverAuthorizeOrLeak(t *testing.T) {
 }
 
 func TestCompleteVerifiedReloadedAdmissionAndLock(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, reason := range []string{"approval", "dependency", "policy", "selected", "boundary", "branch", "lock"} {
 		t.Run(reason, func(t *testing.T) {
@@ -858,6 +875,7 @@ func TestCompleteVerifiedOwnerEndsDuringGate(t *testing.T) {
 }
 
 func TestCompleteVerifiedCacheExclusion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
 	t.Setenv("GOLANGCI_LINT_CACHE", t.TempDir())
 	for _, mode := range []string{"no ignore rule", "ignored tao", "unrelated file", "nested untracked", "tracked changed", "tracked vanished"} {
@@ -990,6 +1008,7 @@ func TestDescribeVerificationBoundaryDrift(t *testing.T) {
 }
 
 func TestCompleteVerifiedIgnoresBuildArtifacts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
 	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot

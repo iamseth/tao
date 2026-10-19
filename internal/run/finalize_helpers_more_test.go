@@ -13,6 +13,8 @@ import (
 
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestTypedPlacementFinalizationAndReview(t *testing.T) {
@@ -139,6 +141,7 @@ func TestFinalizerClassifiesPullRequestFailureRecovery(t *testing.T) {
 }
 
 func TestPullRequestRecoveryBoundarySeparatesStructuralWorkspaceFailuresFromInspectionErrors(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name         string
@@ -546,6 +549,7 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 }
 
 func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutRefinalizing(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -726,6 +730,7 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 }
 
 func TestPendingPullRequestIntentAndReplacementNonApprovalRecommendsActionableNextStep(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, verdict := range []string{plan.ReviewVerdictComment, plan.ReviewVerdictChangesRequested} {
 		t.Run(verdict, func(t *testing.T) {
@@ -784,6 +789,7 @@ func TestPendingPullRequestIntentAndReplacementNonApprovalRecommendsActionableNe
 }
 
 func TestFinalizerRepairsHistoricalApprovedProposalBeforePullRequestPreflight(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
@@ -833,6 +839,7 @@ func TestFinalizerRepairsHistoricalApprovedProposalBeforePullRequestPreflight(t 
 }
 
 func TestFinalizerRecordsHistoricalProposalCorrectionFailureAgainstFallbackBase(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)

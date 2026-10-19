@@ -20,6 +20,8 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/theme"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPromptMaintenanceSuccessIsQuiet(t *testing.T) {
@@ -135,6 +137,7 @@ func TestPromptMaintenanceNilWriterAndBoundedFailure(t *testing.T) {
 }
 
 func TestPromptMaintenanceDetectedRuntimes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -358,6 +361,7 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 }
 
 func TestPromptTaoInsightsReviewRequiresCanonicalTaoModule(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	for _, test := range []struct {
 		name    string
@@ -419,6 +423,7 @@ func TestPromptGroomNotesRendersWithoutTaoModule(t *testing.T) {
 // Exercise the prompt's read command grammar and filesystem preservation in
 // disposable repositories. This is not an agent execution/compliance test.
 func TestGroomNotesEvidenceCommandsAreReadOnly(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, scenario := range []string{"unregistered", "empty", "populated"} {
 		t.Run(scenario, func(t *testing.T) {
 			clearTaoEnv(t)
@@ -756,6 +761,7 @@ func TestDoctorReportsMissingAndValidatesUsage(t *testing.T) {
 }
 
 func TestDoctorCompactReportsStaleAndUnmanagedPrompts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	setPathExecutables(t, "claude")
 	home := t.TempDir()
@@ -932,6 +938,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 }
 
 func TestInstallPromptsAndDoctorManageEveryInstalledAgent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("TAO_AGENT", "claude")
@@ -1080,6 +1087,7 @@ func TestDoctorReportsToolCategoriesAndMissingWarnings(t *testing.T) {
 }
 
 func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1197,6 +1205,7 @@ func TestPromptUsesEnvPolicyDefaults(t *testing.T) {
 }
 
 func TestDoctorReviewRoles(t *testing.T) {
+	testenv.SkipIfShort(t)
 	original := probeDoctorPiReadiness
 	t.Cleanup(func() { probeDoctorPiReadiness = original })
 	for _, tc := range []struct {

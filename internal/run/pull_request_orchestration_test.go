@@ -15,9 +15,12 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPullRequestOrchestrationRepairsWrongTypeAndRecordsExactHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	dirtyPath := filepath.Join(fixture.worktreeRoot, "dirty-before-correction.txt")
@@ -177,6 +180,7 @@ func TestPullRequestOrchestrationRepairsWrongTypeAndRecordsExactHead(t *testing.
 }
 
 func TestFinalizerConsumesProposalCorrectionBeforeInterruptedSessionCanReturn(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
@@ -236,6 +240,7 @@ func TestFinalizerConsumesProposalCorrectionBeforeInterruptedSessionCanReturn(t 
 }
 
 func TestFinalizerErroringCorrectionDirtyWorktreeCannotStartSecondSession(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
@@ -291,6 +296,7 @@ func TestFinalizerErroringCorrectionDirtyWorktreeCannotStartSecondSession(t *tes
 }
 
 func TestPullRequestOrchestrationRejectsHeadAdvancedByInvalidProposalCorrection(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
@@ -363,6 +369,7 @@ func TestPullRequestOrchestrationRejectsHeadAdvancedByInvalidProposalCorrection(
 }
 
 func TestPullRequestFullRunRejectsHeadAdvancedByFreshReview(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
@@ -463,6 +470,7 @@ func TestPullRequestFullRunRejectsHeadAdvancedByFreshReview(t *testing.T) {
 }
 
 func TestPullRequestFullRunRejectsDirtyExactHeadAfterFreshReview(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
@@ -534,6 +542,7 @@ func TestPullRequestFullRunRejectsDirtyExactHeadAfterFreshReview(t *testing.T) {
 }
 
 func TestPullRequestResumeRejectsDirtyExactHeadBeforeProposalRepair(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreeRoot, "unreviewed-resume-change.txt"), []byte("dirty\n"), 0o600); err != nil {
@@ -594,6 +603,7 @@ func TestPullRequestResumeRejectsDirtyExactHeadBeforeProposalRepair(t *testing.T
 }
 
 func TestPullRequestOrchestrationRecordsCorrectionExhaustionBeforeRemoteMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)

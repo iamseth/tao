@@ -13,6 +13,8 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // File transport is enabled only for these test-owned repositories, never by
@@ -62,6 +64,7 @@ func batchSubmoduleFixture(t *testing.T) (realGitWorktree, string, string, strin
 }
 
 func TestBatchWorkspaceSubmodulesInitializeReuseAndCleanupSafeguards(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, oldChild, _, oldLeaf, _ := batchSubmoduleFixture(t)
 	state := batchWorkspaceState(t, fixture)
 	updates := 0
@@ -123,6 +126,7 @@ func TestBatchWorkspaceSubmodulesInitializeReuseAndCleanupSafeguards(t *testing.
 }
 
 func TestBatchWorkspaceCleanupPreservesNestedIgnoredEdits(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, operation := range []string{"remove", "restart", "disposable"} {
 		t.Run(operation, func(t *testing.T) {
 			fixture, _, _, _, _ := batchSubmoduleFixture(t)
@@ -167,6 +171,7 @@ func TestBatchWorkspaceCleanupPreservesNestedIgnoredEdits(t *testing.T) {
 }
 
 func TestBatchWorkspaceCleanupIgnoredScratch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, dirty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "clean", true: "dirty"}[dirty], func(t *testing.T) {
 			fixture := newRealGitWorktree(t)
@@ -204,6 +209,7 @@ func TestBatchWorkspaceCleanupIgnoredScratch(t *testing.T) {
 }
 
 func TestBatchWorkspaceCleanupScratchLinkedWorktree(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, gitlink := range []string{"", "scratch", "linked", "external"} {
 		t.Run("gitlink="+gitlink, func(t *testing.T) {
 			fixture := newRealGitWorktree(t)
@@ -256,6 +262,7 @@ func TestBatchWorkspaceCleanupScratchLinkedWorktree(t *testing.T) {
 }
 
 func TestBatchWorkspaceCleanupModuleIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, scenario := range []string{"uninitialized", "removed identity files", "malformed gitfile", "foreign gitfile", "symlink", "dangling symlink", "unusual path"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture, _, _, _, _ := batchSubmoduleFixture(t)
@@ -354,6 +361,7 @@ func TestBatchWorkspaceCleanupDiscoveryFailures(t *testing.T) {
 }
 
 func TestBatchWorkspaceCleanupRefusesNestedInspectionFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, _, _, _, _ := batchSubmoduleFixture(t)
 	state := batchWorkspaceState(t, fixture)
 	inspectionErr := errors.New("nested status unavailable")
@@ -380,6 +388,7 @@ func TestBatchWorkspaceCleanupRefusesNestedInspectionFailure(t *testing.T) {
 }
 
 func TestBatchWorkspaceSubmoduleStartFailureRetryAndNoop(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, submodules := range []bool{false, true} {
 		t.Run(map[bool]string{false: "absent", true: "present"}[submodules], func(t *testing.T) {
 			fixture := newRealGitWorktree(t)
@@ -461,6 +470,7 @@ func TestBatchSubmoduleUnmergedPrerequisites(t *testing.T) {
 }
 
 func TestBatchWorkspaceResumeParkedVerificationBisection(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
@@ -536,6 +546,7 @@ func TestBatchWorkspaceResumeParkedVerificationBisection(t *testing.T) {
 }
 
 func TestBatchWorkspaceCreatesAndReusesIsolatedIntegrationWorktree(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
@@ -570,6 +581,7 @@ func TestBatchWorkspaceCreatesAndReusesIsolatedIntegrationWorktree(t *testing.T)
 }
 
 func TestBatchWorkspaceResumeAcceptsRecoverableDirtyResolutionPhases(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
@@ -609,6 +621,7 @@ func TestBatchWorkspaceResumeAcceptsRecoverableDirtyResolutionPhases(t *testing.
 }
 
 func TestBatchWorkspaceResumeAcceptsRecoverableDirtyAggregateReworkPhases(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, reviewStatus := range []string{"reworking", "applying"} {
 		t.Run(reviewStatus, func(t *testing.T) {
@@ -642,6 +655,7 @@ func TestBatchWorkspaceResumeAcceptsRecoverableDirtyAggregateReworkPhases(t *tes
 }
 
 func TestBatchWorkspaceResumeAcceptsExactApplyingTaoCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
@@ -671,6 +685,7 @@ func TestBatchWorkspaceResumeAcceptsExactApplyingTaoCommit(t *testing.T) {
 }
 
 func TestBatchWorkspaceResumeRequiresExactPersistedApplyingMessage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
@@ -705,6 +720,7 @@ func TestBatchWorkspaceResumeRequiresExactPersistedApplyingMessage(t *testing.T)
 }
 
 func TestBatchWorkspaceResumeAcceptsExactApplyingAggregateReworkCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, legacy := range []bool{false, true} {
 		name := "proposed"
@@ -774,6 +790,7 @@ func TestBatchWorkspaceOwnershipContendsAcrossInstances(t *testing.T) {
 }
 
 func TestBatchWorkspaceResumeReportsAllDefaultSourceAndCleanlinessDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
@@ -821,6 +838,7 @@ func TestBatchWorkspaceResumeReportsAllDefaultSourceAndCleanlinessDrift(t *testi
 }
 
 func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
@@ -861,6 +879,7 @@ func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *te
 }
 
 func TestBatchWorkspaceResumeDoesNotClassifyLandedBatchAsRestartable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -893,6 +912,7 @@ func TestBatchWorkspaceResumeDoesNotClassifyLandedBatchAsRestartable(t *testing.
 }
 
 func TestBatchWorkspaceResumeRecordsUnknownRestartVerdictOnProbeFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
@@ -914,6 +934,7 @@ func TestBatchWorkspaceResumeRecordsUnknownRestartVerdictOnProbeFailure(t *testi
 }
 
 func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, transcript := range []string{"populated", "absent", "empty"} {
 		t.Run(transcript, func(t *testing.T) {
@@ -1006,6 +1027,7 @@ func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
 }
 
 func TestBatchWorkspaceRestartRefusesAfterLanding(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)
@@ -1017,6 +1039,7 @@ func TestBatchWorkspaceRestartRefusesAfterLanding(t *testing.T) {
 }
 
 func TestBatchWorkspaceRestartRefusesWhenDefaultReachedLandingIntentBeforeLandedState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	state := batchWorkspaceState(t, fixture)

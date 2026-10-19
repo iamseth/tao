@@ -14,6 +14,8 @@ import (
 	taocommit "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestCommitContextIsReadOnlyAndFinalizesStructuredProposal(t *testing.T) {
@@ -62,6 +64,7 @@ func TestCommitContextIsReadOnlyAndFinalizesStructuredProposal(t *testing.T) {
 }
 
 func TestCommitPushModesAndOutput(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mode := range []string{"commit-only", "context-only-intent", "proposal", "message", "rejected", "no-op"} {
 		t.Run(mode, func(t *testing.T) {
 			root := newCLICommitRepo(t)
@@ -168,6 +171,7 @@ func TestCommitPushModesAndOutput(t *testing.T) {
 }
 
 func TestCommitPushPreflightErrorsInContextAndMessageModes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, detached := range []bool{false, true} {
 		root := newCLICommitRepo(t)
 		if detached {
@@ -194,6 +198,7 @@ func TestCommitPushPreflightErrorsInContextAndMessageModes(t *testing.T) {
 }
 
 func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	control := newCLICommitRepo(t)
 	worktree := filepath.Join(t.TempDir(), "managed")
 	runCLICommitGit(t, control, "worktree", "add", "-b", "feature/managed", worktree)
@@ -268,6 +273,7 @@ func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 }
 
 func TestCommitRefusalRendersCommandlessRepairCapInstruction(t *testing.T) {
+	testenv.SkipIfShort(t)
 	control := newCLICommitRepo(t)
 	worktree := filepath.Join(t.TempDir(), "managed")
 	runCLICommitGit(t, control, "worktree", "add", "-b", "feature/managed", worktree)
@@ -341,6 +347,7 @@ func TestCommitRefusalRendersCommandlessRepairCapInstruction(t *testing.T) {
 }
 
 func TestCommitRefusesActiveManagedWorktreeAfterLiveBranchDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tt := range []struct {
 		name      string
 		driftArgs []string
@@ -393,6 +400,7 @@ func TestCommitRefusesActiveManagedWorktreeAfterLiveBranchDrift(t *testing.T) {
 }
 
 func TestCommitRefusesInvalidPlanAssociatedWithTargetWorktree(t *testing.T) {
+	testenv.SkipIfShort(t)
 	control := newCLICommitRepo(t)
 	worktree := filepath.Join(t.TempDir(), "managed-invalid")
 	runCLICommitGit(t, control, "worktree", "add", "-b", "feature/managed-invalid", worktree)
@@ -430,6 +438,7 @@ func TestCommitRefusesInvalidPlanAssociatedWithTargetWorktree(t *testing.T) {
 }
 
 func TestCommitAllowsUnrelatedWorktreeWithStaleManagedMetadata(t *testing.T) {
+	testenv.SkipIfShort(t)
 	control := newCLICommitRepo(t)
 	unrelated := filepath.Join(t.TempDir(), "unrelated")
 	runCLICommitGit(t, control, "worktree", "add", "-b", "feature/unrelated", unrelated)

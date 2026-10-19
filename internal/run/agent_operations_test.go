@@ -20,6 +20,8 @@ import (
 	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
@@ -196,6 +198,7 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 }
 
 func TestAgentOperationModels(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
 	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
@@ -348,6 +351,7 @@ func TestRunSliceEscalationPreservesRoleEffort(t *testing.T) {
 }
 
 func TestHistoricalProposalCorrectionModel(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, model := range []string{"", "v"} {
 		t.Run("model="+model, func(t *testing.T) {
@@ -446,6 +450,7 @@ func TestGeneratePullRequestBodySessionCarriesNativeAcceptanceContract(t *testin
 // durable plan adapter. Errors are injected after provider measurement so the
 // operation must preserve failures/timeouts even when telemetry can be saved.
 func TestReviewAndPullRequestTelemetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
 	const incompleteApproval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
 	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
@@ -851,6 +856,7 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 }
 
 func TestRunAgentSessionCanonicalStopCaps(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	t.Run("explicit zero stop still blocks", func(t *testing.T) {
 		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
@@ -920,6 +926,7 @@ func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
 }
 
 func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansRoot := t.TempDir()
 	planDir := filepath.Join(plansRoot, "plan-a")
@@ -1186,6 +1193,7 @@ func TestPullRequestSessionsCaptureDistinctPrompts(t *testing.T) {
 }
 
 func TestRunAgentSessionPlanTelemetryAndCapIsolation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
 	t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "1")
 	for _, request := range []AgentSessionMetricsRequest{

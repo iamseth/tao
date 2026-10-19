@@ -14,9 +14,12 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestBaselineProbe(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
 	const output = "--- FAIL: TestX (0.00s)\nFAIL\tgithub.com/iamseth/tao/internal/tui\n"
 	var packages, paths strings.Builder

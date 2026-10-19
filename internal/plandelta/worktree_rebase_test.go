@@ -9,9 +9,12 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestWorktreeConflictingRebaseFollowsDetachedHEAD(t *testing.T) {
+	testenv.SkipIfShort(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("Git unavailable")
 	}

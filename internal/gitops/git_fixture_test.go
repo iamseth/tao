@@ -4,6 +4,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func assertGitFixtureConfig(t *testing.T, root, maintenance, gc string) {
@@ -19,6 +21,7 @@ func assertGitFixtureConfig(t *testing.T, root, maintenance, gc string) {
 }
 
 func TestGitFixtureExplicitDestinationConfig(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, bare := range []bool{false, true} {
 		name := "ordinary"
@@ -50,6 +53,7 @@ func TestGitFixtureExplicitDestinationConfig(t *testing.T) {
 }
 
 func TestGitFixtureMaintenanceConfig(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root, _, _, _ := commitSeriesRepository(t)
 	assertGitFixtureConfig(t, root, "false", "0")

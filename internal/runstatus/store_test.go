@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestStoreRoundTripUpdateAndRemove(t *testing.T) {
@@ -102,6 +104,7 @@ func TestStoreRejectsUnsafePlanIdentity(t *testing.T) {
 }
 
 func TestStoreHeartbeatUsesInjectedClock(t *testing.T) {
+	testenv.SkipIfShort(t)
 	initial := time.Date(2026, 7, 29, 4, 0, 0, 0, time.UTC)
 	now := initial
 	store := NewStore(t.TempDir(), func() time.Time { return now })

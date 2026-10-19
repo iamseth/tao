@@ -15,6 +15,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type fakeWorkspaceCleaner struct {
@@ -304,6 +306,7 @@ func TestCleanupProvidesExactRecordedTypedBranchOwnership(t *testing.T) {
 }
 
 func TestCleanupRemovesTypedBranchAfterWorktreeWasRemoved(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	const typedBranch = "feature/native-pr-format"
@@ -328,6 +331,7 @@ func TestCleanupRemovesTypedBranchAfterWorktreeWasRemoved(t *testing.T) {
 }
 
 func TestCleanupRemovesRecordedSquashThroughEvidenceGate(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	commitRealPlanChange(t, fixture)
@@ -354,6 +358,7 @@ func TestCleanupRemovesRecordedSquashThroughEvidenceGate(t *testing.T) {
 }
 
 func TestCleanupDeclinesUnmergedBranchWithoutEvidenceOrForce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	commitRealPlanChange(t, fixture)

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agentinput"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSliceRulings(t *testing.T) {
@@ -45,6 +47,7 @@ func TestSliceRulings(t *testing.T) {
 }
 
 func TestCompleteSlicePreservesRulings(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

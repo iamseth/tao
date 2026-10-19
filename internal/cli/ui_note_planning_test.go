@@ -14,6 +14,8 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func planningFixture(t *testing.T) (App, taodata.Repo, note.CatalogNote) {
@@ -129,6 +131,7 @@ func (s planningReadStore) Get(ctx context.Context, id string) (note.Note, error
 }
 
 func TestUINotePlanningRejectsIneligibleSelection(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, damage := range []string{"agent", "missing-repo", "repo-prefix", "repo-id", "schema", "root", "relative-root", "noncanonical-root", "root-id", "health", "stale-root", "missing-note", "note-prefix", "note-id", "note-repo", "note-root", "promoted", "archived", "archive-metadata", "plan-linked", "cancelled"} {
 		t.Run(damage, func(t *testing.T) {
 			t.Setenv("TAO_AGENT", "pi")

@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestWithDetachedCheckout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init")

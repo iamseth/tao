@@ -16,6 +16,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func approvalEvidenceFixture(t *testing.T, blocked, approved bool) runPlanFixture {
@@ -87,6 +89,7 @@ func requireApprovalEvidenceRefusal(t *testing.T, err error) {
 }
 
 func TestRunApprovalEvidenceGuidanceGolden(t *testing.T) {
+	testenv.SkipIfShort(t)
 	var out bytes.Buffer
 	for _, blocked := range []bool{false, true} {
 		fixture := approvalEvidenceFixture(t, blocked, true)
@@ -125,6 +128,7 @@ func TestRunApprovalEvidenceGuidanceGolden(t *testing.T) {
 }
 
 func TestRunApprovalEvidenceAmendmentWorkflow(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, blocked := range []bool{false, true} {
 		for _, field := range []string{"goal", "tasks"} {
 			t.Run(fmt.Sprintf("blocked=%t/%s", blocked, field), func(t *testing.T) {
@@ -259,6 +263,7 @@ func interruptedApprovalEvidenceApp(t *testing.T, calls *int, liveHead func() st
 }
 
 func TestRunApprovalEvidenceInterruptedRemediation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, field := range []string{"goal", "tasks"} {
 		for _, drift := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/drift=%t", field, drift), func(t *testing.T) {
@@ -336,6 +341,7 @@ func TestRunApprovalEvidenceInterruptedRemediation(t *testing.T) {
 }
 
 func TestRunApprovalEvidenceNonqualifyingAmendments(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, flag := range []string{"reason-only", "--allow-file", "--add-manual-check"} {
 		t.Run(flag, func(t *testing.T) {
 			fixture := approvalEvidenceFixture(t, true, true)

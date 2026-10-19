@@ -10,9 +10,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestFetchRejectsCompressedTreeBeforeCheckout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, repeated := range []bool{false, true} {
 		name, blobBytes := "single", 2<<20
 		if repeated {

@@ -15,6 +15,8 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type fakeInventory struct {
@@ -374,6 +376,7 @@ func TestCollectorLiveMergeActionKinds(t *testing.T) {
 }
 
 func TestCollectorWithFileRepositoryRecommendsRestartForStaleSingleMergeIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)

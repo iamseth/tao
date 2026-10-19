@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestBaselineVerificationRecovery(t *testing.T) {
@@ -107,6 +109,7 @@ func TestAppendVerificationRepairAllowsNewFailureAfterCompletedRepair(t *testing
 }
 
 func TestAppendVerificationRepairRefusesEvidenceWithoutCodeAuthority(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name string

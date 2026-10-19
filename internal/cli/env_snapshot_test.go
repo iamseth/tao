@@ -23,6 +23,8 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
 	"github.com/iamseth/tao/internal/theme"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestComposedRunFlagDefaultsAreNotOverrides(t *testing.T) {
@@ -179,6 +181,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 }
 
 func TestModelConsumersComposeSelectedRepository(t *testing.T) {
+	testenv.SkipIfShort(t)
 	ctx := context.Background()
 	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model", "effort", "run_effort", "review_effort", "merge_review_effort", "resolver_effort"}
 	envKeys := []string{runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvResolverModel, runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort, runtimeconfig.EnvMergeReviewEffort, runtimeconfig.EnvResolverEffort}
@@ -974,6 +977,7 @@ func (r noteReworkTestRepository) PlanRecord(detail *plan.PlanDetail) (*plan.Pla
 }
 
 func TestNoteRunInheritsCapturedReworkSettings(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name, enabled, attempts string
 		args                    []string

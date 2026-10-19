@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRepoReviewAgentDefaults(t *testing.T) {
@@ -498,6 +500,7 @@ func TestRegisterCurrentDiscoversGitRepo(t *testing.T) {
 }
 
 func TestRegisterCurrentLinkedWorktreeIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root := newGitRepo(t)
 	runGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
 	linked := filepath.Join(t.TempDir(), "linked \"checkout\"")
@@ -547,6 +550,7 @@ func TestRegisterCurrentLinkedWorktreeIdentity(t *testing.T) {
 }
 
 func TestRegisterCurrentSubmoduleIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	source := newGitRepo(t)
 	runGit(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
 	super := newGitRepo(t)

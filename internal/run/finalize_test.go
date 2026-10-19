@@ -7,9 +7,12 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestExplicitBaselineRepairAppendsSlice(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))

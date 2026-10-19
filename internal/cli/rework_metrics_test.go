@@ -15,6 +15,8 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // Only telemetry appends are injected; triage and lifecycle persistence keep
@@ -34,6 +36,7 @@ func (r *reworkMetricsRepository) AppendEvent(dir string, event plan.Event) erro
 }
 
 func TestReworkPRClassifierMetrics(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, outcome := range []string{"reported", "partial", "unavailable", "malformed", "failure", "timeout", "start-failure", "reopen"} {
 			for _, appendFails := range []bool{false, true} {

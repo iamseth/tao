@@ -14,6 +14,8 @@ import (
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type recordingBatchTransitionStore struct {
@@ -37,6 +39,7 @@ func (s *recordingBatchTransitionStore) Transition(state BatchState, _ string) (
 }
 
 func TestBatchIntegratorCreatesOneSquashWithTrailersWithoutMovingSourcesOrDefault(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -82,6 +85,7 @@ func TestBatchIntegratorCreatesOneSquashWithTrailersWithoutMovingSourcesOrDefaul
 }
 
 func TestBatchIntegratorAppliesCandidateWithoutVerification(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -127,6 +131,7 @@ func TestBatchIntegratorAppliesCandidateWithoutVerification(t *testing.T) {
 }
 
 func TestBatchIntegratorDryRunUsesDisposableHistoryWithoutDurableWrites(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -158,6 +163,7 @@ func TestBatchIntegratorDryRunUsesDisposableHistoryWithoutDurableWrites(t *testi
 }
 
 func TestBatchIntegratorResumePreservesLegacyVerificationDeferral(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -197,6 +203,7 @@ func TestBatchIntegratorResumePreservesLegacyVerificationDeferral(t *testing.T) 
 }
 
 func TestBatchIntegratorDefersNoChangeCandidate(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
@@ -214,6 +221,7 @@ func TestBatchIntegratorDefersNoChangeCandidate(t *testing.T) {
 }
 
 func TestBatchIntegratorNoChangeApplyingIntentRemainsRestartable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
@@ -260,6 +268,7 @@ func TestBatchIntegratorNoChangeApplyingIntentRemainsRestartable(t *testing.T) {
 }
 
 func TestBatchIntegratorTurnsPlannedConflictIntoActionableDeferral(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	candidate := BatchCandidate{
@@ -312,6 +321,7 @@ func TestBatchIntegratorTurnsPlannedConflictIntoActionableDeferral(t *testing.T)
 }
 
 func TestBatchAgentSecondPlannedDeferralRequestRemainsResumable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "plan-a.txt"), []byte("plan a\n"), 0o600); err != nil {
@@ -395,6 +405,7 @@ func TestBatchAgentSecondPlannedDeferralRequestRemainsResumable(t *testing.T) {
 }
 
 func TestBatchIntegratorResumesLegacyApplyingIntentBeforeGitMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -464,6 +475,7 @@ func (g *batchCommitFailureGit) RevParse(ctx context.Context, rev string) (strin
 }
 
 func TestBatchIntegratorPreparedCommitFailures(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, phase := range []string{"inspect", "commit", "resolve", "empty-head"} {
 		t.Run(phase, func(t *testing.T) {
@@ -521,6 +533,7 @@ func TestBatchIntegratorPreparedCommitFailures(t *testing.T) {
 }
 
 func TestBatchIntegratorResumesApplyingIntentAfterTaoCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -555,6 +568,7 @@ func TestBatchIntegratorResumesApplyingIntentAfterTaoCommit(t *testing.T) {
 }
 
 func TestBatchIntegratorGeneratesLegacyMessageOnceBeforeMutationAndRecoversIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -606,6 +620,7 @@ func TestBatchIntegratorGeneratesLegacyMessageOnceBeforeMutationAndRecoversInten
 }
 
 func TestBatchIntegratorBlocksInvalidPreparedMessageWithoutMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -628,6 +643,7 @@ func TestBatchIntegratorBlocksInvalidPreparedMessageWithoutMutation(t *testing.T
 }
 
 func TestBatchIntegratorExactRecoveryRejectsDifferentFullMessage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -651,6 +667,7 @@ func TestBatchIntegratorExactRecoveryRejectsDifferentFullMessage(t *testing.T) {
 }
 
 func TestBatchIntegratorIntentWriteFailureDoesNotMutateIntegration(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	writeBatchTestFile(t, fixture.worktreePath)
@@ -683,6 +700,7 @@ func TestBatchIntegratorIntentWriteFailureDoesNotMutateIntegration(t *testing.T)
 }
 
 func TestBatchIntegratorEjectRebuildsReducedOrderedSet(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"
@@ -736,6 +754,7 @@ func TestBatchIntegratorEjectRebuildsReducedOrderedSet(t *testing.T) {
 }
 
 func TestBatchIntegratorEjectRebuildIncludesResolvedPlannerDeferral(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	planCBranch := "tao/plan-c"
@@ -798,6 +817,7 @@ func TestBatchIntegratorEjectRebuildIncludesResolvedPlannerDeferral(t *testing.T
 }
 
 func TestBatchIntegratorEjectResumesPendingIntentBeforeGitReset(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"
@@ -819,6 +839,7 @@ func TestBatchIntegratorEjectResumesPendingIntentBeforeGitReset(t *testing.T) {
 }
 
 func TestBatchIntegratorEjectResumeKeepsPersistedDeferralResolving(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"
@@ -857,6 +878,7 @@ func TestBatchIntegratorEjectResumeKeepsPersistedDeferralResolving(t *testing.T)
 }
 
 func TestBatchIntegratorEjectResumesApplyingResolverIntentThroughResolver(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"
@@ -936,6 +958,7 @@ func TestBatchIntegratorEjectResumesApplyingResolverIntentThroughResolver(t *tes
 }
 
 func TestBatchIntegratorEjectResumesAfterResetBeforeRebuildPersistence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"

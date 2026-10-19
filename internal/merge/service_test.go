@@ -20,6 +20,8 @@ import (
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestDirtyWorktreeErrorUntracked(t *testing.T) {
@@ -642,6 +644,7 @@ func TestWorktreeGitUsesConfigDerivedPathWhenWorkspacePathIsEmpty(t *testing.T) 
 }
 
 func TestMergeRefusesDirtyPlanWorktreeBeforeDefaultMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
@@ -1192,6 +1195,7 @@ func generatedMergeProposal() commitcontract.Proposal {
 }
 
 func TestMergeResolvesSquashConflictVerifiesAndRequiresIndependentApproval(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name        string
@@ -1284,6 +1288,7 @@ func TestMergeResolvesSquashConflictVerifiesAndRequiresIndependentApproval(t *te
 }
 
 func TestMergeResolutionFailureRollsBackAfterCallerCancellation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name       string
@@ -1384,6 +1389,7 @@ func TestMergeResolutionFailureRollsBackAfterCallerCancellation(t *testing.T) {
 }
 
 func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, request, git := preparedSingleResolutionFixture(t)
 	detail := mergeReadyDetail(request.Intent.DefaultParent)
@@ -1447,6 +1453,7 @@ func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testin
 }
 
 func TestMergeAutomaticallyResolvesConflictsWithExactFilenames(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -1519,6 +1526,7 @@ func TestMergeAutomaticallyResolvesConflictsWithExactFilenames(t *testing.T) {
 }
 
 func TestMergeAutomaticallyResolvesConflictWithExactSourcePathScope(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name      string
@@ -1614,6 +1622,7 @@ func TestMergeAutomaticallyResolvesConflictWithExactSourcePathScope(t *testing.T
 }
 
 func TestMergeConflictResolutionRejectsDefaultOnlyPathEdits(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, _, _ := batchAgentConflictFixture(t)
 	const defaultOnlyPath = "default-only.txt"
@@ -1681,6 +1690,7 @@ func TestMergeConflictResolutionRejectsDefaultOnlyPathEdits(t *testing.T) {
 }
 
 func TestMergeResolutionFailureSettlesRollbackAndAllowsReworkedRerun(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name       string
@@ -2050,6 +2060,7 @@ func TestPrepareSingleMergeIntentRejectsProviderAndGitMutationBeforeIntent(t *te
 }
 
 func TestGenerateSingleMergeMessageDetectsInPlaceUntrackedMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
@@ -2270,6 +2281,7 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 }
 
 func TestMergeNoChangesCompletionRealGit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	head := realGitOutput(t, fixture.repoRoot, "rev-parse", "main")
@@ -2303,6 +2315,7 @@ func TestMergeNoChangesCompletionRealGit(t *testing.T) {
 }
 
 func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	commitRealPlanChange(t, fixture)

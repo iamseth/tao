@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestCacheSuccessfulCheckFreshnessBoundaries(t *testing.T) {
@@ -155,6 +157,7 @@ func TestCacheAutomaticInstallRetryBoundaries(t *testing.T) {
 }
 
 func TestCacheRoundTripCreatesPrivateAtomicState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 5, 0, 0, 123, time.FixedZone("test", 2*60*60))
@@ -240,6 +243,7 @@ func TestCacheMalformedUnknownPartialOversizedAndUntrustedContentFailsOpen(t *te
 }
 
 func TestCacheStaleContentFailsOpenAtExactBoundaries(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	checkedAt := time.Date(2026, 7, 28, 5, 0, 0, 0, time.UTC)
@@ -326,6 +330,7 @@ func TestCachePermissionFailuresWhereEnforced(t *testing.T) {
 }
 
 func TestCacheConcurrentAtomicReadersAndWriters(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 5, 0, 0, 0, time.UTC)

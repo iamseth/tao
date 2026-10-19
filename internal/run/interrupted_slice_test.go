@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
@@ -154,6 +156,7 @@ func TestInterruptedSliceClassifiesPolicyNoneWithoutExecutionStart(t *testing.T)
 }
 
 func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithWorkspaceBranch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -370,6 +373,7 @@ func TestServiceExecuteRefusesClaimedWorktreeAtControlCheckout(t *testing.T) {
 }
 
 func TestServiceExecuteRefusesWorktreePathResolvingIntoControlCheckout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	controlRoot := t.TempDir()
 	runCommitTestGitCommand(t, controlRoot, "init")
@@ -516,6 +520,7 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithoutBoundary(t *testing.
 }
 
 func TestServiceExecuteRepairsLaterStateAdvancedSliceStartAfterReload(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -603,6 +608,7 @@ func TestServiceExecuteRepairsLaterStateAdvancedSliceStartAfterReload(t *testing
 }
 
 func TestServiceExecuteRepairsSlicesAdvancedStartAndMissingEventAfterReload(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -671,6 +677,7 @@ func TestServiceExecuteRepairsSlicesAdvancedStartAndMissingEventAfterReload(t *t
 }
 
 func TestServiceExecuteResumesStartSettledFromJournalOnReload(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")

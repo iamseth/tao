@@ -11,6 +11,8 @@ import (
 	"github.com/iamseth/tao/internal/durableintent/crashfixture"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type defaultTargetCrashPoint struct {
@@ -33,6 +35,7 @@ func defaultTargetCrashPoints() []defaultTargetCrashPoint {
 }
 
 func TestInspectSingleMergeIntentCrashMatrix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, test := range defaultTargetCrashPoints() {
 		t.Run(test.name, func(t *testing.T) {
@@ -52,6 +55,7 @@ func TestInspectSingleMergeIntentCrashMatrix(t *testing.T) {
 }
 
 func TestRestartSingleMergeInterruptedRestartMatrix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, point := range []string{"after safety checks", "after clear before render"} {
 		t.Run(point, func(t *testing.T) {
@@ -115,6 +119,7 @@ func TestRestartSingleMergeInterruptedRestartMatrix(t *testing.T) {
 }
 
 func TestInspectSingleMergeIntentRefusesLiveDefaultDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.DefaultTarget)
@@ -131,6 +136,7 @@ func TestInspectSingleMergeIntentRefusesLiveDefaultDrift(t *testing.T) {
 }
 
 func TestMergeRecoversInterruptedSingleResolutionRollbackSettlement(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := crashfixture.New(t)
 	state := fixture.AfterGitMutation(t, crashfixture.DefaultTarget)
@@ -176,6 +182,7 @@ func TestMergeRecoversInterruptedSingleResolutionRollbackSettlement(t *testing.T
 }
 
 func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name        string
@@ -238,6 +245,7 @@ func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.
 }
 
 func TestRecoverApplyingBatchIntegrationCrashMatrix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	messageBranches := []struct {
 		name          string
@@ -287,6 +295,7 @@ func TestRecoverApplyingBatchIntegrationCrashMatrix(t *testing.T) {
 }
 
 func TestRecoverApplyingBatchIntegrationRefusesLiveGitDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name     string

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestServiceUpdateIsUncachedAndInstallsOnlyNewerRelease(t *testing.T) {
@@ -104,6 +106,7 @@ func TestServiceUpdateReturnsDiscoveryAndInstallFailures(t *testing.T) {
 }
 
 func TestServiceStartupWarnUsesCacheAndNoticesOnce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
@@ -139,6 +142,7 @@ func TestServiceStartupWarnUsesCacheAndNoticesOnce(t *testing.T) {
 }
 
 func TestServiceStartupAutoInstallsOnceAndReportsNextInvocation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
@@ -212,6 +216,7 @@ func TestServiceConcurrentStartupWarnDeliversOneNotice(t *testing.T) {
 }
 
 func TestServiceConcurrentStartupAutoSuppressesFailedInstallRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
@@ -247,6 +252,7 @@ func TestServiceConcurrentStartupAutoSuppressesFailedInstallRetry(t *testing.T) 
 }
 
 func TestServiceStartupAutoReportsInstallAfterWarnNotice(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
@@ -299,6 +305,7 @@ func TestServiceStartupInstallContextHasFiniteDefaultAndPreservesCallerDeadline(
 }
 
 func TestServiceStartupLockContentionExpiresNonFatally(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
@@ -328,6 +335,7 @@ func TestServiceStartupLockContentionExpiresNonFatally(t *testing.T) {
 }
 
 func TestServiceStartupFailuresAreNonFatalAndThrottled(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)
@@ -386,6 +394,7 @@ func TestServiceStartupDiscoveryFailureCachesRetryAndModeOffDoesNothing(t *testi
 }
 
 func TestServiceStartupHomebrewFailureCarriesRecommendation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)

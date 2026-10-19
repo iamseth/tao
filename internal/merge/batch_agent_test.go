@@ -17,6 +17,8 @@ import (
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type batchSessionAgentFunc func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error)
@@ -156,6 +158,7 @@ func (g *batchPreparedCommitTestGit) RevParse(ctx context.Context, rev string) (
 }
 
 func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	commitErr := errors.New("commit failed")
 	headErr := errors.New("HEAD unavailable")
@@ -223,6 +226,7 @@ func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
 }
 
 func TestBatchSubmodulesResolverPreparationOrderingAndFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, failAt := range []int{0, 1, 2} {
 		t.Run(fmt.Sprintf("fail-at-%d", failAt), func(t *testing.T) {
 			fixture, source, base, root := batchAgentConflictFixture(t)
@@ -270,6 +274,7 @@ func TestBatchSubmodulesResolverPreparationOrderingAndFailure(t *testing.T) {
 }
 
 func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("GOLANGCI_LINT_CACHE", filepath.Join(t.TempDir(), "inherited-cache"))
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -337,6 +342,7 @@ func TestBatchAgentResolvesTextConflictAndTaoOwnsCommit(t *testing.T) {
 }
 
 func TestBatchAgentStagesResolutionAlongsideStagedDeletion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "removed.txt"), []byte("obsolete\n"), 0o600); err != nil {
@@ -392,6 +398,7 @@ func TestBatchAgentStagesResolutionAlongsideStagedDeletion(t *testing.T) {
 }
 
 func TestBatchAgentStagesTrackedChangeUnderNewlyIgnoredDirectory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	cacheDir := filepath.Join(fixture.repoRoot, "pkg", "cache")
@@ -523,6 +530,7 @@ func TestFinishResolvedCandidateStagesByPorcelainBucket(t *testing.T) {
 }
 
 func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
@@ -549,6 +557,7 @@ func TestBatchAgentSessionFailuresStopWithoutAnotherResolveCall(t *testing.T) {
 }
 
 func TestBatchAgentKeepsDirectReviewMessageWhenResolutionDescriptionIsUnchanged(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -581,6 +590,7 @@ func TestBatchAgentKeepsDirectReviewMessageWhenResolutionDescriptionIsUnchanged(
 }
 
 func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -619,6 +629,7 @@ func TestBatchAgentResumesResolvedCandidateAfterCommitBeforeTransition(t *testin
 }
 
 func TestBatchAgentResumesResolvedIntentBeforeCommitWithoutAnotherSession(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -673,6 +684,7 @@ func TestBatchAgentResumesResolvedIntentBeforeCommitWithoutAnotherSession(t *tes
 }
 
 func TestBatchAgentRecoveryRequiresFreshProposalWhenResolvedContentDrifts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
@@ -779,6 +791,7 @@ func TestBatchAgentRecoveryRequiresFreshProposalWhenResolvedContentDrifts(t *tes
 }
 
 func TestBatchAgentResumesInterruptedResolutionWork(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
@@ -835,6 +848,7 @@ func TestBatchAgentResumesInterruptedResolutionWork(t *testing.T) {
 }
 
 func TestBatchAgentResumesCrashImmediatelyAfterPreparation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -886,6 +900,7 @@ func TestBatchAgentResumesCrashImmediatelyAfterPreparation(t *testing.T) {
 }
 
 func TestBatchAgentResumesLegacyApplyingIntentBeforeCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -928,6 +943,7 @@ func TestBatchAgentResumesLegacyApplyingIntentBeforeCommit(t *testing.T) {
 }
 
 func TestBatchAgentRejectsChangesToAnotherCandidateSourceRef(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -951,6 +967,7 @@ func TestBatchAgentRejectsChangesToAnotherCandidateSourceRef(t *testing.T) {
 }
 
 func TestBatchAgentRecordsEarlyDeferralAfterLaterAppliedCandidate(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceA, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	planBRoot := filepath.Join(filepath.Dir(fixture.repoRoot), "plan-b")
@@ -1007,6 +1024,7 @@ func TestBatchAgentRecordsEarlyDeferralAfterLaterAppliedCandidate(t *testing.T) 
 }
 
 func TestBatchAgentRepairsVerificationFailureBeforeTaoCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "value.txt"), []byte("bad\n"), 0o600); err != nil {
@@ -1034,6 +1052,7 @@ func TestBatchAgentRepairsVerificationFailureBeforeTaoCommit(t *testing.T) {
 }
 
 func TestBatchAgentRejectsMalformedOrUnsafeCommitProposalBeforeIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	valid := plan.ReviewCommitMessage{
 		Subject: "fix(batch): resolve candidate integration",
@@ -1084,6 +1103,7 @@ func TestBatchAgentRejectsMalformedOrUnsafeCommitProposalBeforeIntent(t *testing
 }
 
 func TestBatchAgentNoProgressBlocksAndRestoresIntegration(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, sourceHead, defaultHead, integrationRoot := batchAgentConflictFixture(t)
 	state := batchAgentDeferredState(fixture, sourceHead, defaultHead)
@@ -1367,6 +1387,7 @@ func TestConcretePorcelainChangesRejectsCollapsedFallbackStatus(t *testing.T) {
 }
 
 func TestCollectConflictFilesOnlyUnmergedPaths(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "README.md"), []byte("plan\n"), 0o600); err != nil {

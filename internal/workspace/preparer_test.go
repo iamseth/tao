@@ -14,6 +14,8 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPathWithinRoot(t *testing.T) {
@@ -158,6 +160,7 @@ func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 }
 
 func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	detail := executionPreparerPlanDetail(repo.path)
@@ -179,6 +182,7 @@ func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
 }
 
 func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	newDetail := func() *plan.PlanDetail {
@@ -220,6 +224,7 @@ func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t
 }
 
 func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	detail := executionPreparerPlanDetail(repo.path)
@@ -240,6 +245,7 @@ func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
 }
 
 func TestExecutionPreparerRejectsTypedBranchCollision(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	detail := executionPreparerPlanDetail(repo.path)
@@ -615,6 +621,7 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 }
 
 func TestPrepareRebasesStaleWorktreeBeforeRun(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	initialBase := gitHead(t, repo.path)
@@ -667,6 +674,7 @@ func (r rebaseRecorderFunc) SettleWorkspaceRebase(intent plan.WorkspaceRebaseInt
 }
 
 func TestPrepareRebaseRecordsBeforeMutationAndSettlesImmediately(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -710,6 +718,7 @@ func TestPrepareRebaseRecordsBeforeMutationAndSettlesImmediately(t *testing.T) {
 }
 
 func TestPrepareRebaseBinarySeriesRecordsBeforeMutationAndSettlesExactProof(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	repo := newTestRepo(t)
@@ -814,6 +823,7 @@ func TestPrepareRebaseBinarySeriesRecordsBeforeMutationAndSettlesExactProof(t *t
 }
 
 func TestPrepareRebaseBinaryConflictRefusesIsolatedReplayBeforeMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	repo := newTestRepo(t)
@@ -875,6 +885,7 @@ func TestPrepareRebaseBinaryConflictRefusesIsolatedReplayBeforeMutation(t *testi
 }
 
 func TestPrepareRebaseProofSettlesFeatureEditAfterUpstreamRename(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	commitTestFile(t, repo.path, "original.txt", "top\ntarget\nbottom\n", "add target")
@@ -915,6 +926,7 @@ func TestPrepareRebaseProofSettlesFeatureEditAfterUpstreamRename(t *testing.T) {
 }
 
 func TestPrepareRebaseUsesRecordedBaseSHAWhenBaseBranchAdvances(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -964,6 +976,7 @@ func TestPrepareRebaseUsesRecordedBaseSHAWhenBaseBranchAdvances(t *testing.T) {
 }
 
 func TestPrepareRebaseRecordFailurePreventsMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -985,6 +998,7 @@ func TestPrepareRebaseRecordFailurePreventsMutation(t *testing.T) {
 }
 
 func TestPrepareRebaseProofRefusesDivergentBaseBeforeMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -1019,6 +1033,7 @@ func TestPrepareRebaseProofRefusesDivergentBaseBeforeMutation(t *testing.T) {
 }
 
 func TestPrepareRebaseProofRefusesUpstreamEquivalentCommitBeforeMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -1056,6 +1071,7 @@ func TestPrepareRebaseProofRefusesUpstreamEquivalentCommitBeforeMutation(t *test
 }
 
 func TestPrepareRebaseProofRefusesCommitThatWouldBecomeEmptyBeforeMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	commitTestFile(t, repo.path, "shared.txt", "one\ntarget\nthree\n", "add shared file")
@@ -1093,6 +1109,7 @@ func TestPrepareRebaseProofRefusesCommitThatWouldBecomeEmptyBeforeMutation(t *te
 }
 
 func TestPrepareRebaseSettlementFailureLeavesRewrittenHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -1121,6 +1138,7 @@ func TestPrepareRebaseSettlementFailureLeavesRewrittenHead(t *testing.T) {
 }
 
 func TestPrepareSkipsRebaseWhenBranchContainsDefault(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -1151,6 +1169,7 @@ func TestPrepareSkipsRebaseWhenBranchContainsDefault(t *testing.T) {
 }
 
 func TestPrepareRefusesDirtyStaleWorktree(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -1184,6 +1203,7 @@ func TestPrepareRefusesDirtyStaleWorktree(t *testing.T) {
 }
 
 func TestPrepareAbortsRebaseConflict(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -1220,6 +1240,7 @@ func TestPrepareAbortsRebaseConflict(t *testing.T) {
 }
 
 func TestPrepareUsesDefaultBranchForWorkspaceBase(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.path, "checkout", "-b", "feature")
@@ -1242,6 +1263,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBase(t *testing.T) {
 }
 
 func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultMissing(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.path, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -1260,6 +1282,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultMissin
 }
 
 func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultIsOnlyTag(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.path, "tag", "--no-sign", "main")
@@ -1394,6 +1417,7 @@ func TestExecutionPreparerRemovedLockfileClearsPriorDependencyFingerprint(t *tes
 }
 
 func TestExecutionPreparerSubmodulesIndependentOfJSCache(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const gitCommand = "git submodule update --init --recursive"
 	for _, tc := range []struct {
@@ -1477,6 +1501,7 @@ func TestExecutionPreparerSubmodulesIndependentOfJSCache(t *testing.T) {
 }
 
 func TestExecutionPreparerSkippedSubmodulesBlockConsumers(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, cache := range []string{"fresh", "cached JS", "changed JS"} {
 		t.Run(cache, func(t *testing.T) {
@@ -1530,6 +1555,7 @@ func TestExecutionPreparerSkippedSubmodulesBlockConsumers(t *testing.T) {
 }
 
 func TestExecutionPreparerChangedGitlinksWithCachedJS(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newNestedSubmoduleFixture(t)
 	writeFile(t, filepath.Join(fixture.root, "package-lock.json"))

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestBatchStoreAppendsAgentEventsOutsideStateAndTransitions(t *testing.T) {
@@ -452,6 +454,7 @@ func (w batchTransitionLineWriter) Write(p []byte) (int, error) {
 }
 
 func TestBatchStoreRenderTransitionsFollow(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, complete := range []bool{false, true} {
 		name := "cancel"
 		if complete {

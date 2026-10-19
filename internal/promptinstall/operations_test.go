@@ -11,6 +11,8 @@ import (
 	"github.com/iamseth/tao/internal/agent/promptfmt"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestInstalledProvidersPreserveNoteAwarePlanningContracts(t *testing.T) {
@@ -62,6 +64,7 @@ func TestInstallAllRejectsUnsupportedAgent(t *testing.T) {
 }
 
 func TestDiscoveredOperationsPreserveAgentAndPromptOrder(t *testing.T) {
+	testenv.SkipIfShort(t)
 	piDir := t.TempDir()
 	claudeDir := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", piDir)
@@ -138,6 +141,7 @@ func TestDiscoveredOperationsIdentifyFailingAgent(t *testing.T) {
 }
 
 func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
+	testenv.SkipIfShort(t)
 	agentDir := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
 	promptsDir := filepath.Join(agentDir, "prompts")
@@ -234,6 +238,7 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 }
 
 func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
+	testenv.SkipIfShort(t)
 	commandsDir := t.TempDir()
 	t.Setenv("TAO_CLAUDE_COMMANDS_DIR", commandsDir)
 	writeRetiredManagedPrompt(t, commandsDir)
@@ -328,6 +333,7 @@ func TestInstallAllClaudeWritesManagedCommandWrappers(t *testing.T) {
 }
 
 func TestCatchMeUpInstallationPreservesUnmanagedFiles(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
 		t.Run(string(kind), func(t *testing.T) {
 			root := t.TempDir()
@@ -379,6 +385,7 @@ func TestCatchMeUpInstallationPreservesUnmanagedFiles(t *testing.T) {
 }
 
 func TestInstalledCommandMetadataIsPrefixedAndDelegatesLogicalSelectors(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, "pi"))

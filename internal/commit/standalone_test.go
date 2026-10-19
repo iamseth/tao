@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/gitops"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestReadStandaloneProposalValidatesBoundedStrictJSON(t *testing.T) {
@@ -256,6 +258,7 @@ func TestStandalonePushPreflightRefusesBeforeMutation(t *testing.T) {
 }
 
 func TestStandalonePushRejectionPreservesLocalCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root, remote := newStandalonePushRepo(t)
 	// Advance the remote independently so the new local commit is not a fast-forward.
 	runStandaloneGit(t, root, "commit", "--allow-empty", "-m", "remote-only change")

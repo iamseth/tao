@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
@@ -246,6 +248,7 @@ func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
 }
 
 func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	planDir := t.TempDir()
 	timestamp := time.Date(2026, 7, 14, 1, 30, 0, 0, time.UTC)

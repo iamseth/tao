@@ -18,9 +18,12 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestBatchSubmodulesPinnedAcrossIntegrationBisectionAndRework(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, oldChild, newChild, oldLeaf, newLeaf := batchSubmoduleFixture(t)
 	state := batchWorkspaceState(t, fixture)
 	state.Candidates[0].ReviewCommitMessage = &plan.ReviewCommitMessage{Subject: "fix(batch): update pinned submodule", Body: "What:\nUpdate the recursive submodule pin.\n\nWhy:\nUse the reviewed dependency revision."}
@@ -88,6 +91,7 @@ func TestBatchSubmodulesPinnedAcrossIntegrationBisectionAndRework(t *testing.T) 
 }
 
 func TestBatchSubmodulesPrepareReducedTreeAfterEjection(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, oldChild, _, oldLeaf, _ := batchSubmoduleFixture(t)
 	state := batchWorkspaceState(t, fixture)
 	proposal := &plan.ReviewCommitMessage{Subject: "fix(batch): integrate reviewed changes", Body: "What:\nIntegrate the reviewed source.\n\nWhy:\nKeep the exact approved intent."}
@@ -339,6 +343,7 @@ func (w *batchE2ESettlementWorkspace) ClearActive(string) error { w.cleared++; r
 // bounded agent resolution, aggregate rework, interrupted landing recovery,
 // evidence recording, and guarded cleanup.
 func TestMergeBatchEndToEnd(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "repo")
@@ -499,6 +504,7 @@ func TestMergeBatchEndToEnd(t *testing.T) {
 }
 
 func TestMergeBatchAutoEjectReworksAndLandsAttributedReducedSet(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	fixture, state, integrationRoot := batchEjectTestFixture(t)

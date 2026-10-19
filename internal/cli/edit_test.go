@@ -14,6 +14,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // editPlanRepo builds a plantest.Repository that mirrors the fixture used
@@ -508,6 +510,7 @@ func TestEditAmendApprovalContracts(t *testing.T) {
 }
 
 func TestEditAmendRefusesWithoutPersisting(t *testing.T) {
+	testenv.SkipIfShort(t)
 	const planID = "20260526-1200-amend"
 	for _, test := range []struct {
 		name    string

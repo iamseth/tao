@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPlanRecordAbandonmentPreservesEvidenceAndFirstEvent(t *testing.T) {
@@ -167,6 +169,7 @@ func TestPlanRecordAbandonRefusesUnsettledTransactionsWithoutChangingEvidence(t 
 }
 
 func TestPlanRecordAbandonRefreshRefusesNonePolicyIntentBeforeCompletion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -256,6 +259,7 @@ func TestPlanRecordAbandonValidatesReasonAndPublishesAtomically(t *testing.T) {
 }
 
 func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -292,6 +296,7 @@ func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 }
 
 func TestPlanRecordPullRequestCompletionEvidenceOrders(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name        string
@@ -378,6 +383,7 @@ func TestPlanRecordPullRequestCompletionEvidenceOrders(t *testing.T) {
 }
 
 func TestPlanRecordPullRequestCompletionClearedByReplacementReview(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name  string
@@ -444,6 +450,7 @@ func TestPlanRecordPullRequestCompletionClearedByReplacementReview(t *testing.T)
 }
 
 func TestPlanRecordPullRequestRefreshRecomputesCompletion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir, detail, record, nextAt := newPullRequestCompletedRecord(t)
 	if err := record.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: nextAt}, "tao/plan-a", "head456"); err != nil {
@@ -493,6 +500,7 @@ func newPullRequestCompletedRecord(t *testing.T) (string, *PlanDetail, *PlanReco
 }
 
 func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name        string
@@ -569,6 +577,7 @@ func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *te
 }
 
 func TestPlanRecordClearsCommitMessageFromNonApprovedReplacement(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -658,6 +667,7 @@ func TestTornFinalSliceWriteStillSettles(t *testing.T) {
 }
 
 func TestRecordReviewProposalCorrectionRejectsChangedConsumedMarker(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -704,6 +714,7 @@ func TestRecordReviewProposalCorrectionRejectsChangedConsumedMarker(t *testing.T
 }
 
 func TestPlanRecordMergedStatus(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -778,6 +789,7 @@ func TestPlanRecordMergedIsIdempotentForExactEvidence(t *testing.T) {
 }
 
 func TestRecordMergedPreservesSliceCompletionTime(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

@@ -18,6 +18,8 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/reviewcontract"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type batchReviewAgentFunc func(context.Context, string, string) (string, error)
@@ -285,6 +287,7 @@ func TestFinishAggregateReworkStagesDotBeforePreparedCommit(t *testing.T) {
 }
 
 func TestFinishAggregateReworkRefusesEmptyStaging(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	if err := os.WriteFile(filepath.Join(root, "reworked.txt"), []byte("fixed\n"), 0o600); err != nil {
@@ -319,6 +322,7 @@ func TestFinishAggregateReworkRefusesEmptyStaging(t *testing.T) {
 }
 
 func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	sourceReview := filepath.Join(t.TempDir(), "review.md")
@@ -350,6 +354,7 @@ func TestBatchReviewApprovePersistsExactEvidenceAndLeavesDefaultAndSourcesAlone(
 }
 
 func TestBatchReviewAttributesReviewAndReworkAttemptsFromDurableCounters(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	var requests []BatchAgentSessionRequest
@@ -381,6 +386,7 @@ func TestBatchReviewAttributesReviewAndReworkAttemptsFromDurableCounters(t *test
 }
 
 func TestBatchReviewRejectsCandidateSourceRefChangesByEveryAgentSession(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	addProtectedCandidate := func(t *testing.T, fixture realGitWorktree, state *BatchState) string {
 		t.Helper()
@@ -433,6 +439,7 @@ func TestBatchReviewRejectsCandidateSourceRefChangesByEveryAgentSession(t *testi
 }
 
 func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name  string
@@ -533,6 +540,7 @@ func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
 }
 
 func TestBatchReviewMalformedOrCommentStopsSafely(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, output := range []string{"malformed output", reviewJSON("comment", "risk", "")} {
 		t.Run(output[:4], func(t *testing.T) {
@@ -548,6 +556,7 @@ func TestBatchReviewMalformedOrCommentStopsSafely(t *testing.T) {
 }
 
 func TestBatchReviewMalformedAggregateProposalRestoresWithoutIntentOrStaging(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	valid := plan.ReviewCommitMessage{
 		Subject: "fix(batch): resolve aggregate findings",
@@ -597,6 +606,7 @@ func TestBatchReviewMalformedAggregateProposalRestoresWithoutIntentOrStaging(t *
 }
 
 func TestBatchReviewReworkPersistsInterruptionStateAndCreatesResolutionCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -703,6 +713,7 @@ func TestAggregateReworkContentFingerprintFramesRegularFileDigest(t *testing.T) 
 }
 
 func TestBatchReviewBlocksWhenAggregateReworkContentDriftsAfterIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -747,6 +758,7 @@ func TestBatchReviewBlocksWhenAggregateReworkContentDriftsAfterIntent(t *testing
 }
 
 func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	state.Attempts.AggregateRework = 1
@@ -813,6 +825,7 @@ func TestBatchReviewRecoveryReproposesSamePathAfterAggregateContentDrift(t *test
 }
 
 func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	markerContent := []byte("before\n" + strings.Repeat("<", 7) + " HEAD\nours\n=======\ntheirs\n" + strings.Repeat(">", 7) + " branch\nafter\n")
 
@@ -940,6 +953,7 @@ func TestBatchReviewAggregateReworkConflictMarkerConfinement(t *testing.T) {
 }
 
 func TestBatchReviewResumeDoesNotCountInterruptedMetadataAsAnotherConvergenceRound(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	artifactDir := t.TempDir()
@@ -997,6 +1011,7 @@ func TestBatchReviewResumeDoesNotCountInterruptedMetadataAsAnotherConvergenceRou
 }
 
 func TestBatchReviewResumeAfterEquivalentFingerprintMetadataRemainsStalled(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1039,6 +1054,7 @@ func TestBatchReviewResumeAfterEquivalentFingerprintMetadataRemainsStalled(t *te
 }
 
 func TestBatchReviewResumesAggregateReworkAfterCommitTransitionFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1079,6 +1095,7 @@ func TestBatchReviewResumesAggregateReworkAfterCommitTransitionFailure(t *testin
 }
 
 func TestBatchReviewRecoversPersistedAggregateCommitIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	parent := state.IntegrationHead
@@ -1110,6 +1127,7 @@ func TestBatchReviewRecoversPersistedAggregateCommitIntent(t *testing.T) {
 }
 
 func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, status := range []string{"reworking", "applying"} {
 		t.Run(status, func(t *testing.T) {
@@ -1156,6 +1174,7 @@ func TestBatchReviewRecoversInterruptedAggregateReworkBeforeRetry(t *testing.T) 
 }
 
 func TestBatchReviewRecoversAggregateReworkCommitFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	_, state, root := batchReviewFixture(t)
 	hooks := t.TempDir()
@@ -1310,6 +1329,7 @@ func TestAttributeAggregateReviewFilesRequiresExactlyOneCandidate(t *testing.T) 
 }
 
 func TestBatchReviewAutoEjectReworksReducedSetVerificationAndApproves(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1377,6 +1397,7 @@ func TestBatchReviewAutoEjectReworksReducedSetVerificationAndApproves(t *testing
 }
 
 func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceForOnlyCandidate(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1409,6 +1430,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceForOnlyCandidate(t *t
 }
 
 func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceAfterCompletedEjection(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1469,6 +1491,7 @@ func TestBatchReviewAutoEjectBlocksAttributedNonConvergenceAfterCompletedEjectio
 }
 
 func TestBatchReviewResumesPendingEjectBeforeReviewing(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	reason := "aggregate review not converging on plan-a.txt (plan plan-a)"
@@ -1494,6 +1517,7 @@ func TestBatchReviewResumesPendingEjectBeforeReviewing(t *testing.T) {
 }
 
 func TestBatchReviewAutoEjectDoesNotEjectNonAttributableNonConvergence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1521,6 +1545,7 @@ func TestBatchReviewAutoEjectDoesNotEjectNonAttributableNonConvergence(t *testin
 }
 
 func TestBatchReviewAutoEjectDoesNotAttributeCountStallAcrossCandidates(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1551,6 +1576,7 @@ func TestBatchReviewAutoEjectDoesNotAttributeCountStallAcrossCandidates(t *testi
 }
 
 func TestBatchReviewAutoEjectDoesNotAttributeCountStallWithMissingFile(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1634,6 +1660,7 @@ func TestBatchReviewConvergenceWindowEnvironment(t *testing.T) {
 }
 
 func TestBatchReviewEquivalentFindingsAndCapExhaustionStop(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name, second      string
 		changeFile        bool
@@ -1681,6 +1708,7 @@ func TestBatchReviewEquivalentFindingsAndCapExhaustionStop(t *testing.T) {
 }
 
 func TestBatchReviewNonConvergencePrecedesAttemptCapAndAutoEjects(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchEjectTestFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir()}
@@ -1714,6 +1742,7 @@ func TestBatchReviewNonConvergencePrecedesAttemptCapAndAutoEjects(t *testing.T) 
 }
 
 func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	t.Run("verification after rework", func(t *testing.T) {
 		fixture, state, root := batchReviewFixture(t)
@@ -1776,6 +1805,7 @@ func TestBatchReviewVerificationFailureAfterReworkAndReviewTimeout(t *testing.T)
 }
 
 func TestBatchReviewArtifactPersistenceFailureStopsBeforeRework(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchReviewFixture(t)
 	store := &batchReviewTestStore{dir: t.TempDir(), artifactFail: true}
@@ -1788,6 +1818,7 @@ func TestBatchReviewArtifactPersistenceFailureStopsBeforeRework(t *testing.T) {
 }
 
 func TestBatchReviewVerificationAttribution(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("GOLANGCI_LINT_CACHE", filepath.Join(t.TempDir(), "inherited-cache"))
 	for _, fix := range []bool{true, false} {
 		t.Run(fmt.Sprintf("fix=%t", fix), func(t *testing.T) {
@@ -1894,6 +1925,7 @@ func (g *attributionRestoreTestGit) ResetHard(ctx context.Context, head string) 
 }
 
 func TestBatchReviewVerificationAttributionPersistenceRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, interruptRestore := range []bool{false, true} {
 		t.Run(fmt.Sprintf("interrupt-restore=%t", interruptRestore), func(t *testing.T) {
@@ -1959,6 +1991,7 @@ func TestBatchReviewVerificationAttributionPersistenceRecovery(t *testing.T) {
 }
 
 func TestBatchReviewVerificationAttributionRecoveryDetectsAggregateGate(t *testing.T) {
+	testenv.SkipIfShort(t)
 	unsetMergeVerifyCommandEnv(t)
 	for _, prefixCommand := range []string{"make build && make test", ""} {
 		t.Run("prefix-command="+prefixCommand, func(t *testing.T) {
@@ -2020,6 +2053,7 @@ func TestBatchReviewVerificationAttributionRecoveryDetectsAggregateGate(t *testi
 }
 
 func TestBatchReviewVerificationAttributionBetweenProbeRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	fixture, state, _ := batchAttributionFixture(t)
@@ -2110,6 +2144,7 @@ func TestBatchReviewVerificationAttributionBetweenProbeRecovery(t *testing.T) {
 }
 
 func TestBatchVerificationAttributionRestoresOnCancellationAndRefMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, cancelProbe := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancel=%t", cancelProbe), func(t *testing.T) {
@@ -2144,6 +2179,7 @@ func TestBatchVerificationAttributionRestoresOnCancellationAndRefMutation(t *tes
 }
 
 func TestBatchVerificationAttributionSkipsResolutionHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchAttributionFixture(t)
 	runRealGit(t, root, "commit", "--allow-empty", "-m", "fix: resolution")
@@ -2165,6 +2201,7 @@ func TestBatchVerificationAttributionSkipsResolutionHead(t *testing.T) {
 }
 
 func TestBatchReviewCachePreparationFailureBlocksApproval(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchAttributionFixture(t)
 	if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0o600); err != nil {
@@ -2196,6 +2233,7 @@ func TestBatchReviewCachePreparationFailureBlocksApproval(t *testing.T) {
 }
 
 func TestBatchReviewVerificationBaselineFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, root := batchAttributionFixture(t)
 	got, err := (BatchAggregateReviewer{

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func testSliceVerificationSnapshot() SliceVerificationSnapshot {
@@ -31,6 +33,7 @@ func sliceVerificationRecord(t *testing.T) *PlanRecord {
 }
 
 func TestRecordSliceVerificationPreservesLifecycleAndRejectsStaleWrites(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	record := sliceVerificationRecord(t)
 	before := clonePlanDetail(record.Detail())
@@ -121,6 +124,7 @@ func TestSliceVerificationSnapshotValidation(t *testing.T) {
 }
 
 func TestRecordSliceVerificationAdmission(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := map[string]func(*PlanDetail){
 		"wrong selected slice": func(d *PlanDetail) { d.State.Plan.CurrentSlice = new("002-b") },
@@ -147,6 +151,7 @@ func TestRecordSliceVerificationAdmission(t *testing.T) {
 }
 
 func TestRecordSliceVerificationPersistenceFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	record := sliceVerificationRecord(t)
 	before := clonePlanDetail(record.Detail())
@@ -169,6 +174,7 @@ func TestRecordSliceVerificationPersistenceFailure(t *testing.T) {
 }
 
 func TestSliceVerificationIntentSnapshotIsImmutable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	record := sliceVerificationRecord(t)
 	snapshot := testSliceVerificationSnapshot()
@@ -200,6 +206,7 @@ func TestSliceVerificationIntentSnapshotIsImmutable(t *testing.T) {
 }
 
 func TestSliceVerificationWritersRejectMalformedEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	record := sliceVerificationRecord(t)
 	snapshot := testSliceVerificationSnapshot()

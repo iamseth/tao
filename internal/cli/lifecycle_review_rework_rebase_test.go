@@ -12,9 +12,12 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestLifecycleReworkRunLockHandoff(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture := newLifecycleHandoffFixture(t)
 
 	// A competing lifecycle driver must remain excluded while the nested run

@@ -14,6 +14,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func requireApprovalFacts(slice *plan.Slice) {
@@ -296,6 +298,7 @@ func TestApprovalEvidencePreservesPostIntentRoute(t *testing.T) {
 }
 
 func TestApprovalEvidenceRefusesBeforeBlockedRestart(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
@@ -346,6 +349,7 @@ func TestApprovalEvidenceRefusesBeforeBlockedRestart(t *testing.T) {
 }
 
 func TestApprovalEvidenceDoesNotGateExactIntentRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})

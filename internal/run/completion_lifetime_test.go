@@ -20,6 +20,8 @@ import (
 	"github.com/iamseth/tao/internal/agent/process"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // TestMain unsets the owner, so the common case touches no environment and
@@ -88,6 +90,7 @@ func TestVerifiedCompletionFixtureClearsInheritedOwner(t *testing.T) {
 }
 
 func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	root := t.TempDir()
@@ -557,6 +560,7 @@ func assertCompletionHeartbeatStopped(t *testing.T, dir string) {
 }
 
 func TestSliceCompletionLifetimeAcrossProcesses(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	for _, mode := range []string{"death", "timeout", "normal-end", "supersession", "disabled-timeout"} {
@@ -681,6 +685,7 @@ func TestSliceCompletionLifetimeFailClosed(t *testing.T) {
 // Real provider paths exercise the shared session decorator, process starter,
 // inherited environment, and a nested CLI in its own process group.
 func TestSliceCompletionLifetimeLocalProviders(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
@@ -963,6 +968,7 @@ func completionVerifiedChild(t *testing.T, dir, mode string) {
 }
 
 func TestCompleteVerifiedConcurrentChildren(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
@@ -1002,6 +1008,7 @@ func TestCompleteVerifiedConcurrentChildren(t *testing.T) {
 }
 
 func TestCompleteVerifiedParentLossAcrossProcesses(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, point := range []string{"verified-gate", "verified-boundary"} {
 		for _, loss := range []string{"death", "expiration", "supersession"} {

@@ -17,9 +17,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestInstallerInstallsVerifiedArchiveAndPreservesPermissions(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	archive := testArchive(t, testTarEntry{name: "tao", mode: 0o755, content: "new tao"})
@@ -131,6 +134,7 @@ func TestExtractTaoBinaryRejectsHostileArchives(t *testing.T) {
 }
 
 func TestInstallerBoundsChecksumsAndHonorsCancellation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	destination := testExecutable(t, "old", 0o755)
@@ -173,6 +177,7 @@ func TestInstallerBoundsChecksumsAndHonorsCancellation(t *testing.T) {
 }
 
 func TestInstallerPreservesOriginalOnPermissionRenameAndSyncFailures(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	archive := testArchive(t, testTarEntry{name: "tao", mode: 0o755, content: "new"})
@@ -261,6 +266,7 @@ func TestInstallerLockContentionIsCancellable(t *testing.T) {
 }
 
 func TestInstallerConcurrentCallsInstallOnce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 
 	archive := testArchive(t, testTarEntry{name: "tao", mode: 0o755, content: "new"})

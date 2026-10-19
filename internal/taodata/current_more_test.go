@@ -4,9 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRegistryCurrentReadsRegisteredRepoForGitRoot(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root := newGitRepo(t)
 	registry := Registry{DataHome: t.TempDir(), Now: fixedNow}
 	repo := Repo{Schema: RepoSchema, ID: RepoID(root), Name: filepath.Base(root), Root: root, Branch: "main", UpdatedAt: fixedNow().UTC().Format("2006-01-02T15:04:05Z")}

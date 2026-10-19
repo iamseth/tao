@@ -20,9 +20,12 @@ import (
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSliceBlockedGateEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mode := range []string{"owned", "outside path", "empty root", "missing root", "file root", "empty base", "bad base", "not git", "fingerprint error", "both groups"} {
 		t.Run(mode, func(t *testing.T) {
 			root := initTestGitRepo(t)
@@ -176,6 +179,7 @@ func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
 }
 
 func TestSliceBlockedGateEvidenceValidation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name string
 		args []string

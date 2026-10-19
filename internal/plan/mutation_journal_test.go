@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/atomicfile"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestMutationJournalDecodeValidation(t *testing.T) {
@@ -129,6 +131,7 @@ func TestMutationJournalRejectsEventMutationIDMismatch(t *testing.T) {
 }
 
 func TestMutationJournalSettlementFailurePrefixesAreRecoverable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name            string
@@ -205,6 +208,7 @@ func TestMutationJournalSettlementFailurePrefixesAreRecoverable(t *testing.T) {
 }
 
 func TestMutationJournalRecoverySyncsVisibleEventBeforeRemoval(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -236,6 +240,7 @@ func TestMutationJournalRecoverySyncsVisibleEventBeforeRemoval(t *testing.T) {
 }
 
 func TestMutationJournalPostUnlinkSyncFailureCommitsNewEventAfterDirectorySync(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -373,6 +378,7 @@ func TestMutationJournalLoadBoundarySettlesPendingIntent(t *testing.T) {
 }
 
 func TestMutationJournalConcurrentReadersRecoverEventExactlyOnce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {

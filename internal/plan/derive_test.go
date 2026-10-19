@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSummarizeProjectsStructuredDecisionOverview(t *testing.T) {
@@ -427,6 +429,7 @@ func TestFinalVerificationFailureProjectionAndRecoveryByClassification(t *testin
 }
 
 func TestLegacyFinalVerificationReplacementClearsStaleClassification(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	detail := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
 	detail.Dir = t.TempDir()
@@ -830,6 +833,7 @@ func TestReviewSupersededByReopenIgnoresFailedReviewEvents(t *testing.T) {
 }
 
 func TestReworkScopeCommandShellRoundTrip(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	values := []string{"plain.go", "scope notes.go", "it's.go", `double"quote.go`, "$(touch evaluated).go", "`touch evaluated`.go", "x; touch evaluated; #.go", "x & touch evaluated & #.go"}
 	for _, value := range values {

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSliceTimingCompletionRefusalIsReadOnly(t *testing.T) {
@@ -47,6 +49,7 @@ func TestSliceTimingCompletionRefusalIsReadOnly(t *testing.T) {
 }
 
 func TestRepairSliceStartedAtJournalRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	d := startSliceDetail(dir)
@@ -139,6 +142,7 @@ func TestResolveSliceStartedAt(t *testing.T) {
 }
 
 func TestRepairSliceStartedAtDurableAndCompletion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, completion := range []bool{false, true} {
 		t.Run(map[bool]string{false: "repair", true: "completion"}[completion], func(t *testing.T) {

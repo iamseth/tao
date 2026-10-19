@@ -18,6 +18,8 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type verifyRunnerCall struct {
@@ -369,6 +371,7 @@ func TestMergeVerificationCacheSubprocess(t *testing.T) {
 }
 
 func TestMergeVerificationCacheDistinctIntegrationRoots(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupMergeIdentityTools(t)
 	fixture := newRealGitWorktree(t)
 	service := NewService(fixture.repoRoot, nil)

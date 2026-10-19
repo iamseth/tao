@@ -11,9 +11,12 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestConfigSchemaRoundTrips(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home := t.TempDir()
 	t.Setenv("TAO_DATA_HOME", home)
 	registry := taodata.NewRegistry(home)

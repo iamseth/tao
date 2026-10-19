@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/agentinput"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestReadStateReadsStateJSON(t *testing.T) {
@@ -90,6 +92,7 @@ func TestAppendEventAppendsJSONL(t *testing.T) {
 }
 
 func TestPlanRecordSingleMergeCommitIntentRoundTripsAndClears(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "merge-intent", "Merge Intent")
@@ -131,6 +134,7 @@ func TestPlanRecordSingleMergeCommitIntentRoundTripsAndClears(t *testing.T) {
 }
 
 func TestPlanRecordSingleMergeResolutionRoundTripsAdvancesAndSettles(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "resolution", "Resolution")
@@ -256,6 +260,7 @@ func TestPlanRecordSingleMergeResolutionRoundTripsAdvancesAndSettles(t *testing.
 }
 
 func TestPlanRecordRearmsExactRequestedResolutionWithBoundedDiagnostic(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "resolution-rearm", "Resolution Rearm")
@@ -325,6 +330,7 @@ func TestPlanRecordRearmsExactRequestedResolutionWithBoundedDiagnostic(t *testin
 }
 
 func TestPlanRecordMaximumSingleMergeRollbackEventWritesAndReloads(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "resolution-max", "Maximum Resolution")
@@ -467,6 +473,7 @@ func maximumValidSingleMergeCommitMessage() string {
 }
 
 func TestPlanRecordSingleMergeResolutionClearAndLifecycleInvalidation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -741,6 +748,7 @@ func validSingleMergeResolution(intent SingleMergeCommitIntent) SingleMergeResol
 }
 
 func TestPlanRecordFinalizationFailureLifecycle(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "failure", "Failure")
@@ -820,6 +828,7 @@ func TestPlanRecordFinalizationFailureLifecycle(t *testing.T) {
 }
 
 func TestPlanRecordReplaceFinalizationFailurePersistenceFailuresPreserveEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, operation := range []string{"journal", "state", "event-1", "event-2", "remove"} {
 		t.Run(operation, func(t *testing.T) {
@@ -926,6 +935,7 @@ func TestPlanRecordReplaceFinalizationFailureRejectsBoundaryDrift(t *testing.T) 
 }
 
 func TestPlanRecordFinalizationFailureClearsOnHeadReplacementAndSuccess(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "settle-failure", "Settle Failure")
@@ -976,6 +986,7 @@ func TestPlanRecordFinalizationFailureClearsOnHeadReplacementAndSuccess(t *testi
 }
 
 func TestPlanRecordPullRequestIntentRoundTripsAndClearsOnSuccess(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	writeMinimalPlan(t, root, "pr-intent", "PR Intent")
@@ -1050,6 +1061,7 @@ func TestAppendEventCreatesEventsJSONL(t *testing.T) {
 }
 
 func TestRepositoryOwnsPlanMutations(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	writePlan(t, dir, "mutate", `{
@@ -1112,6 +1124,7 @@ func TestRepositoryOwnsPlanMutations(t *testing.T) {
 }
 
 func TestPlanRecordStateEventMutationsRecoverInstalledPrefixes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	mutatedAt := time.Date(2026, 7, 20, 17, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -1252,6 +1265,7 @@ func TestPlanRecordStateEventMutationsRecoverInstalledPrefixes(t *testing.T) {
 }
 
 func TestPlanRecordArtifactMutationRetriesRecognizeRecoveredOperation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	mutatedAt := time.Date(2026, 7, 20, 18, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -1455,6 +1469,7 @@ func requireSingleEventType(t *testing.T, events []Event, eventType string) stri
 }
 
 func TestPlanRecordStateEventRetryPreservesNewerStateAfterRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -1718,6 +1733,7 @@ func TestPlanRecordFinalVerificationWriteFailureRetainsInMemoryMetadata(t *testi
 }
 
 func TestPlanRecordAutomaticReworkStopIsDurableAndIdempotent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -1799,6 +1815,7 @@ func TestPlanRecordAutomaticReworkStopRefreshesStaleDetail(t *testing.T) {
 }
 
 func TestPlanRecordAutomaticReopenJournalsOrderedRoundEvidenceOnce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "reopen")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -1863,6 +1880,7 @@ func assertAutomaticReopenEvents(t *testing.T, events []Event) {
 }
 
 func TestReopenCompletedPlanAddsPendingSlicesAndEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	writeCompletedReopenPlan(t, dir)

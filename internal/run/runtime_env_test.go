@@ -15,6 +15,8 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func runEnvSnapshot(values map[string]string) *runtimeconfig.EnvSnapshot {
@@ -67,6 +69,7 @@ func TestInvalidSessionCapsRejectBeforeLaunch(t *testing.T) {
 }
 
 func TestSessionsIgnoreUnusedInvalidBudgets(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, metrics := range []*AgentSessionMetricsRequest{
 		nil,
@@ -161,6 +164,7 @@ func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
 }
 
 func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, key := range []string{
 		runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvMaxSliceCostDeprecated,

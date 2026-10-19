@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestDefaultLocalCompletionKillsDetachedDescendants(t *testing.T) {
@@ -196,6 +198,7 @@ func TestDefaultLocalTimeoutKillsDescendants(t *testing.T) {
 }
 
 func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupIdentityTools(t)
 	for _, mode := range []string{"cancellation", "timeout", "detached", "inherited-pipes"} {
 		t.Run(mode, func(t *testing.T) {
@@ -257,6 +260,7 @@ func TestDefaultLocalVerificationCacheProcessLifecycle(t *testing.T) {
 }
 
 func TestVerificationIdentityDescendants(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mode := range []string{"timeout", "cancel", "pipes", "detached"} {
 		t.Run(mode, func(t *testing.T) {
 			root, bin := t.TempDir(), t.TempDir()
@@ -318,6 +322,7 @@ func TestVerificationIdentityDescendants(t *testing.T) {
 }
 
 func TestVerificationCachePrivateAndInaccessibleStorage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupCacheChild(t)
 	root := t.TempDir()
 	ctx := WithVerificationCache(context.Background(), root)

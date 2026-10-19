@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPrepareSubmodulesAbsentAndInspectionError(t *testing.T) {
@@ -56,6 +58,7 @@ func TestPrepareSubmodulesCancellationAndRetry(t *testing.T) {
 }
 
 func TestPrepareSubmodulesDefaultRunnerAndClock(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	if err := os.WriteFile(filepath.Join(repo.path, ".gitmodules"), nil, 0o600); err != nil {
@@ -121,6 +124,7 @@ func newNestedSubmoduleFixture(t *testing.T) nestedSubmoduleFixture {
 }
 
 func TestPrepareSubmodulesNestedPinnedRevisionsAndDirtyContent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newNestedSubmoduleFixture(t)
 	child := filepath.Join(fixture.root, "modules/child")
@@ -165,6 +169,7 @@ func TestPrepareSubmodulesNestedPinnedRevisionsAndDirtyContent(t *testing.T) {
 }
 
 func TestPrepareSubmodulesConfiguredUpdateModes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name        string
@@ -261,6 +266,7 @@ func TestPrepareSubmodulesStatusValidation(t *testing.T) {
 }
 
 func TestPrepareSubmodulesRespectsTransportPolicy(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture := newNestedSubmoduleFixture(t)
 	t.Setenv("GIT_ALLOW_PROTOCOL", "none")
 	metadata, err := PrepareSubmodules(context.Background(), fixture.root, nil, nil)
@@ -270,6 +276,7 @@ func TestPrepareSubmodulesRespectsTransportPolicy(t *testing.T) {
 }
 
 func TestPrepareSubmodulesDefaultRunnerCancellation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	writeFile(t, filepath.Join(repo.path, ".gitmodules"))

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type batchLandResolver struct {
@@ -28,6 +30,7 @@ func (r *batchLandResolver) ResolvePlan(_ context.Context, input string) (*plan.
 }
 
 func TestBatchLandPersistsIntentMovesDefaultOnceAndRecordsSquashEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	store := &recordingBatchTransitionStore{}
@@ -69,6 +72,7 @@ func TestBatchLandPersistsIntentMovesDefaultOnceAndRecordsSquashEvidence(t *test
 }
 
 func TestBatchLandAcceptsVerifiedReducedSetAfterEject(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	reason := "aggregate review not converging on deferred.txt (plan plan-b)"
@@ -91,6 +95,7 @@ func TestBatchLandAcceptsVerifiedReducedSetAfterEject(t *testing.T) {
 }
 
 func TestBatchLandRejectsIncompleteEjectRebuild(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	reason := "aggregate review not converging on deferred.txt (plan plan-b)"
@@ -107,6 +112,7 @@ func TestBatchLandRejectsIncompleteEjectRebuild(t *testing.T) {
 }
 
 func TestBatchLandAcceptsVerifiedAggregateResolutionHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	if err := os.WriteFile(filepath.Join(integrationRoot, "aggregate-fix.txt"), []byte("fix\n"), 0o600); err != nil {
@@ -131,6 +137,7 @@ func TestBatchLandAcceptsVerifiedAggregateResolutionHead(t *testing.T) {
 }
 
 func TestBatchLandGateAndIntentFailuresLeaveRefsExact(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	t.Run("drift gate", func(t *testing.T) {
 		fixture, state, integrationRoot, detail := batchLandFixture(t)
@@ -161,6 +168,7 @@ func TestBatchLandGateAndIntentFailuresLeaveRefsExact(t *testing.T) {
 }
 
 func TestBatchLandRecoversAfterFastForwardAndPartialPlanRecording(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, state, integrationRoot, detail := batchLandFixture(t)
 	store := &recordingBatchTransitionStore{failAt: 3}

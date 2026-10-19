@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRegistryMetadataInventoryRetainsWarningsWithoutGitChecks(t *testing.T) {
@@ -89,6 +91,7 @@ func TestRegistryMetadataInventoryClassifiesInvalidMetadataWithoutFollowingItsID
 }
 
 func TestRegistryCatalogIncludesPlanCountsAndMetadataErrors(t *testing.T) {
+	testenv.SkipIfShort(t)
 	dataHome := t.TempDir()
 	registry := Registry{DataHome: dataHome, Now: fixedNow}
 	root := newGitRepo(t)

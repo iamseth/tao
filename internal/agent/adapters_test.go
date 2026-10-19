@@ -16,6 +16,8 @@ import (
 
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/agent/process"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // Provider exit must complete the session even with timeouts disabled and a
@@ -97,6 +99,7 @@ func TestClaudeInheritedStdoutExit(t *testing.T) {
 // The provider exits or is killed while its child retains stderr. Cleanup must
 // not depend on that child exiting, and must preserve the provider diagnostic.
 func TestAdaptersInheritedStderrShutdown(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, outcome := range []string{"cancel", "timeout", "exit"} {
 			t.Run(provider+"/"+outcome, func(t *testing.T) {
@@ -388,6 +391,7 @@ func TestAdaptersMeasurementPresence(t *testing.T) {
 }
 
 func TestAdaptersRetainMeasurementsOnFailureAndTimeout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, outcome := range []string{"failure", "timeout"} {
 			t.Run(provider+"/"+outcome, func(t *testing.T) {

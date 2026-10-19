@@ -1,7 +1,9 @@
-.PHONY: help build build-targets clean test update-golden coverage-html lint lint-darwin install release-check tui-preview verify verify-no-deps
+.PHONY: help build build-targets clean test test-full update-golden coverage-html lint lint-darwin install release-check tui-preview verify verify-no-deps
 
 COVERAGE_FILE := coverage.out
 GO_TEST_FLAGS ?=
+# make test runs the fast tier; test-full clears this to run every test.
+TEST_TIER_FLAGS ?= -short
 TUI_PREVIEW_ARGS ?=
 # Cached analyzer results contain source paths, so isolate them per checkout/worktree.
 GOLANGCI_LINT_CACHE ?= $(HOME)/.cache/golangci-lint$(CURDIR)
@@ -12,7 +14,8 @@ help:
 	@printf "  %-14s %s\n" "build" "Build the tao binary into the bin directory."
 	@printf "  %-14s %s\n" "build-targets" "Cross-build and vet all release targets (adds roughly 15 to 30 seconds to verify)."
 	@printf "  %-14s %s\n" "clean" "Remove build and coverage artifacts."
-	@printf "  %-14s %s\n" "test" "Run all Go tests with coverage output."
+	@printf "  %-14s %s\n" "test" "Run the fast test tier (-short) with coverage output."
+	@printf "  %-14s %s\n" "test-full" "Run every Go test with coverage output (used by verify and CI)."
 	@printf "  update-golden  Rewrite the golden fixtures under internal/cli/testdata from current renderers.\n"
 	@printf "  %-14s %s\n" "coverage-html" "Open an HTML coverage report in the browser."
 	@printf "  %-14s %s\n" "lint" "Run golangci-lint."
@@ -65,7 +68,7 @@ test:
 		for dir in $$PATH; do [ "$$dir" = /usr/bin ] && path="$$path:$$toolchain"; path="$$path:$$dir"; done; \
 		unset IFS; export PATH="$${path#:}"; \
 	fi; \
-	go test $(GO_TEST_FLAGS) -coverprofile=$(COVERAGE_FILE) ./...; \
+	go test $(TEST_TIER_FLAGS) $(GO_TEST_FLAGS) -coverprofile=$(COVERAGE_FILE) ./...; \
 	awk 'NR>1 { \
 		n=split($$1,p,"/"); pkg=p[1]; \
 		for(i=2;i<n;i++) pkg=pkg"/"p[i]; \
@@ -74,10 +77,13 @@ test:
 	END { for(k in stmts) printf "%6.1f%%  %s\n", 100*cov[k]/stmts[k], k }' \
 		$(COVERAGE_FILE) | sort -k2
 
+test-full:
+	@$(MAKE) --no-print-directory test TEST_TIER_FLAGS=
+
 update-golden:
 	@go test -count=1 ./internal/cli -run 'Golden' -update
 
-coverage-html: test
+coverage-html: test-full
 	@go tool cover -html=$(COVERAGE_FILE)
 
 lint:
@@ -96,7 +102,7 @@ release-check:
 tui-preview:
 	@go run ./cmd/tui-preview $(TUI_PREVIEW_ARGS)
 
-verify: build test lint verify-no-deps build-targets
+verify: build test-full lint verify-no-deps build-targets
 
 verify-no-deps:
 	@count=$$(go list -m all | wc -l); \

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func amendTime() time.Time {
@@ -241,6 +243,7 @@ func TestAmendSliceBoundsReason(t *testing.T) {
 }
 
 func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	writeEditPlan(t, dir)

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestReadOnlyProbes(t *testing.T) {
@@ -55,6 +57,7 @@ func TestReadOnlyProbes(t *testing.T) {
 }
 
 func TestListsLinkedWorktreeReadOnly(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")

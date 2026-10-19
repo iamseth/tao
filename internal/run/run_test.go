@@ -15,6 +15,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPlanOwnedFiles(t *testing.T) {
@@ -84,6 +86,7 @@ func TestRenderRunPacketIncludesPlanOwnedFilesOnHandoff(t *testing.T) {
 }
 
 func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
@@ -901,6 +904,7 @@ func TestServiceExecuteRefusesDirtyUnrecordedManagedWorkspaceBeforePreparation(t
 }
 
 func TestServiceExecuteRefusesDirtyRecordedWorkspaceBeforeMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name     string
@@ -957,6 +961,7 @@ func TestServiceExecuteRefusesDirtyRecordedWorkspaceBeforeMutation(t *testing.T)
 }
 
 func TestServiceExecuteStartsNextAutomaticSliceAfterMaxSlicesStop(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -1074,6 +1079,7 @@ func TestCompletedAutomaticSliceProvesBoundaryRequiresConsistentLatestEvidence(t
 }
 
 func TestServiceExecuteMigratesLegacyCompletedSliceWorkspaceHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -1235,6 +1241,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceBeforeWorkspaceMutation(t
 }
 
 func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name   string
@@ -1584,6 +1591,7 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 }
 
 func TestServiceExecuteRepairsMissingStartEventAfterReload(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -2065,6 +2073,7 @@ func TestRunPostAgentBlockShowsBoundedPersistedReason(t *testing.T) {
 }
 
 func TestContinuePlanOwnedBlocker(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, name := range []string{"unchanged", "pending fallback", "tracked changed", "untracked changed", "deleted", "head advanced", "prose only", "no fingerprint", "new prose block", "new block without fingerprint", "empty root", "missing root", "git error"} {
 		t.Run(name, func(t *testing.T) {
@@ -2280,6 +2289,7 @@ func TestExecuteDetailAfterContinueRunsReopenedReworkSlice(t *testing.T) {
 }
 
 func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")

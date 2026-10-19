@@ -22,6 +22,8 @@ import (
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
@@ -498,6 +500,7 @@ func TestModelFlagsRejectInvalidNames(t *testing.T) {
 }
 
 func TestRunCurrentKeepsRecordedLinkedCheckoutAtHandoff(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, location := range []string{"root", "subdirectory", "symlink"} {
 		t.Run(location, func(t *testing.T) {
 			clearTaoEnv(t)

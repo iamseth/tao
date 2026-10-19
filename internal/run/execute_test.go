@@ -14,9 +14,12 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, completed := range []bool{true, false} {
 		t.Run(map[bool]string{true: "completed", false: "incomplete"}[completed], func(t *testing.T) {
@@ -88,6 +91,7 @@ func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
 }
 
 func TestExecuteRecordedReworkModel(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, selection := range []struct {
 		name   string

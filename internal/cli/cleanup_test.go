@@ -16,6 +16,8 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestCleanupRemovesMergedBranchesAndSkipsRest(t *testing.T) {
@@ -192,6 +194,7 @@ func TestCleanupReportsRepositoryLocateFailure(t *testing.T) {
 }
 
 func TestCleanupFromLinkedWorktreeExcludesControlActiveBatch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, force := range []bool{false, true} {
 		for _, dryRun := range []bool{false, true} {
 			t.Run("force="+strconv.FormatBool(force)+"/dry-run="+strconv.FormatBool(dryRun), func(t *testing.T) {
@@ -250,6 +253,7 @@ func TestCleanupFromLinkedWorktreeExcludesControlActiveBatch(t *testing.T) {
 // Use the real coordinator, store, ownership lock, and Git worktree boundary;
 // pause only the integration phase so cleanup races are deterministic.
 func TestCleanupSkipsLiveBatchOwnership(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, dryRun := range []bool{true, false} {
 		for _, force := range []bool{false, true} {
 			t.Run("batch-dry-run="+strconv.FormatBool(dryRun)+"/force="+strconv.FormatBool(force), func(t *testing.T) {

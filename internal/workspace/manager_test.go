@@ -10,6 +10,8 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type removeFailingGit struct {
@@ -45,6 +47,7 @@ func (g fixedCleanupGit) BranchMerged(context.Context, string) (bool, error) {
 }
 
 func TestRemoveIntegrationWorktreeCleanupFailurePreservesResources(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -71,6 +74,7 @@ func TestRemoveIntegrationWorktreeCleanupFailurePreservesResources(t *testing.T)
 }
 
 func TestDecideManagedCleanupRecordsMergeMechanism(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -100,6 +104,7 @@ func TestDecideManagedCleanupRecordsMergeMechanism(t *testing.T) {
 }
 
 func TestPrepareCreatesWorktreeWithDefaultBranchName(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -130,6 +135,7 @@ func TestPrepareCreatesWorktreeWithDefaultBranchName(t *testing.T) {
 }
 
 func TestPrepareReusesUnrecordedMatchingTypedWorktree(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -151,6 +157,7 @@ func TestPrepareReusesUnrecordedMatchingTypedWorktree(t *testing.T) {
 }
 
 func TestPrepareRejectsUnownedTypedBranchBeforeWorktreeCreation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -170,6 +177,7 @@ func TestPrepareRejectsUnownedTypedBranchBeforeWorktreeCreation(t *testing.T) {
 }
 
 func TestPrepareRejectsUnownedTypedRemoteTrackingBranchBeforeWorktreeCreation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -192,6 +200,7 @@ func TestPrepareRejectsUnownedTypedRemoteTrackingBranchBeforeWorktreeCreation(t 
 }
 
 func TestPrepareRejectsRemoteBranchCreatedAfterLastFetch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	remote := t.TempDir()
@@ -224,6 +233,7 @@ func TestPrepareRejectsRemoteBranchCreatedAfterLastFetch(t *testing.T) {
 }
 
 func TestPrepareReusesBranchWithDurableOwnership(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -242,6 +252,7 @@ func TestPrepareReusesBranchWithDurableOwnership(t *testing.T) {
 }
 
 func TestStatusUsesExpectedTypedBranchForMissingWorkspace(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -256,6 +267,7 @@ func TestStatusUsesExpectedTypedBranchForMissingWorkspace(t *testing.T) {
 }
 
 func TestPrepareReusesExistingMatchingWorktreeAndReportsDirty(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -281,6 +293,7 @@ func TestPrepareReusesExistingMatchingWorktreeAndReportsDirty(t *testing.T) {
 }
 
 func TestPrepareRejectsBranchCheckedOutElsewhere(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -295,6 +308,7 @@ func TestPrepareRejectsBranchCheckedOutElsewhere(t *testing.T) {
 }
 
 func TestStatusAndPlanCleanForMissingDirtyAndCleanWorkspaces(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -342,6 +356,7 @@ func TestStatusAndPlanCleanForMissingDirtyAndCleanWorkspaces(t *testing.T) {
 }
 
 func TestPlanCleanRefusesProtectedAndUnmergedByDefault(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	workspacePath := filepath.Join(repo.path, ".tao", "workspaces", "current-plan")
@@ -399,6 +414,7 @@ func TestPlanCleanRefusesProtectedAndUnmergedByDefault(t *testing.T) {
 }
 
 func TestListReturnsConfiguredWorkspaceWorktrees(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -448,6 +464,7 @@ func TestDirectChildResolvesSymlinkedRoot(t *testing.T) {
 }
 
 func TestCleanRemovesCleanWorkspaceAndRefusesDirtyWithoutForce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -505,6 +522,7 @@ func (g *recordingCleanupMutation) RemoveWorktree(_ context.Context, path string
 }
 
 func TestCleanEnforcesPolicyBeforeGitMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	all := CleanOptions{Force: true, ForceActive: true, ForceDirty: true}
 	for _, tt := range []struct {

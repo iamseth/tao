@@ -7,9 +7,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRunGitFixturesDisableAutomaticMaintenance(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Run("recovery", func(t *testing.T) {
 		repo, _, _, _ := newRebaseRecoveryRepo(t, false)
 		assertRunGitMaintenanceDisabled(t, repo)
@@ -35,6 +38,7 @@ func TestRunGitFixturesDisableAutomaticMaintenance(t *testing.T) {
 }
 
 func TestSliceRepoTemplateCopies(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	first, second := initSliceCompletionRepo(t), initSliceCompletionRepo(t)
 	for _, root := range []string{first, second} {
@@ -114,6 +118,7 @@ func TestSliceRepoTemplateCopies(t *testing.T) {
 }
 
 func TestSliceRepoTemplateConcurrentAndFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	var cache sliceRepoTemplate
 	t.Cleanup(func() {

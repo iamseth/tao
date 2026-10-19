@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestAppendVerificationRepairRefusesNonCodeRecoveryBeforeGit(t *testing.T) {
@@ -215,6 +217,7 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 }
 
 func TestExecuteAutomaticVerificationRepair(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name         string
@@ -436,6 +439,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 }
 
 func TestRecoveryFinalVerificationDoesNotScheduleRepair(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, operation := range []string{"zero-slice PR recovery", "resume review"} {
 		t.Run(operation, func(t *testing.T) {
@@ -546,6 +550,7 @@ func (r detachedRepairRecord) AppendVerificationRepair(request plan.Verification
 }
 
 func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, failReload := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reload error=%t", failReload), func(t *testing.T) {

@@ -14,11 +14,14 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // TestLifecycleReviewReworkRebase exercises rebase settlement and review
 // serialization against real Git and persisted plan artifacts.
 func TestLifecycleReviewReworkRebase(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newLifecycleGitFixture(t, "lifecycle-incident")
 	fixture.completeOriginalSlice(t)
@@ -66,6 +69,7 @@ func TestLifecycleReviewReworkRebase(t *testing.T) {
 }
 
 func TestLifecycleReviewReworkRebaseRecoveryVariants(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, test := range []struct {
 		name        string

@@ -15,9 +15,12 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestVerifyCompletedBranchCache(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
 	shared := t.TempDir()
 	t.Setenv("GOLANGCI_LINT_CACHE", shared)
@@ -386,6 +389,7 @@ func TestVerifyCompletedBranchRefusesToRunWhenLiveHeadCannotBeResolved(t *testin
 }
 
 func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@false\n"), 0o600); err != nil {
@@ -437,6 +441,7 @@ func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) 
 }
 
 func TestReverifyCompletedRunReplacesEvidenceAtSameHeadWithoutAppendingSlice(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, spelling := range []string{"worktree", "isolated"} {
 		t.Run(spelling, func(t *testing.T) { testReverifyPlacement(t, spelling) })
@@ -485,6 +490,7 @@ func testReverifyPlacement(t *testing.T, spelling string) {
 }
 
 func TestReverifyCompletedRunReplacesEvidenceAtAdvancedHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	failedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
@@ -519,6 +525,7 @@ func TestReverifyCompletedRunReplacesEvidenceAtAdvancedHead(t *testing.T) {
 }
 
 func TestAdvancedHeadReverifyFailurePreservesRepairAttemptCount(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	failedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))

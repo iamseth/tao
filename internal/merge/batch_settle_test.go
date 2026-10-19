@@ -11,6 +11,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type fakeBatchSettlementWorkspace struct {
@@ -34,6 +36,7 @@ func (f *fakeBatchSettlementWorkspace) ClearActive(id string) error {
 }
 
 func TestBatchSettleRealGitRemovesSquashSourceOnlyAfterRecording(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	// Move the fixture into Tao's managed workspace namespace so the real

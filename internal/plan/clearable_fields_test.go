@@ -67,11 +67,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // TestClearableFieldsRoundTrip verifies that each intended-clearable field can
 // be zeroed through the real WriteState write path and reloads as the zero value.
 func TestClearableFieldsRoundTrip(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	type roundTripCase struct {
 		name  string
@@ -214,6 +217,7 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 }
 
 func TestSliceVerificationReplacementDoesNotRetainPriorRunFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	record := sliceVerificationRecord(t)
 	first := testSliceVerificationSnapshot()
@@ -321,6 +325,7 @@ func TestDecisionMetadataPreservesByDefaultWithOmitEmpty(t *testing.T) {
 }
 
 func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	field, ok := reflect.TypeOf(Slice{}).FieldByName("BlockerNote")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
@@ -377,6 +382,7 @@ func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {
 }
 
 func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	field, ok := reflect.TypeOf(PlanState{}).FieldByName("CurrentSlice")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
@@ -426,6 +432,7 @@ func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
 }
 
 func TestMigratedFinalizationFailureRequiresDeclaredClear(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	field, ok := reflect.TypeOf(PlanState{}).FieldByName("FinalizationFailure")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
@@ -474,6 +481,7 @@ func TestMigratedFinalizationFailureRequiresDeclaredClear(t *testing.T) {
 }
 
 func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	reviewType := reflect.TypeOf(PlanReview{})
 	for _, fieldName := range []string{"Verdict", "Summary", "FindingsCount", "Findings", "CommitMessage", "ReviewedAt"} {
@@ -541,6 +549,7 @@ func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
 }
 
 func TestRecordWorkspaceReadyExplicitlyClearsPersistedDependencyEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	state := clearableContractBaseState()
@@ -578,6 +587,7 @@ func TestRecordWorkspaceReadyExplicitlyClearsPersistedDependencyEvidence(t *test
 }
 
 func TestMigratedWorkspaceFieldsRequireDeclaredClear(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		fieldName string

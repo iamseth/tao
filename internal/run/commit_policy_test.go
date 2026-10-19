@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRunExecutionModeCurrentSkipsCheckoutAfterCompletion(t *testing.T) {
@@ -179,6 +181,7 @@ func TestServiceExecuteUsesRequestCommitPolicy(t *testing.T) {
 }
 
 func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStart(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()

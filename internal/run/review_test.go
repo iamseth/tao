@@ -21,6 +21,8 @@ import (
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestReviewBasePresentationParity(t *testing.T) {
@@ -532,6 +534,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 }
 
 func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const (
 		wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): correct typed proposal\",\"body\":\"What:\\nCorrect the typed proposal.\\n\\nWhy:\\nMatch the reviewed plan.\"}}\n```"
@@ -589,6 +592,7 @@ func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testin
 }
 
 func TestHistoricalProposalTelemetryDoesNotAuthorizeAnotherSession(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
 		for _, valid := range []bool{true, false} {
@@ -645,6 +649,7 @@ func TestHistoricalProposalTelemetryDoesNotAuthorizeAnotherSession(t *testing.T)
 }
 
 func TestCreateReviewWithAgentSessionConsumesFreshCorrectionBeforeHardInterruption(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): wrong typed proposal\",\"body\":\"What:\\nPropose a message.\\n\\nWhy:\\nExercise interruption recovery.\"}}\n```"
 	planDir := t.TempDir()
@@ -752,6 +757,7 @@ func TestCreateReviewWithAgentSessionSkipsCorrectionForValidTypedApproval(t *tes
 }
 
 func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const initial = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":\"malformed\"}\n```"
 	planDir := t.TempDir()
@@ -807,6 +813,7 @@ func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T
 }
 
 func TestCreateReviewWithAgentSessionReinspectsFailedCorrectionBeforeClassifyingOutput(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): wrong typed proposal\",\"body\":\"What:\\nPropose a message.\\n\\nWhy:\\nExercise correction boundary recovery.\"}}\n```"
 
@@ -1067,6 +1074,7 @@ func persistReviewState(t *testing.T, planDir string, detail *plan.PlanDetail) {
 }
 
 func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	newService := func(t *testing.T, runner CommandRunner, git reviewGit, creator ReviewCreator, out *bytes.Buffer) (Service, Request) {
 		t.Helper()
@@ -1984,6 +1992,7 @@ func TestReviewCreatorDefaultsFromAgentCapabilities(t *testing.T) {
 }
 
 func TestReviewRangePresenterResolvedRangeAndOrdering(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tt := range []struct {
 		name, live, workspace, runBase, repoBase, explicitHead, want string

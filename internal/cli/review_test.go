@@ -18,6 +18,8 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestStalenessReportsChangedExpectedFilesSinceBaseCommit(t *testing.T) {
@@ -293,6 +295,7 @@ func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
 }
 
 func TestReviewRunTriggersFreshReview(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tt := range []struct {
 		name       string
 		modelFlag  []string

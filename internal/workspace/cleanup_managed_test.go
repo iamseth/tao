@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // commitOnBranch creates branch from base, adds one commit holding file=content,
@@ -24,6 +26,7 @@ func commitOnBranch(t *testing.T, repoPath string, branch string, file string, c
 }
 
 func TestPlanManagedCleanupExcludesIntegrationWorktrees(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -44,6 +47,7 @@ func TestPlanManagedCleanupExcludesIntegrationWorktrees(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupDecidesByGitState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	physicalRoot, err := filepath.EvalSymlinks(repo.path)
@@ -197,6 +201,7 @@ func TestPlanIntegrationCleanupDecidesByGitState(t *testing.T) {
 }
 
 func TestListIntegrationsDiscoversRegisteredNamespacePath(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -217,6 +222,7 @@ func TestListIntegrationsDiscoversRegisteredNamespacePath(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupPreservesCurrentBranch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -240,6 +246,7 @@ func TestPlanIntegrationCleanupPreservesCurrentBranch(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupRefusesMismatchedWorktreeBranch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -256,6 +263,7 @@ func TestPlanIntegrationCleanupRefusesMismatchedWorktreeBranch(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupExcludesActiveUnregisteredDirectory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -270,6 +278,7 @@ func TestPlanIntegrationCleanupExcludesActiveUnregisteredDirectory(t *testing.T)
 }
 
 func TestPlanManagedCleanupIncludesOnlyExactOwnedAndLegacyBranches(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -318,6 +327,7 @@ func TestPlanManagedCleanupIncludesOnlyExactOwnedAndLegacyBranches(t *testing.T)
 }
 
 func TestPlanManagedCleanupDecidesByGitState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -411,6 +421,7 @@ func TestPlanManagedCleanupDecidesByGitState(t *testing.T) {
 }
 
 func TestCleanManagedRechecksWorktreeCleanliness(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	setup := func(t *testing.T) (*Manager, ManagedCleanup, string) {
 		t.Helper()
@@ -541,6 +552,7 @@ func TestCleanManagedRefusesUnmergedBeforeGitMutation(t *testing.T) {
 }
 
 func TestPlanManagedCleanupForceRemovesUnmerged(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
@@ -568,6 +580,7 @@ func TestPlanManagedCleanupForceRemovesUnmerged(t *testing.T) {
 }
 
 func TestManagedBranchPrefix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	manager := newTestManager(t, newTestRepo(t).path)
 	if got := manager.ManagedBranchPrefix(); got != "tao/" {

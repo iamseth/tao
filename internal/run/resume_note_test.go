@@ -13,6 +13,8 @@ import (
 
 	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func resumeNoteTempDir(t *testing.T) string {
@@ -55,6 +57,7 @@ func resumeNoteFixture(t *testing.T) (ResumeNoteStore, *plan.PlanDetail, *plan.P
 }
 
 func TestResumeNoteRoundTrip(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	before, _ := json.Marshal(detail)
@@ -116,6 +119,7 @@ func TestResumeNoteRoundTrip(t *testing.T) {
 }
 
 func TestResumeNoteFreshness(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	store, detail, record := resumeNoteFixture(t)
 	if err := store.Save(detail, "001-a", "first block"); err != nil {
@@ -176,6 +180,7 @@ func cloneResumeNoteDetail(t *testing.T, detail *plan.PlanDetail) *plan.PlanDeta
 }
 
 func TestReadResumeNoteFileBounds(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, test := range []struct {
 		name, text string
@@ -239,6 +244,7 @@ func resumeNoteEntryPath(t *testing.T, store ResumeNoteStore) string {
 }
 
 func TestResumeNoteCorruptCache(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []string{"json", "oversized", "empty", "text-bound", "version", "unknown", "trailer", "unreadable", "directory", "symlink", "fifo"} {
 		t.Run(kind, func(t *testing.T) {
@@ -316,6 +322,7 @@ func TestResumeNoteCorruptCache(t *testing.T) {
 }
 
 func TestResumeNoteUnsafeStorage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []string{"control", "execution", "workspace", "git-ancestor", "home-link", "ancestor-link", "cache-link", "entry-link", "public-cache", "parent-file"} {
 		t.Run(kind, func(t *testing.T) {
@@ -388,6 +395,7 @@ func TestResumeNoteUnsafeStorage(t *testing.T) {
 }
 
 func TestResumeNoteEventFreshness(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	if err := store.Save(detail, "001-a", "context"); err != nil {
@@ -460,6 +468,7 @@ func TestResumeNoteAmbiguousFreshness(t *testing.T) {
 }
 
 func TestResumeNoteRestartCompletionAndFailedDeletion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprint("restart=", restart), func(t *testing.T) {

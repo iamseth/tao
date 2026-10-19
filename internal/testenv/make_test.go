@@ -12,7 +12,8 @@ import (
 
 // Exercise the real recipe without recursively running the Go test suite.
 func TestMakeTestEnvironment(t *testing.T) {
-	for _, mode := range []string{"success", "explicit", "test-failure", "setup-failure", "termination", "build", "contended"} {
+	SkipIfShort(t)
+	for _, mode := range []string{"success", "explicit", "test-failure", "setup-failure", "termination", "build", "contended", "full"} {
 		t.Run(mode, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "fixture with spaces")
 			mustMakeDir(t, root)
@@ -71,7 +72,7 @@ fi
 			for _, entry := range os.Environ() {
 				key, _, _ := strings.Cut(entry, "=")
 				switch key {
-				case "HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GOCACHE", "GOPATH", "GOMODCACHE", "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "GO_TEST_FLAGS", "SHELL":
+				case "HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GOCACHE", "GOPATH", "GOMODCACHE", "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "GO_TEST_FLAGS", "TEST_TIER_FLAGS", "SHELL":
 					continue
 				}
 				env = append(env, entry)
@@ -88,8 +89,11 @@ fi
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				target := "test"
-				if mode == "build" {
+				switch mode {
+				case "build":
 					target = "build"
+				case "full":
+					target = "test-full"
 				}
 				cmd := exec.CommandContext(ctx, "make", target, "GO_TEST_FLAGS=-count=1 -run 'Test With Spaces'")
 				cmd.Dir, cmd.Env = root, env
@@ -133,7 +137,12 @@ fi
 					}
 					assertMakeTestToolchainPath(t, strings.TrimSuffix(readMakeFile(t, filepath.Join(root, "path")), "\n"), tools)
 					args := readMakeFile(t, filepath.Join(root, "arguments"))
-					if args != "test\n-count=1\n-run\nTest With Spaces\n-coverprofile=coverage.out\n./...\n" {
+					// make test runs the fast tier; test-full runs every test.
+					tier := "-short\n"
+					if mode == "full" {
+						tier = ""
+					}
+					if args != "test\n"+tier+"-count=1\n-run\nTest With Spaces\n-coverprofile=coverage.out\n./...\n" {
 						t.Errorf("arguments: %q", args)
 					}
 					if !failed {

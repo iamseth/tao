@@ -16,6 +16,8 @@ import (
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type sliceCompletionStore struct {
@@ -89,6 +91,7 @@ func TestExpectedPlanCommitPathsIncludesOnlyCompletedAndSelectedSlices(t *testin
 }
 
 func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{}
@@ -135,6 +138,7 @@ func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T
 }
 
 func TestSliceCompletionRejectsAbandonmentSettledBeforeRefreshedMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, test := range []struct {
 		name   string
@@ -208,6 +212,7 @@ func TestSliceCompletionRejectsAbandonmentSettledBeforeRefreshedMutation(t *test
 }
 
 func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOriginalParent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
@@ -263,6 +268,7 @@ func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOrigina
 }
 
 func TestInterruptedSliceCompletionReloadBeforeParentExitIsRecoverable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
@@ -317,6 +323,7 @@ func countPlanEvents(events []plan.Event, eventType string) int {
 }
 
 func TestHistoricalSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{failState: true})
@@ -357,6 +364,7 @@ func TestHistoricalSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testi
 }
 
 func TestHistoricalSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failSlicesAt: 2}
@@ -397,6 +405,7 @@ func TestHistoricalSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t 
 }
 
 func TestHistoricalSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failEvent: true}
@@ -439,6 +448,7 @@ func TestHistoricalSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
 }
 
 func TestSliceCompletionRetryConsumesSettledJournalState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	plansDir := t.TempDir()
@@ -551,6 +561,7 @@ func TestReviewStateReadSettlesPendingJournal(t *testing.T) {
 }
 
 func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
@@ -589,6 +600,7 @@ func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
 }
 
 func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
@@ -614,6 +626,7 @@ func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
 }
 
 func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name          string
@@ -678,6 +691,7 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 }
 
 func TestSliceCompletionRejectsThenAcceptsProposalBeforeIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
@@ -714,6 +728,7 @@ func TestSliceCompletionRejectsThenAcceptsProposalBeforeIntent(t *testing.T) {
 }
 
 func TestSliceCompletionRejectsReservedTrailerBeforeIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
@@ -732,6 +747,7 @@ func TestSliceCompletionRejectsReservedTrailerBeforeIntent(t *testing.T) {
 }
 
 func TestHistoricalSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failState: true}
@@ -761,6 +777,7 @@ func TestHistoricalSliceCompletionConflictingProposalCannotReuseIntent(t *testin
 }
 
 func TestHistoricalSliceCompletionRecoversLegacyIntentWithoutMessageValidation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
@@ -944,6 +961,7 @@ func assertSliceStagingCommitted(t *testing.T, fixture SliceCompletionRequest, r
 }
 
 func TestSliceCompletionCommitsGitRmDeletionWithTrackedModification(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/removed.go": "package pkg\n"})
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
@@ -969,6 +987,7 @@ func TestSliceCompletionCommitsGitRmDeletionWithTrackedModification(t *testing.T
 }
 
 func TestSliceCompletionStagesTrackedChangesUnderNewlyIgnoredDirectory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{
 		".gitignore":          "binary.dat\n",
@@ -1003,6 +1022,7 @@ func TestSliceCompletionStagesTrackedChangesUnderNewlyIgnoredDirectory(t *testin
 }
 
 func TestSliceCompletionReplaysPartiallyStagedFailedAttemptAtSameIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n"})
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
@@ -1050,6 +1070,7 @@ func TestSliceCompletionReplaysPartiallyStagedFailedAttemptAtSameIntent(t *testi
 }
 
 func TestSliceCompletionStagesCollapsedUntrackedDirectory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, root := sliceStagingFixture(t, nil)
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
@@ -1066,6 +1087,7 @@ func TestSliceCompletionStagesCollapsedUntrackedDirectory(t *testing.T) {
 }
 
 func TestSliceCompletionReaddsWorktreeCopyOfStagedDeletion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n", "pkg/cache/other.go": "package cache\n"})
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
@@ -1091,6 +1113,7 @@ func TestSliceCompletionReaddsWorktreeCopyOfStagedDeletion(t *testing.T) {
 }
 
 func TestSliceCompletionStagingFailureNamesExecutionRootAndMustChangeGuidance(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n"})
 	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // modified\n")

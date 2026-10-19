@@ -22,6 +22,7 @@ func git(t *testing.T, root string, args ...string) string {
 }
 
 func TestSetupGit(t *testing.T) {
+	SkipIfShort(t)
 	hostile := t.TempDir()
 	config := "[gc]\n auto = 987\n[maintenance]\n auto = true\n[commit]\n gpgsign = true\n[init]\n defaultBranch = hostile\n"
 	for _, name := range []string{".gitconfig", "system", "global", "git/config"} {

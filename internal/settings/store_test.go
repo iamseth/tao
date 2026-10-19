@@ -14,6 +14,8 @@ import (
 	"github.com/iamseth/tao/internal/atomicfile"
 	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func put(t *testing.T, path, content string) {
@@ -27,6 +29,7 @@ func put(t *testing.T, path, content string) {
 }
 
 func TestUnsafeDocumentsNeverOverwritten(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, data := range []string{
 		`{"schema":"future","settings":{}}`,
 		`{"schema":"tao.config.v1","settings":[]}`,
@@ -59,6 +62,7 @@ func TestUnsafeDocumentsNeverOverwritten(t *testing.T) {
 }
 
 func TestNativeRoundTripsAndScopes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home := t.TempDir()
 	s := NewService(home, runtimeconfig.LoadEnv(nil))
 	ctx := context.Background()
@@ -137,6 +141,7 @@ func TestRepositoryIdentityLegacyAndMetadata(t *testing.T) {
 }
 
 func TestConcurrentEditsCancellationAndAtomicFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home := t.TempDir()
 	s := NewService(home, runtimeconfig.LoadEnv(nil))
 	target := Target{Global: true}

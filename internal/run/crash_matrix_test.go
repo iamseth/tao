@@ -15,9 +15,12 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/durableintent/crashfixture"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestCompleteVerifiedCrashMatrix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, outcome := range []string{plan.SliceCompletionCommitted, plan.SliceCompletionNoChanges, plan.SliceCompletionManualUncommitted} {
 		points := []string{"snapshot", "intent", "settlement"}
@@ -160,6 +163,7 @@ func TestCompleteVerifiedCrashMatrix(t *testing.T) {
 }
 
 func TestCompleteVerifiedRecoveryRefusesExactBoundaryDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, drift := range []string{"message", "parent", "worktree", "proposal"} {
 		t.Run(drift, func(t *testing.T) {
@@ -217,6 +221,7 @@ func TestCompleteVerifiedRecoveryRefusesExactBoundaryDrift(t *testing.T) {
 }
 
 func TestRecoverCommitCrashMatrix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name          string
@@ -266,6 +271,7 @@ func TestRecoverCommitCrashMatrix(t *testing.T) {
 }
 
 func TestRecoverCommitRefusesParentMismatch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.SourceTarget)
@@ -279,6 +285,7 @@ func TestRecoverCommitRefusesParentMismatch(t *testing.T) {
 }
 
 func TestRecoverCommitRefusesMessageMismatch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.SourceTarget)
@@ -292,6 +299,7 @@ func TestRecoverCommitRefusesMessageMismatch(t *testing.T) {
 }
 
 func TestRecoverCommitRefusesDirtyWorktreeWithCommitCandidates(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.SourceTarget)

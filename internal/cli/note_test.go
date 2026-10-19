@@ -23,6 +23,8 @@ import (
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type fakeNoteRegistry struct {
@@ -459,6 +461,7 @@ func TestNotePipedAndInteractiveInputAndRepoSelection(t *testing.T) {
 }
 
 func TestNoteRunRejectsConcurrentSourceMutations(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main"}
 	for _, mutation := range []string{"edit", "archive"} {
@@ -698,6 +701,7 @@ func TestNoteRunRejectsInvalidFlagsBeforePromotion(t *testing.T) {
 }
 
 func TestNoteRunRejectsConsumedSnapshotBeforePromotion(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	for _, key := range []string{
 		runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvModel, runtimeconfig.EnvExecutionMode, runtimeconfig.EnvReworkEscalationFromAttempt,
@@ -746,6 +750,7 @@ func TestNoteRunRejectsConsumedSnapshotBeforePromotion(t *testing.T) {
 }
 
 func TestNoteRunGenerationTelemetrySurvivesHandoff(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
 		t.Run(string(kind), func(t *testing.T) {
 			clearTaoEnv(t)
@@ -883,6 +888,7 @@ func TestNoteRunGenerationTelemetrySurvivesHandoff(t *testing.T) {
 }
 
 func TestNoteRunGeneratedApprovalContracts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, test := range []struct {
 		name     string
 		invalid  bool
@@ -1031,6 +1037,7 @@ func TestNoteRunGeneratedApprovalContracts(t *testing.T) {
 }
 
 func TestNoteRunFailureBoundaries(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo"}
 	newOpenNote := func(t *testing.T) (App, string, *bytes.Buffer) {
@@ -1468,6 +1475,7 @@ func TestNotePlannerRoutingFlagsOnlyRun(t *testing.T) {
 }
 
 func TestNoteRunPlannerRoutingPostPlanFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mode := range []string{"randomized", "shadow"} {
 		for _, failure := range []string{"append", "link", "held lock"} {
 			t.Run(mode+"/"+failure, func(t *testing.T) {
@@ -1548,6 +1556,7 @@ func TestNoteRunPlannerRoutingPostPlanFailure(t *testing.T) {
 }
 
 func TestNoteRunPlannerRoutingSnapshotAdmission(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name, mode, arms, floor, override, wantKey string
 		wantRouting                                bool

@@ -17,6 +17,8 @@ import (
 	"github.com/iamseth/tao/internal/planning"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPlannerRoutingTypedAssignment(t *testing.T) {
@@ -130,6 +132,7 @@ func holdPlannerRouteLock(t *testing.T, dir string) string {
 }
 
 func TestNoteRunPlannerRoutingHeldLock(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mode := range []string{"shadow", "randomized"} {
 		t.Run(mode, func(t *testing.T) {
 			app, meta, id, _, errOut := noteRoutingTestApp(t)

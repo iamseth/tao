@@ -16,9 +16,12 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRepoListAndShow(t *testing.T) {
+	testenv.SkipIfShort(t)
 	dataHome := t.TempDir()
 	t.Setenv("TAO_DATA_HOME", dataHome)
 	root := initTestGitRepo(t)
@@ -53,6 +56,7 @@ func TestRepoListAndShow(t *testing.T) {
 }
 
 func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
+	testenv.SkipIfShort(t)
 	dataHome := t.TempDir()
 	t.Setenv("TAO_DATA_HOME", dataHome)
 	root := initTestGitRepo(t)
@@ -122,6 +126,7 @@ func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
 }
 
 func TestRepoConfigReviewAgent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	t.Chdir(initTestGitRepo(t))
 	registry := taodata.NewRegistry("")
@@ -175,6 +180,7 @@ func TestRepoConfigReviewAgent(t *testing.T) {
 }
 
 func TestRepoConfigModelDefaults(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	root := initTestGitRepo(t)
 	t.Chdir(root)
@@ -268,6 +274,7 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 }
 
 func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	ctx := context.Background()
 	home := t.TempDir()
@@ -396,6 +403,7 @@ func TestRepoDoctorReportsErrorsAndReturnsNonZero(t *testing.T) {
 }
 
 func TestRepoShowUsesSharedSelectorPolicy(t *testing.T) {
+	testenv.SkipIfShort(t)
 	dataHome := t.TempDir()
 	t.Setenv("TAO_DATA_HOME", dataHome)
 	registry := taodata.Registry{DataHome: dataHome}
@@ -504,6 +512,7 @@ func TestRepoUsageErrors(t *testing.T) {
 }
 
 func TestRepoConfigReworkDefaults(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	registry := taodata.NewRegistry("")
 	repo := taodata.Repo{Schema: taodata.RepoSchema, ID: "repo-a", Name: "repo", Root: initTestGitRepo(t)}

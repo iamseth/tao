@@ -78,6 +78,7 @@ func fixtureRunner(t *testing.T, fixture, scratch string, fail string) gitops.Ru
 // The clone seam copies local objects only; materialization uses the production
 // runner so this regression cannot hide inherited configuration from checkout.
 func TestFetchDoesNotExecuteInheritedHelpers(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture := snapshotFixture(t)
 	writeFixtureFile(t, fixture, ".gitattributes", []byte("payload filter=scout\n"))
 	writeFixtureFile(t, fixture, "payload", []byte("unfiltered source\n"))
@@ -147,6 +148,7 @@ func TestFetchDoesNotExecuteInheritedHelpers(t *testing.T) {
 }
 
 func TestFetch(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture := snapshotFixture(t)
 	source, err := ValidateSourceURL("https://example.com/Team/Repo.git")
 	if err != nil {
@@ -176,6 +178,7 @@ func TestFetch(t *testing.T) {
 }
 
 func TestFetchFailureCleanup(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture := snapshotFixture(t)
 	source, err := ValidateSourceURL("git@example.com:team/repo.git")
 	if err != nil {
@@ -334,6 +337,7 @@ func TestIsolatedGitEnv(t *testing.T) {
 }
 
 func TestDefaultRunnerDisablesTemplates(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture := snapshotFixture(t)
 	home := t.TempDir()
 	template := filepath.Join(home, "template")

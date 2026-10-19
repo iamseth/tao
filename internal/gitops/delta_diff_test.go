@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestDeltaDiffStreams(t *testing.T) {
@@ -73,6 +75,7 @@ func TestDeltaDiffStreams(t *testing.T) {
 }
 
 func TestDeltaDiffLinkedWorktreeReadOnly(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")

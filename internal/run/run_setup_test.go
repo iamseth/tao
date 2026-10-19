@@ -9,6 +9,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // TestPrepareRunExecutionResolvesAllRequiredDependencies asserts that a normal
@@ -86,6 +88,7 @@ func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *t
 }
 
 func TestPlacementNoticeMetadata(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tt := range []struct {
 		name, recorded string

@@ -12,6 +12,8 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestClassifySingleMergeIntentRecoveryDecisionTable(t *testing.T) {
@@ -122,6 +124,7 @@ func resolvedExactEditsFixture(t *testing.T) (realGitWorktree, *plan.PlanDetail,
 // while the separate plan worktree carries changes the durable resolution
 // never authorized.
 func TestInspectSingleMergeIntentRecoveryRefusesUnrelatedPlanWorktreeDirt(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, detail, service := resolvedExactEditsFixture(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "unrelated.txt"), []byte("scratch\n"), 0o600); err != nil {
@@ -154,6 +157,7 @@ func TestInspectSingleMergeIntentRecoveryRefusesUnrelatedPlanWorktreeDirt(t *tes
 }
 
 func TestInspectSingleMergeIntentRecoveryRecognizesExactResolvedEdits(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture, detail, service := resolvedExactEditsFixture(t)
 	recovery, err := service.InspectSingleMergeIntentRecovery(context.Background(), detail)
@@ -182,6 +186,7 @@ func TestInspectSingleMergeIntentRecoveryRecognizesExactResolvedEdits(t *testing
 }
 
 func TestRestartSingleMergeClearsOnlyObservedStaleIntent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -229,6 +234,7 @@ func TestRestartSingleMergeClearsOnlyObservedStaleIntent(t *testing.T) {
 }
 
 func TestRestartSingleMergeIsIdempotentAfterSuccessfulClear(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -251,6 +257,7 @@ func TestRestartSingleMergeIsIdempotentAfterSuccessfulClear(t *testing.T) {
 }
 
 func TestRestartSingleMergeInterruptedSettlementCannotRecommendOrPerformOrdinaryMerge(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -296,6 +303,7 @@ func TestRestartSingleMergeInterruptedSettlementCannotRecommendOrPerformOrdinary
 }
 
 func TestMergeAfterRestartRejectsChangedReviewedHeadStillBasedOnStaleParent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -338,6 +346,7 @@ func TestMergeAfterRestartRejectsChangedReviewedHeadStillBasedOnStaleParent(t *t
 }
 
 func TestRestartSingleMergeRecoversLegacyIntentWithoutResolution(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -379,6 +388,7 @@ func TestRestartSingleMergeRecoversLegacyIntentWithoutResolution(t *testing.T) {
 }
 
 func TestRestartSingleMergeConflictStillRequiresRebaseAndReview(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
@@ -406,6 +416,7 @@ func TestRestartSingleMergeConflictStillRequiresRebaseAndReview(t *testing.T) {
 }
 
 func TestRestartSingleMergeRecordsExactIntendedSquashInsteadOfClearing(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	parent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)

@@ -11,6 +11,8 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestAgentFactorySelectsIndependentReviewer(t *testing.T) {
@@ -32,6 +34,7 @@ func TestAgentFactorySelectsIndependentReviewer(t *testing.T) {
 }
 
 func TestAgentFactoryReviewLaunches(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	const output = "```tao-review-json\n{\"verdict\":\"comment\",\"summary\":\"Reviewed.\",\"findings\":[]}\n```"
 	for _, implementation := range []AgentKind{AgentPi, AgentClaude} {
@@ -108,6 +111,7 @@ func TestAgentFactoryUnavailableReviewerDoesNotFallback(t *testing.T) {
 }
 
 func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, reviewer := range []AgentKind{AgentPi, AgentClaude} {
 		for _, cancel := range []bool{false, true} {

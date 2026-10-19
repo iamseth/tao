@@ -16,6 +16,8 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/workspace"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 var (
@@ -605,6 +607,7 @@ func TestBatchCoordinatorDryRunRemovesWorkspaceAfterCancellation(t *testing.T) {
 }
 
 func TestBatchCoordinatorDryRunCancellationDuringCreation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, phase := range []string{"initialization-locked", "incomplete", "missing-branch", "missing-head", "missing-path", "branch-only", "before-branch"} {
 		t.Run(phase, func(t *testing.T) {
@@ -678,6 +681,7 @@ func TestBatchCoordinatorDryRunCancellationDuringCreation(t *testing.T) {
 }
 
 func TestBatchCoordinatorDryRunPreservesExistingNamespaces(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []string{"locked-worktree", "unregistered-directory", "branch-only", "branch-elsewhere", "unrelated-worktree"} {
 		t.Run(kind, func(t *testing.T) {
@@ -725,6 +729,7 @@ func TestBatchCoordinatorDryRunPreservesExistingNamespaces(t *testing.T) {
 }
 
 func TestBatchCoordinatorDryRunPreservesUnexpectedCreationResources(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []string{"unregistered-directory", "unrelated-worktree", "branch-elsewhere"} {
 		t.Run(kind, func(t *testing.T) {

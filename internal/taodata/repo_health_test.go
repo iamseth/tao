@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRepoHealthCheckerClassifiesRepos(t *testing.T) {
+	testenv.SkipIfShort(t)
 	gitRoot := newGitRepo(t)
 	notGit := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "missing")

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestLatestPlanOwnedBlocker(t *testing.T) {
@@ -112,6 +114,7 @@ func TestWorktreeFingerprint(t *testing.T) {
 }
 
 func TestBlockSliceWithEvidencePersists(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

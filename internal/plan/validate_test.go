@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestValidatePlanVerificationSliceTiming(t *testing.T) {
@@ -407,6 +409,7 @@ func TestValidatePlanVerificationWarnsForOversizedSliceGuardrails(t *testing.T) 
 }
 
 func TestValidatePlanVerificationGateParity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tt := range []struct {
 		name        string

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/filelock"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func unlinkedRecord() Record {
@@ -50,6 +52,7 @@ func TestStoreCreateLoad(t *testing.T) {
 }
 
 func TestStoreCapacityBoundary(t *testing.T) {
+	testenv.SkipIfShort(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := NewStore(dir)
@@ -275,6 +278,7 @@ func TestStoreAppendOrderAndBounds(t *testing.T) {
 }
 
 func TestStoreHeldLock(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, operation := range []string{"create", "append", "link"} {
 		t.Run(operation, func(t *testing.T) {
 			s := NewStore(t.TempDir())
@@ -409,6 +413,7 @@ func (c *cancelAfterChecks) Err() error {
 }
 
 func TestStoreListCancellationAndLimit(t *testing.T) {
+	testenv.SkipIfShort(t)
 	dir := t.TempDir()
 	for i := range MaxRecords + 1 {
 		path := filepath.Join(dir, fmt.Sprintf("20260926-235959-%032x.json", i))

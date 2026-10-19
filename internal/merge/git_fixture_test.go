@@ -3,6 +3,8 @@ package merge
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func assertEffectiveGitSettings(t *testing.T, root string) {
@@ -18,6 +20,7 @@ func assertEffectiveGitSettings(t *testing.T, root string) {
 }
 
 func TestRealGitFixtureDisablesAutomaticMaintenance(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	integrationRoot := filepath.Join(t.TempDir(), "integration")

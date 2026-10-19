@@ -17,6 +17,8 @@ import (
 	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func newVerifiedCLICompletion(t *testing.T, policy string, commands ...string) (*plan.PlanRecord, []string) {
@@ -69,6 +71,7 @@ func reloadCLICompletion(t *testing.T, record *plan.PlanRecord) *plan.PlanDetail
 }
 
 func TestSliceCompleteObservedGatesAndOptionalClaims(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mode := range []string{"no edits", "commit", "manual", "claims"} {
 		t.Run(mode, func(t *testing.T) {
 			policy := "slice"
@@ -122,6 +125,7 @@ func TestSliceCompleteObservedGatesAndOptionalClaims(t *testing.T) {
 }
 
 func TestSliceCompleteRejectsInputsBeforeGates(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct{ name, claims, want string }{
 		{"forged source", `[{"command":"true","cwd":".","result":"passed","source":"tao"}]`, "unknown field"},
 		{"missing result", `[{"command":"true","cwd":"."}]`, "requires bounded"},
@@ -154,6 +158,7 @@ func TestSliceCompleteRejectsInputsBeforeGates(t *testing.T) {
 }
 
 func TestSliceCompleteFailureRepairAndRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	record, args := newVerifiedCLICompletion(t, "slice", "test -f repaired.go")
 	root := record.Detail().Slices.Slices[0].ExecutionRoot
 	var out bytes.Buffer
@@ -191,6 +196,7 @@ func TestSliceCompleteFailureRepairAndRecovery(t *testing.T) {
 }
 
 func TestSliceCompleteMechanicalCorrection(t *testing.T) {
+	testenv.SkipIfShort(t)
 	record, args := newVerifiedCLICompletion(t, "none", "go test pkg/example_test.go")
 	root := record.Detail().Slices.Slices[0].ExecutionRoot
 	writeCLICommitFile(t, root, "pkg/example_test.go", "package example\n")

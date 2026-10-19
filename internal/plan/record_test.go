@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSingleMergeReviewRequiredFilesValidation(t *testing.T) {
@@ -46,6 +48,7 @@ func TestSingleMergeReviewRequiredFilesValidation(t *testing.T) {
 }
 
 func TestPlanRecordClearSingleMergeIntentReplaysInterruptedJournalIdempotently(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, operation := range []string{"state", "remove"} {
 		t.Run(operation, func(t *testing.T) {
@@ -114,6 +117,7 @@ func TestPlanRecordClearSingleMergeIntentReplaysInterruptedJournalIdempotently(t
 }
 
 func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -161,6 +165,7 @@ func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testin
 }
 
 func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -207,6 +212,7 @@ func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
 }
 
 func TestRecordWorkspacePreparationTransitionsPreserveAndClearDependencyEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -285,6 +291,7 @@ func TestRecordWorkspacePreparationTransitionsPreserveAndClearDependencyEvidence
 }
 
 func TestRecordWorkspacePreparingRefreshesStaleDisjointWriter(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	initial := startSliceDetail(dir)
@@ -319,6 +326,7 @@ func TestRecordWorkspacePreparingRefreshesStaleDisjointWriter(t *testing.T) {
 }
 
 func TestRecordWorkspaceReadyRetryRecoversJournalWithoutPublishingFailedPostimage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -365,6 +373,7 @@ func TestRecordWorkspaceReadyRetryRecoversJournalWithoutPublishingFailedPostimag
 }
 
 func TestAdvanceWorkspaceHeadAdvancesExactBoundaryAndPreservesUnknownFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -423,6 +432,7 @@ func TestAdvanceWorkspaceHeadAdvancesExactBoundaryAndPreservesUnknownFields(t *t
 }
 
 func TestAdvanceWorkspaceHeadRejectsInvalidBoundary(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	t.Run("missing expected branch", func(t *testing.T) {
 		dir := t.TempDir()
@@ -499,6 +509,7 @@ func TestAdvanceWorkspaceHeadUsesExactBoundedValues(t *testing.T) {
 }
 
 func TestAdvanceWorkspaceHeadRejectsStaleConcurrentBoundaryChange(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	initial := startSliceDetail(dir)
@@ -527,6 +538,7 @@ func TestAdvanceWorkspaceHeadRejectsStaleConcurrentBoundaryChange(t *testing.T) 
 }
 
 func TestAdvanceWorkspaceHeadRetryRecoversJournalWithoutPublishingFailedPostimage(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -603,6 +615,7 @@ func TestRecordPRFeedbackTriageWritesStateAndEvent(t *testing.T) {
 }
 
 func TestRecordPRFeedbackTriageIsIdempotentForUnchangedThreadSet(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -630,6 +643,7 @@ func TestRecordPRFeedbackTriageIsIdempotentForUnchangedThreadSet(t *testing.T) {
 }
 
 func TestRecordPRFeedbackTriageSupersedesChangedThreadSet(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -662,6 +676,7 @@ func TestRecordPRFeedbackTriageSupersedesChangedThreadSet(t *testing.T) {
 }
 
 func TestReopenFromPullRequestConsumesThreadAcrossCompletedPRCycle(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
@@ -907,6 +922,7 @@ func TestRecordReviewRejectsUnsettledWorkWithoutMutation(t *testing.T) {
 }
 
 func TestReopenFromPullRequestRecordsTheRoundItCreated(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
@@ -957,6 +973,7 @@ func TestReopenFromPullRequestRecordsTheRoundItCreated(t *testing.T) {
 }
 
 func TestReopenFromPullRequestOmitsRoundEventForUnencodedSlices(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()

@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestProveRebaseReplayDoesNotRequireGlobalGitIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root, oldBase, _, oldHead := commitSeriesRepository(t)
 	runGitCommand(t, root, "checkout", "main")
@@ -29,6 +32,7 @@ func TestProveRebaseReplayDoesNotRequireGlobalGitIdentity(t *testing.T) {
 }
 
 func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)
@@ -62,6 +66,7 @@ func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
 }
 
 func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -102,6 +107,7 @@ func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T)
 }
 
 func TestCommitSeriesProofSurvivesConflictFreeLineShift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	assertCommitSeriesProofSurvivesRebase(t, rebaseProofFixture{
 		filename:    "lines.txt",
@@ -112,6 +118,7 @@ func TestCommitSeriesProofSurvivesConflictFreeLineShift(t *testing.T) {
 }
 
 func TestCommitSeriesProofSurvivesDuplicatePrependedBeforeEditedOccurrence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	assertCommitSeriesProofSurvivesRebase(t, rebaseProofFixture{
 		filename:    "duplicate.txt",
@@ -122,6 +129,7 @@ func TestCommitSeriesProofSurvivesDuplicatePrependedBeforeEditedOccurrence(t *te
 }
 
 func TestCommitSeriesProofSurvivesUniqueInsertionAmongDistantRepeats(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	assertCommitSeriesProofSurvivesRebase(t, rebaseProofFixture{
 		filename:    "repeats.txt",
@@ -174,6 +182,7 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 }
 
 func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -207,6 +216,7 @@ func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 }
 
 func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -278,6 +288,7 @@ func TestCommitSeriesProofRejectsAmbiguousEditContext(t *testing.T) {
 }
 
 func TestCommitSeriesProofChangesForSeriesDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)
@@ -336,6 +347,7 @@ func TestCommitSeriesProofChangesForSeriesDrift(t *testing.T) {
 }
 
 func TestCommitSeriesProofCoversEmptyRangeAndRejectsUnsupportedHistory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)
@@ -365,6 +377,7 @@ func TestCommitSeriesProofCoversEmptyRangeAndRejectsUnsupportedHistory(t *testin
 }
 
 func TestCommitSeriesTextV5Fingerprint(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := newBinaryProofRepository(t)
 	writeCommitSeriesFile(t, root, "edit.txt", "top\nold\nbottom\n")
@@ -405,6 +418,7 @@ func requireSeriesProof(t *testing.T, root, base, head string) CommitSeriesProof
 }
 
 func TestCommitSeriesBinaryReplay(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []string{"add", "modify", "delete", "mixed", "mode-only", "rename", "attribute"} {
 		t.Run(kind, func(t *testing.T) {
@@ -481,6 +495,7 @@ func TestCommitSeriesBinaryReplay(t *testing.T) {
 }
 
 func TestCommitSeriesBinaryEvidenceIdentity(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := newBinaryProofRepository(t)
 	for _, name := range []string{"left.bin", "right.bin"} {
@@ -530,6 +545,7 @@ func TestCommitSeriesBinaryEvidenceIdentity(t *testing.T) {
 }
 
 func TestProveRebaseReplayBinaryRefusalLeavesSourceUnchanged(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, kind := range []string{"conflict", "proof-mismatch"} {
 		t.Run(kind, func(t *testing.T) {

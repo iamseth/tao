@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestPlanSlugAcceptsMinuteAndSecondLevelIDs(t *testing.T) {
@@ -189,6 +191,7 @@ func TestGetPlanInputAcceptsPlanDirectoryAndFile(t *testing.T) {
 }
 
 func TestDeletePlanDeletesResolvedPlan(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string

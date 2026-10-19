@@ -13,9 +13,12 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestInspectSelectedTypedPlacement(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
@@ -49,6 +52,7 @@ func TestInspectSelectedTypedPlacement(t *testing.T) {
 }
 
 func TestInspectSelectedAuthorizesOnlyCleanDescendantBlockedRestart(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
@@ -265,6 +269,7 @@ func (r *rebaseRecoveryRecord) SettleWorkspaceRebase(expected plan.WorkspaceReba
 }
 
 func TestInspectRecordedWorkspaceRecoversIntentPersistedBeforeGitMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo, oldBase, oldHead, newBase := newRebaseRecoveryRepo(t, false)
 	intent := rebaseRecoveryIntent(t, repo, oldBase, oldHead, newBase)
@@ -285,6 +290,7 @@ func TestInspectRecordedWorkspaceRecoversIntentPersistedBeforeGitMutation(t *tes
 }
 
 func TestInspectRecordedWorkspaceRecoversIntentAfterConflictAbort(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo, oldBase, oldHead, newBase := newRebaseRecoveryRepo(t, true)
 	intent := rebaseRecoveryIntent(t, repo, oldBase, oldHead, newBase)

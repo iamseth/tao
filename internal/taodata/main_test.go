@@ -28,6 +28,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestGitEnvironment(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home, xdg, config := os.Getenv("HOME"), os.Getenv("XDG_CONFIG_HOME"), os.Getenv("GIT_CONFIG_GLOBAL")
 	if home == "" || xdg == "" || config == "" || os.Getenv("GIT_CONFIG_NOSYSTEM") != "1" {
 		t.Fatal("shared Git bootstrap environment is missing")

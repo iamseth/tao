@@ -26,6 +26,8 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestMergeSessionPromptCapture(t *testing.T) {
@@ -270,6 +272,7 @@ func TestSingleMergeReadOnlyGitProbePassesInsideShippedConfinement(t *testing.T)
 }
 
 func TestSingleMergeReadOnlyGitProbeFailsClosedUnderDenyAllSandbox(t *testing.T) {
+	testenv.SkipIfShort(t)
 	confiner, err := singleMergeFilesystemConfinementExecutable()
 	if err != nil {
 		if runtime.GOOS == "linux" && os.Getenv("TAO_REQUIRE_CONFINEMENT_TESTS") == "1" {
@@ -398,6 +401,7 @@ exec "$TAO_TEST_REAL_CONFINER" "$@"
 }
 
 func TestSingleMergePreflightUsesResolverModel(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fakeConfinementExecutable(t)
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	original := agent.DefaultProcessStarter
@@ -425,6 +429,7 @@ func TestSingleMergePreflightUsesResolverModel(t *testing.T) {
 }
 
 func TestSingleMergePreflightProbesDistinctEffectiveModels(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tt := range []struct {
 		name   string
 		models runtimeconfig.ModelSelection
@@ -461,6 +466,7 @@ func TestSingleMergePreflightProbesDistinctEffectiveModels(t *testing.T) {
 }
 
 func TestSingleMergeRejectedReviewerPreservesResolutionAuthority(t *testing.T) {
+	testenv.SkipIfShort(t)
 	var models []string
 	installSingleMergeReadinessFixture(t, &models, "rejected")
 	fixture, request, git := preparedSingleResolutionFixture(t)
@@ -1024,6 +1030,7 @@ func TestSingleMergeConfinementProbeOutputRetainsOnlyBoundedPrefix(t *testing.T)
 }
 
 func TestSingleMergeConfinementProbeKeepsIntegrationReadOnlyAndRuntimeWritable(t *testing.T) {
+	testenv.SkipIfShort(t)
 	integrationRoot, protectedRoot := t.TempDir(), t.TempDir()
 	if err := probeSingleMergeFilesystemConfinementWithTimeout(context.Background(), singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot, allowEdits: true,
@@ -1080,6 +1087,7 @@ func TestSingleMergePiProjectionRejectsMalformedConfigurationWithoutCopyingIt(t 
 }
 
 func TestSingleMergePiRPCProjectsConfigAndResourcesIntoEphemeralRuntime(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_AGENT", "pi")
 	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
 	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
@@ -1237,6 +1245,7 @@ func directoryEntryNames(t *testing.T, root string) []string {
 }
 
 func TestSingleMergePiRuntimeCleansAfterCancellationAndTimeout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
 	if err := probeSingleMergeFilesystemConfinement(context.Background(), singleMergeFilesystemConfinement{
 		protectedPaths: []string{protectedRoot}, integrationRoot: integrationRoot,
@@ -1325,6 +1334,7 @@ esac
 }
 
 func TestSingleMergePiPreflightRejectsRPCStartupAfterVersionWouldSucceed(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_AGENT", "pi")
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	integrationRoot, protectedRoot := singleMergeAgentTestBoundary(t)
@@ -1373,6 +1383,7 @@ printf ':fixture-readiness-tail"}\n'
 }
 
 func TestSingleMergeAgentSessionMissingConfinerDoesNotStartProvider(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_AGENT", "claude")
 	const unavailable = "protect provider filesystem boundary: bubblewrap is unavailable; install bwrap and run tao doctor"
 	setConfinementExecutable(t, func() (string, error) { return "", errors.New(unavailable) })
@@ -1427,6 +1438,7 @@ func TestSingleMergeFilesystemConfinementExecutableDefaultDiscovery(t *testing.T
 }
 
 func TestSingleMergeAgentSessionUnavailableConfinementDoesNotStartProvider(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Setenv("TAO_AGENT", "claude")
 	probeErr := errors.New("bubblewrap unavailable")
 	starts := 0
@@ -1662,6 +1674,7 @@ printf runtime >"$TMPDIR/reviewer-scratch" || exit 24`
 }
 
 func TestSingleMergeProcessSandboxPermitsReadOnlyGitAndDeviceWrites(t *testing.T) {
+	testenv.SkipIfShort(t)
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Skipf("git unavailable: %v", err)
@@ -1736,6 +1749,7 @@ if printf edited >"$1/README.md" 2>/dev/null; then exit 39; fi`
 }
 
 func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "claude")
 	starts := 0
@@ -1768,6 +1782,7 @@ func TestSingleMergeAgentSessionStartsFreshProviderForResolverAndReviewer(t *tes
 }
 
 func TestFreshSingleMergeAgentSessionDefersConfigurationAndStartsEachOperationOnce(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fakeConfinementExecutable(t)
 	t.Setenv("TAO_AGENT", "invalid")
 	deferred := NewFreshSingleMergeAgentSession(SingleMergeAgentSessionConfig{RuntimeEnv: mergeTestRuntimeEnv()})

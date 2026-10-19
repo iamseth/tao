@@ -11,6 +11,8 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestReportIgnoresCapturedPrompts(t *testing.T) {
@@ -54,6 +56,7 @@ func TestReportRequiresOnePlanAndExplicitOutput(t *testing.T) {
 }
 
 func TestReportStdoutIsPureMarkdownInBothModesAndReadablePhases(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, status := range []string{plan.StatusPlanned, plan.StatusInProgress, plan.StatusInReview, plan.StatusReviewed, plan.StatusChangesRequested, plan.StatusCompleted} {
 		t.Run(status, func(t *testing.T) {
 			fixture := newRunPlanFixture(t, status, []string{"slice-a"}, nil, "slice-a", plan.StatusPending)

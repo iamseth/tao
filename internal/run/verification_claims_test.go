@@ -9,9 +9,12 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestLoadVerificationClaims(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	if claims, err := LoadVerificationClaims(""); err != nil || claims != nil {
 		t.Fatalf("absent claims = %v, %v", claims, err)

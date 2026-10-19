@@ -13,6 +13,8 @@ import (
 
 	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type abortRepository struct {
@@ -44,6 +46,7 @@ func (r *abortRepository) OpenLogAppend(dir string) (*os.File, error) {
 }
 
 func TestServiceJournalsRunAbort(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name                      string
@@ -132,6 +135,7 @@ func TestServiceJournalsRunAbort(t *testing.T) {
 }
 
 func TestRunAbortEnrichmentBounded(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, stalledGit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stalled_git=%t", stalledGit), func(t *testing.T) {

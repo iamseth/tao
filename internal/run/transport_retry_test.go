@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type retryableTransportTestError struct{ error }
@@ -242,6 +244,7 @@ func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testin
 }
 
 func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name       string

@@ -8,9 +8,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestWorkspaceRebaseIntentRecordIsValidatedIdempotentAndExactClear(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -58,6 +61,7 @@ func TestWorkspaceRebaseIntentRecordIsValidatedIdempotentAndExactClear(t *testin
 }
 
 func TestWorkspaceRebaseSettlementPersistsBoundaryAndClearAtomically(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)

@@ -8,11 +8,14 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func text(s string) *string { return &s }
 
 func TestServiceRelativeHomeIsFrozen(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root := t.TempDir()
 	t.Chdir(root)
 	s := NewService("new-home", runtimeconfig.LoadEnv(nil))
@@ -131,6 +134,7 @@ func TestServiceInheritanceRepair(t *testing.T) {
 }
 
 func TestServiceComposesLayersAndDefersBudgetAdmission(t *testing.T) {
+	testenv.SkipIfShort(t)
 	home := t.TempDir()
 	put(t, filepath.Join(home, "repos", "repo", "repo.json"), `{"schema":"tao.repo.v1","id":"repo","name":"repo","root":"/missing","run_defaults":{"pull_request":false}}`)
 	env := map[string]string{runtimeconfig.EnvAgent: "claude"}

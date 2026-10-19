@@ -14,6 +14,8 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSingleReviewRequiredFilesBounds(t *testing.T) {
@@ -39,6 +41,7 @@ func TestSingleReviewRequiredFilesBounds(t *testing.T) {
 }
 
 func TestSingleIntegrationReviewerApprovesExactResolvedHead(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	calls := 0
 	reviewer := GuardedSingleIntegrationReviewer{
@@ -83,6 +86,7 @@ func TestSingleIntegrationReviewerApprovesExactResolvedHead(t *testing.T) {
 }
 
 func TestSingleIntegrationReviewerStreamsAndMarksOversizedDiff(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tail := "TAIL-MUST-NOT-BE-RETAINED"
 	content := strings.Repeat("x", prompts.SingleMergeReviewDiffCaptureLimit*4) + tail + "\n"
 	_, request, store, git := preparedSingleReviewFixtureWithContent(t, content)
@@ -108,6 +112,7 @@ func TestSingleIntegrationReviewerStreamsAndMarksOversizedDiff(t *testing.T) {
 }
 
 func TestSingleIntegrationReviewerPersistsDistinctStructuredNonApprovals(t *testing.T) {
+	testenv.SkipIfShort(t)
 	oversized := "```tao-review-json\n" + strings.Repeat("x", 513*1024) + "\n```"
 	tests := []struct {
 		name        string
@@ -157,6 +162,7 @@ func singleReviewJSON(payload string) string {
 }
 
 func TestSingleIntegrationReviewerPersistsProviderFailureAndTimeoutWithoutRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name        string
 		err         error
@@ -191,6 +197,7 @@ func TestSingleIntegrationReviewerPersistsProviderFailureAndTimeoutWithoutRetry(
 }
 
 func TestSingleIntegrationReviewerPreservesIntegrationDriftAfterCancellation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	configureSingleAgentIgnoredPaths(t, fixture.repoRoot, ".env")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -228,6 +235,7 @@ func TestSingleIntegrationReviewerPreservesIntegrationDriftAfterCancellation(t *
 }
 
 func TestSingleIntegrationReviewerRejectsAndPreservesConcurrentWorktreeDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	configureSingleAgentIgnoredPaths(t, fixture.repoRoot, ".env")
 	reviewStarted := make(chan struct{})
@@ -289,6 +297,7 @@ func TestSingleIntegrationReviewerRejectsAndPreservesConcurrentWorktreeDrift(t *
 }
 
 func TestSingleIntegrationReviewerPreservesConcurrentSourceRef(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: store, Agent: batchSessionAgentFunc(func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 		done := make(chan error, 1)
@@ -311,6 +320,7 @@ func TestSingleIntegrationReviewerPreservesConcurrentSourceRef(t *testing.T) {
 }
 
 func TestSingleIntegrationReviewerRejectsObjectDatabaseWritesAndPreservesHistory(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mutation := range objectDatabaseMutationTestCases() {
 		t.Run(mutation.name, func(t *testing.T) {
 			fixture, request, store, git := preparedSingleReviewFixture(t)
@@ -354,6 +364,7 @@ func TestSingleIntegrationReviewerRejectsObjectDatabaseWritesAndPreservesHistory
 }
 
 func TestSingleIntegrationReviewerHidesSnapshotBackingAndPreservesDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	configureSingleAgentIgnoredPaths(t, fixture.repoRoot, ".env")
 	ignored := filepath.Join(fixture.repoRoot, ".env")
@@ -386,6 +397,7 @@ func TestSingleIntegrationReviewerHidesSnapshotBackingAndPreservesDrift(t *testi
 }
 
 func TestSingleIntegrationReviewerPreservesConcurrentLinkedCheckoutEdits(t *testing.T) {
+	testenv.SkipIfShort(t)
 	fixture, request, store, git := preparedSingleReviewFixture(t)
 	checkouts := prepareLinkedCheckoutMutationFixture(t, fixture)
 	reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: store, Agent: batchSessionAgentFunc(func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
@@ -404,6 +416,7 @@ func TestSingleIntegrationReviewerPreservesConcurrentLinkedCheckoutEdits(t *test
 }
 
 func TestSingleIntegrationReviewerRejectsAndPreservesGitMetadataAndUnlistedRefs(t *testing.T) {
+	testenv.SkipIfShort(t)
 	tests := []struct {
 		name   string
 		setup  func(*testing.T, realGitWorktree, SingleReviewRequest) func(*testing.T)
@@ -506,6 +519,7 @@ func TestSingleIntegrationReviewerRejectsAndPreservesGitMetadataAndUnlistedRefs(
 }
 
 func TestSingleIntegrationReviewerRejectsAndPreservesIgnoredOnlyDrift(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, mutation := range ignoredMutationTestCases() {
 		t.Run(mutation.name, func(t *testing.T) {
 			fixture, request, store, git := preparedSingleReviewFixture(t)
@@ -534,6 +548,7 @@ func TestSingleIntegrationReviewerRejectsAndPreservesIgnoredOnlyDrift(t *testing
 }
 
 func TestSingleIntegrationReviewerFailsClosedOnStaleEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Run("verification head", func(t *testing.T) {
 		_, request, store, git := preparedSingleReviewFixture(t)
 		request.VerificationHead = request.Intent.DefaultParent
@@ -562,6 +577,7 @@ func TestSingleIntegrationReviewerFailsClosedOnStaleEvidence(t *testing.T) {
 }
 
 func TestSingleIntegrationReviewerExactRetryIsIdempotent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	_, request, store, git := preparedSingleReviewFixture(t)
 	calls := 0
 	reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: store, Agent: batchSessionAgentFunc(func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {

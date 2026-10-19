@@ -79,7 +79,7 @@ jobs:
         run: make build-targets
 
       - name: Test
-        run: make test GO_TEST_FLAGS="-count=1 -timeout 8m"
+        run: make test-full GO_TEST_FLAGS="-count=1 -timeout 8m"
 
   lint:
     name: Lint
@@ -136,7 +136,7 @@ jobs:
         # Run every test, even when setup-go restores cached test results.
         run: |
           set -euo pipefail
-          make test GO_TEST_FLAGS="-count=1 -v" 2>&1 | tee "$RUNNER_TEMP/tao-macos-tests.log"
+          make test-full GO_TEST_FLAGS="-count=1 -v" 2>&1 | tee "$RUNNER_TEMP/tao-macos-tests.log"
 
       - name: Preserve failed test diagnostics
         if: failure()

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
@@ -50,6 +52,7 @@ func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
 }
 
 func TestWorktreeFingerprintParts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -940,6 +943,7 @@ func TestBranchHelpersConstructCommandsAndPreserveBooleanFailures(t *testing.T) 
 }
 
 func TestMergedIntoMechanismDistinguishesAncestryAndSquash(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()

@@ -12,9 +12,12 @@ import (
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestMergeSquashesPlanBranchByDefault(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
@@ -64,6 +67,7 @@ func TestMergeSquashesPlanBranchByDefault(t *testing.T) {
 }
 
 func TestIntegrateSquashRecoversExactOwnedCommitAtIntentParent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
@@ -201,6 +205,7 @@ func TestIntegrateSquashHEADFailurePreservesCreatedCommit(t *testing.T) {
 }
 
 func TestIntegrateSquashConflictRestoresCleanDefault(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()
@@ -244,6 +249,7 @@ func TestIntegrateSquashConflictRestoresCleanDefault(t *testing.T) {
 }
 
 func TestMergeRebasesPlanWorktreeWhenDefaultAdvanced(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()

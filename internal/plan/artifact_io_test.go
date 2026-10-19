@@ -13,9 +13,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestLegacyPlacementJournalReplaysFrozenBytes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -40,6 +43,7 @@ func TestLegacyPlacementJournalReplaysFrozenBytes(t *testing.T) {
 }
 
 func TestRecordedPlacementArtifacts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, spelling := range []string{"worktree", "isolated", "current", "", "invalid"} {
 		t.Run(spelling, func(t *testing.T) {
@@ -119,6 +123,7 @@ func TestReadEventsWarnsAndSkipsMalformedOrOversizedLines(t *testing.T) {
 }
 
 func TestStartSliceRequestMutationMatchesStartSlice(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	startedAt := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	run := &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"z.go", "a.go"}}
@@ -210,6 +215,7 @@ func TestStartSliceRequestMutationMatchesStartSlice(t *testing.T) {
 }
 
 func TestStartSliceWritesStateSlicesAndEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
@@ -242,6 +248,7 @@ func TestStartSliceWritesStateSlicesAndEvent(t *testing.T) {
 }
 
 func TestStartSliceDoesNotDuplicateStartedEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	first := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
@@ -271,6 +278,7 @@ func TestStartSliceDoesNotDuplicateStartedEvent(t *testing.T) {
 }
 
 func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
@@ -302,6 +310,7 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 }
 
 func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC)
@@ -371,6 +380,7 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 }
 
 func TestLoadPlanFilesWarnsForResolvableRuntimePrerequisiteCycle(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	plansDir := t.TempDir()
 	for id, prerequisite := range map[string]string{"plan-a": "plan-b", "plan-b": "plan-a"} {
@@ -396,6 +406,7 @@ func TestLoadPlanFilesWarnsForResolvableRuntimePrerequisiteCycle(t *testing.T) {
 }
 
 func TestAutomaticReworkOperationsPreserveUnknownArtifactFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
@@ -674,6 +685,7 @@ func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testi
 }
 
 func TestPersistStateChangesRebasesReviewReplacementAndPreservesUnknownFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	state := startSliceDetail(dir).State
@@ -741,6 +753,7 @@ func TestPersistStateChangesRebasesReviewReplacementAndPreservesUnknownFields(t 
 }
 
 func TestArtifactChangeSetThreadsThroughArtifactMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
@@ -806,6 +819,7 @@ func TestArtifactChangeSetThreadsThroughSlicesUpdate(t *testing.T) {
 }
 
 func TestSliceBlockerClearAppliesAfterArtifactSliceRebase(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	baseline := startSliceDetail(dir)
@@ -853,6 +867,7 @@ func TestSliceBlockerClearAppliesAfterArtifactSliceRebase(t *testing.T) {
 }
 
 func TestArtifactChangeSetPreparedBytesMatchAdapterStore(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	seed := func(t *testing.T, dir string) *PlanDetail {
 		t.Helper()
@@ -980,6 +995,7 @@ func TestVerificationEvidenceRoundTripAndLegacyShape(t *testing.T) {
 }
 
 func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
@@ -1018,6 +1034,7 @@ func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
 }
 
 func TestCurrentSliceLifecycleClearWritersPersistNullAndPreserveUnknownPlanFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	transitioned := started.Add(time.Minute)
@@ -1220,6 +1237,7 @@ func TestLoadPlanFilesAllowsLegacyStateWithoutWorkspaceMetadata(t *testing.T) {
 }
 
 func TestCompleteSliceDoesNotDuplicateCompletedEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
@@ -1245,6 +1263,7 @@ func TestCompleteSliceDoesNotDuplicateCompletedEvent(t *testing.T) {
 }
 
 func TestStartSliceAndCompleteSliceUpdateInMemoryDetail(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
@@ -1283,6 +1302,7 @@ func TestStartSliceAndCompleteSliceUpdateInMemoryDetail(t *testing.T) {
 }
 
 func TestApproveSliceWritesApprovalAndEvent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 24, 23, 1, 2, 0, time.UTC)
@@ -1309,6 +1329,7 @@ func TestApproveSliceWritesApprovalAndEvent(t *testing.T) {
 }
 
 func TestApproveSliceIsIdempotentAndPreservesMetadata(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	first := time.Date(2026, 5, 24, 23, 1, 2, 0, time.UTC)
@@ -1338,6 +1359,7 @@ func TestApproveSliceIsIdempotentAndPreservesMetadata(t *testing.T) {
 }
 
 func TestBlockSliceWritesCanonicalStateAndPreservesExecutionMetadata(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 7, 19, 15, 44, 35, 0, time.UTC)
@@ -1460,6 +1482,7 @@ func TestBlockSliceRejectsInvalidSelectionsWithoutMutation(t *testing.T) {
 }
 
 func TestContinueBlockedPlanWritesInProgressState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
@@ -1701,6 +1724,7 @@ func TestApplyArtifactMutationLeavesDetailUnchangedOnFailures(t *testing.T) {
 }
 
 func TestLoadPlanFilesRestartCompatibilityMatrix(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	originalState := []byte(`{"schema":"tao.plan.state.v1","status":"planned","plan":{"id":"plan-a"},"fixture":"original-state"}`)
 	originalSlices := []byte(`{"schema":"tao.plan.slices.v1","plan_id":"plan-a","slices":[],"fixture":"original-slices"}`)
@@ -1818,6 +1842,7 @@ func appendRestartEvent(t *testing.T, dir string, payload []byte) {
 }
 
 func TestPlanRecordStartSliceFailuresPreserveMemoryAndReplayJournal(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	startedAt := time.Date(2026, 7, 18, 1, 30, 0, 0, time.UTC)
 	boundary := SliceExecutionStart{
@@ -1870,6 +1895,7 @@ func TestPlanRecordStartSliceFailuresPreserveMemoryAndReplayJournal(t *testing.T
 }
 
 func TestPlanRecordRetrySettlesBeforeReevaluatingMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -1914,6 +1940,7 @@ func TestPlanRecordRetrySettlesBeforeReevaluatingMutation(t *testing.T) {
 }
 
 func TestPlanRecordRetryRejectsConflictingRecoveredExecutionBoundary(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -1954,6 +1981,7 @@ func TestPlanRecordRetryRejectsConflictingRecoveredExecutionBoundary(t *testing.
 }
 
 func TestPlanRecordRetryRejectsConflictingRecoveredCompletionOutcome(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2000,6 +2028,7 @@ func TestPlanRecordRetryRejectsConflictingRecoveredCompletionOutcome(t *testing.
 }
 
 func TestPlanRecordPostUnlinkSyncFailurePublishesBeforeSameRecordRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2045,6 +2074,7 @@ func TestPlanRecordPostUnlinkSyncFailurePublishesBeforeSameRecordRetry(t *testin
 }
 
 func TestSingleTargetWriterWaitsForJournalAndRebasesOntoSettledSlices(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2125,6 +2155,7 @@ func TestSingleTargetWriterWaitsForJournalAndRebasesOntoSettledSlices(t *testing
 }
 
 func TestArtifactMutationConcurrentWritersPreserveNonOverlappingApprovals(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2202,6 +2233,7 @@ func TestArtifactMutationConcurrentWritersPreserveNonOverlappingApprovals(t *tes
 }
 
 func TestPlanRecordConcurrentStaleStateWritersMergeNewWorkspaceFields(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2251,6 +2283,7 @@ func TestPlanRecordConcurrentStaleStateWritersMergeNewWorkspaceFields(t *testing
 }
 
 func TestPlanRecordPersistsPreBoundWorkspaceMetadataWithCompleteArtifacts(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2291,6 +2324,7 @@ func TestPlanRecordPersistsPreBoundWorkspaceMetadataWithCompleteArtifacts(t *tes
 }
 
 func TestPlanRecordConstructorRecoveryPreservesPreBoundWorkspaceMetadata(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2369,6 +2403,7 @@ func TestPlanRecordConstructorRecoveryPreservesPreBoundWorkspaceMetadata(t *test
 }
 
 func TestPlanRecordConstructorRecoveryRejectsConcurrentStructuralChanges(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2418,6 +2453,7 @@ func TestPlanRecordConstructorRecoveryRejectsConcurrentStructuralChanges(t *test
 }
 
 func TestPlanRecordConstructorRecoveryPreservesPreBoundSliceEdits(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2476,6 +2512,7 @@ func TestPlanRecordConstructorRecoveryPreservesPreBoundSliceEdits(t *testing.T) 
 }
 
 func TestPlanRecordPersistStatePreservesLifecycleSettledAfterDetailLoad(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2530,6 +2567,7 @@ func TestPlanRecordPersistStatePreservesLifecycleSettledAfterDetailLoad(t *testi
 }
 
 func TestPlanRecordPersistStateRetryPreservesIntentAfterRecoveryAndJournalInstallFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2598,6 +2636,7 @@ func TestPlanRecordPersistStateRetryPreservesIntentAfterRecoveryAndJournalInstal
 }
 
 func TestPlanRecordBoundToStaleDetailRefreshesSettledLifecycleMutation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2661,6 +2700,7 @@ func TestPlanRecordBoundToStaleDetailRefreshesSettledLifecycleMutation(t *testin
 }
 
 func TestPlanRecordPersistArtifactsPreservesLifecycleSettledAfterBinding(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2722,6 +2762,7 @@ func TestPlanRecordPersistArtifactsPreservesLifecycleSettledAfterBinding(t *test
 }
 
 func TestPlanRecordPersistArtifactsPreservesConcurrentReopenSlices(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "reopen")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2789,6 +2830,7 @@ func TestPlanRecordPersistArtifactsPreservesConcurrentReopenSlices(t *testing.T)
 }
 
 func TestPlanRecordPersistArtifactsPreservesConcurrentSliceRemoval(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2852,6 +2894,7 @@ func TestPlanRecordPersistArtifactsPreservesConcurrentSliceRemoval(t *testing.T)
 }
 
 func TestPlanRecordPersistArtifactsRejectsConcurrentStructuralChanges(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2906,6 +2949,7 @@ func TestPlanRecordPersistArtifactsRejectsConcurrentStructuralChanges(t *testing
 }
 
 func TestPlanRecordPersistArtifactsRetryDoesNotRepublishStaleLifecycleState(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -2986,6 +3030,7 @@ func TestPlanRecordPersistArtifactsRetryDoesNotRepublishStaleLifecycleState(t *t
 }
 
 func TestPlanRecordPersistArtifactsRecoversFailurePrefixes(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	for _, operation := range []string{"journal", "state", "slices", "remove"} {
 		t.Run(operation, func(t *testing.T) {
@@ -3062,6 +3107,7 @@ func TestPlanRecordPersistArtifactsRecoversFailurePrefixes(t *testing.T) {
 }
 
 func TestPlanRecordPersistArtifactsRebasesEditsOverJournalCreatedAfterBinding(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -3195,6 +3241,7 @@ func TestPlanRecordLoadsLegacyStateAdvancedTornWrite(t *testing.T) {
 }
 
 func TestLegacyAutomaticCompletionTornWriteRequiresOutcomeRecovery(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 7, 13, 20, 0, 0, 0, time.UTC)

@@ -14,6 +14,8 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestSliceVerifierOrderAndEvidence(t *testing.T) {
@@ -89,6 +91,7 @@ func TestSliceVerifierRejectsDeclarations(t *testing.T) {
 }
 
 func TestSliceVerifierFailureKinds(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := sliceVerifierRoot(t)
 	for _, tc := range []struct {
@@ -270,7 +273,8 @@ func TestSliceVerifierInheritedCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		if deadline {
 			cancel()
-			ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+			// Long enough that verification reaches the first gate under load.
+			ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
 		}
 		v := SliceVerifier{CommandRunner: func(ctx context.Context, _, _ string, _ []string, _, _ io.Writer) error {
 			if !deadline {
@@ -340,6 +344,7 @@ func verificationTestCache(t *testing.T, root string) string {
 }
 
 func TestSliceVerifierCacheAcrossWorktreesAndSteps(t *testing.T) {
+	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
 	shared := t.TempDir()
 	t.Setenv("GOLANGCI_LINT_CACHE", shared)

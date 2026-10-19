@@ -16,6 +16,8 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.T) {
@@ -82,6 +84,7 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 }
 
 func TestGeneratePlanRejectsMissingChangeTypeAndCleansAllocation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	repoMeta, store := newPlanningServiceTestRepo(t)
 	session, err := NewSession("note-missing-type", "Missing Type", "Implement clear work", repoMeta, nil, time.Now())
 	if err != nil {
@@ -122,6 +125,7 @@ func TestGeneratePlanRejectsMissingChangeTypeAndCleansAllocation(t *testing.T) {
 }
 
 func TestGeneratePlanRejectsMissingOrMalformedDecisionMetadataAndCleansAllocation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name string
 		edit func(*plan.State)
@@ -196,6 +200,7 @@ func TestGeneratePlanRejectsMissingOrMalformedDecisionMetadataAndCleansAllocatio
 }
 
 func TestGeneratePlanRejectsOpenQuestionsAndCleansAllocation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	repoMeta, store := newPlanningServiceTestRepo(t)
 	session, err := NewSession("note-questions", "Questions", "Maybe work", repoMeta, nil, time.Now())
 	if err != nil {
@@ -230,6 +235,7 @@ func TestGeneratePlanRejectsOpenQuestionsAndCleansAllocation(t *testing.T) {
 }
 
 func TestGeneratePlanCleansRuntimeAndNoArtifactFailures(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name  string
 		run   func(agent.Session) (agent.SessionResult, error)
@@ -272,6 +278,7 @@ func (f generationEventAppender) AppendEvent(dir string, event plan.Event) error
 }
 
 func TestGeneratePlanTelemetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
 		for _, measurement := range []struct {
 			name    string
@@ -366,6 +373,7 @@ func TestGeneratePlanTelemetry(t *testing.T) {
 }
 
 func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
+	testenv.SkipIfShort(t)
 	original := errors.New("runtime failed")
 	for _, stage := range []GenerationStage{GenerationStageRuntime, GenerationStageRequiredArtifact, GenerationStageOpenQuestions} {
 		t.Run(string(stage), func(t *testing.T) {

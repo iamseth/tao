@@ -3,6 +3,8 @@ package workspace
 import (
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func assertGitMaintenanceDisabled(t *testing.T, dir string) {
@@ -18,6 +20,7 @@ func assertGitMaintenanceDisabled(t *testing.T, dir string) {
 }
 
 func TestNewTestRepoDisablesMaintenance(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repo := newTestRepo(t)
 	assertGitMaintenanceDisabled(t, repo.path)

@@ -25,6 +25,8 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
@@ -193,6 +195,7 @@ func TestReworkFromPullRequestRunPreservesReviewAgent(t *testing.T) {
 }
 
 func TestReworkFromPullRequestEffortAdmissionWithoutRun(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, tc := range []struct {
 			name      string
@@ -297,6 +300,7 @@ func TestReworkFromPullRequestDryRunPersistsAndPrintsTriageWithoutSlices(t *test
 }
 
 func TestReworkFromPullRequestDoesNotReconvertConsumedThreadAfterCompletedCycle(t *testing.T) {
+	testenv.SkipIfShort(t)
 	root := t.TempDir()
 	planID := "20260628-1200-pr-consumed"
 	planDir := writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))

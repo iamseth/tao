@@ -10,6 +10,8 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type realGitWorktree struct {
@@ -73,6 +75,7 @@ func realGitOutputAllowFailure(t *testing.T, dir string, args ...string) (string
 }
 
 func TestWorktreeGitUsesPlanWorktreeBoundGitClientAndFallback(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	fixture := newRealGitWorktree(t)
 	ctx := context.Background()

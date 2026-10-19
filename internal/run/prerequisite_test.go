@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type prerequisiteResolverFake struct {
@@ -117,6 +119,7 @@ func TestCheckRuntimePrerequisitesDetectsCyclesAndSatisfiedAncestry(t *testing.T
 }
 
 func TestResolvePrerequisiteBaselineMatchesAutomaticPreparation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")

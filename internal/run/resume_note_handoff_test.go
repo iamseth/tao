@@ -13,9 +13,12 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestResumeNoteAdmittedContinuation(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, provider := range []string{"pi", "claude"} {
 		for _, mode := range []string{"continue", "transport", "stale", "unavailable", "refused"} {
 			t.Run(provider+"/"+mode, func(t *testing.T) {

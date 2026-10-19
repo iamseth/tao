@@ -15,6 +15,8 @@ import (
 	"github.com/iamseth/tao/internal/gitops"
 
 	"github.com/iamseth/tao/internal/agent"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestRunnerDetectsControlCheckoutLeak(t *testing.T) {
@@ -81,6 +83,7 @@ func TestRunnerDoesNotReportInvocationForPreSessionGuardFailure(t *testing.T) {
 }
 
 func TestControlCheckoutChangeEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
 		name   string
 		dirty  bool

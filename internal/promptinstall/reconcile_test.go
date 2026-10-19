@@ -11,6 +11,8 @@ import (
 
 	agentpkg "github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/prompts"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func reconciliationAgents(t *testing.T) []agentpkg.Descriptor {
@@ -31,6 +33,7 @@ func reconciliationAgents(t *testing.T) []agentpkg.Descriptor {
 }
 
 func TestReconcileUndiscoverableExtensionSource(t *testing.T) {
+	testenv.SkipIfShort(t)
 	agents := reconciliationAgents(t)
 	original := findPiExtensionSourceFrom
 	findPiExtensionSourceFrom = func(string) (string, bool) { return "", false }
@@ -68,6 +71,7 @@ func TestReconcileUndiscoverableExtensionSource(t *testing.T) {
 }
 
 func TestReconcileInvalidExplicitExtensionSource(t *testing.T) {
+	testenv.SkipIfShort(t)
 	agents := reconciliationAgents(t)
 	t.Setenv("TAO_PI_EXTENSION_DIR", filepath.Join(t.TempDir(), "missing"))
 	if _, err := ReconcileDiscovered(agents); err == nil {
@@ -76,6 +80,7 @@ func TestReconcileInvalidExplicitExtensionSource(t *testing.T) {
 }
 
 func TestReconcileMixedAndRepeat(t *testing.T) {
+	testenv.SkipIfShort(t)
 	agents := reconciliationAgents(t)
 	for _, a := range agents {
 		dir, err := a.PromptDir()
@@ -170,6 +175,7 @@ func TestReconcileContinuesFailures(t *testing.T) {
 }
 
 func TestReconcileExtensionConflictsAndSourceFailure(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, kind := range []string{"directory", "symlink", "source"} {
 		t.Run(kind, func(t *testing.T) {
 			agents := reconciliationAgents(t)
@@ -224,6 +230,7 @@ func TestReconcileExtensionConflictsAndSourceFailure(t *testing.T) {
 }
 
 func TestReconcileConcurrent(t *testing.T) {
+	testenv.SkipIfShort(t)
 	agents := reconciliationAgents(t)
 	for _, stale := range []bool{false, true} {
 		if stale {

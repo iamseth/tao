@@ -163,8 +163,12 @@ func (output *verificationIdentityOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// verificationIdentityTimeout bounds each tool identity probe; on expiry the
+// cache falls back to a fresh namespace rather than failing verification.
+var verificationIdentityTimeout = time.Second
+
 func verificationIdentity(ctx context.Context, cwd string, environ []string, name string, args ...string) (string, bool) {
-	return verificationIdentityWithTimeout(ctx, time.Second, cwd, environ, name, args...)
+	return verificationIdentityWithTimeout(ctx, verificationIdentityTimeout, cwd, environ, name, args...)
 }
 
 func verificationIdentityWithTimeout(ctx context.Context, timeout time.Duration, cwd string, environ []string, name string, args ...string) (string, bool) {

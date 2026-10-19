@@ -15,6 +15,8 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
+
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // testAgentExecutor builds the unified executor for a runtime kind, mirroring the
@@ -263,6 +265,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 }
 
 func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
@@ -326,6 +329,7 @@ func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *tes
 }
 
 func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *testing.T) {
+	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
 		name           string
