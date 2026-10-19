@@ -243,3 +243,77 @@ func readMakeFile(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// verify must run lint and cross-target builds alongside test-full, wait for
+// both, print the captured check output, and fail when either side fails.
+func TestMakeVerifyRunsChecksAlongsideTests(t *testing.T) {
+	SkipIfShort(t)
+	for _, mode := range []string{"success", "lint-failure", "test-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "verify fixture")
+			mustMakeDir(t, root)
+			data, err := os.ReadFile("../../Makefile")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteMakeFile(t, filepath.Join(root, "Makefile"), string(data), 0600)
+			tools := filepath.Join(root, "tools")
+			mustMakeDir(t, tools)
+			// Each side announces itself, then waits briefly for the other so
+			// overlap is observable without depending on scheduling luck.
+			await := `i=0; while [ ! -e "$1" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; [ -e "$1" ]`
+			mustWriteMakeFile(t, filepath.Join(tools, "golangci-lint"), `#!/bin/sh
+touch lint-started
+wait_for() { `+await+`; }
+wait_for test-started && touch lint-overlapped
+echo "fixture lint output"
+[ "$MODE" != lint-failure ]
+`, 0700)
+			mustWriteMakeFile(t, filepath.Join(tools, "go"), `#!/bin/sh
+case "$1" in
+env) printf '%s\n' "$PWD/go-$2"; exit ;;
+list) echo example.com/fixture; exit ;;
+build|vet) exit ;;
+esac
+touch test-started
+wait_for() { `+await+`; }
+wait_for lint-started && touch test-overlapped
+printf 'mode: set\n' > coverage.out
+[ "$MODE" != test-failure ]
+`, 0700)
+			env := []string{}
+			for _, entry := range os.Environ() {
+				key, _, _ := strings.Cut(entry, "=")
+				switch key {
+				case "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "GO_TEST_FLAGS", "TEST_TIER_FLAGS", "GOLANGCI_LINT_CACHE", "SHELL":
+					continue
+				}
+				env = append(env, entry)
+			}
+			env = append(env, "PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"), "MODE="+mode)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "make", "verify")
+			cmd.Dir, cmd.Env = root, env
+			cmd.WaitDelay = time.Second
+			out, err := cmd.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("make verify timed out: %s", out)
+			}
+			if (err != nil) != (mode != "success") {
+				t.Fatalf("make verify error = %v in mode %s: %s", err, mode, out)
+			}
+			for _, marker := range []string{"lint-overlapped", "test-overlapped"} {
+				if _, err := os.Stat(filepath.Join(root, marker)); err != nil {
+					t.Errorf("lint and tests did not overlap (%s): %s", marker, out)
+				}
+			}
+			if !strings.Contains(string(out), "fixture lint output") {
+				t.Errorf("captured lint output not printed: %s", out)
+			}
+			if entries, _ := filepath.Glob(filepath.Join(root, "bin", "verify-checks.*")); len(entries) != 0 {
+				t.Errorf("check output file not cleaned: %v", entries)
+			}
+		})
+	}
+}

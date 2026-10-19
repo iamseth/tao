@@ -102,7 +102,23 @@ release-check:
 tui-preview:
 	@go run ./cmd/tui-preview $(TUI_PREVIEW_ARGS)
 
-verify: build test-full lint verify-no-deps build-targets
+# Lint and cross-target builds are CPU-bound while the tests are bound by Git
+# process creation, so they run alongside test-full with captured output.
+verify: build verify-no-deps
+	@set -e; \
+	mkdir -p bin; \
+	checks=$$(mktemp "$$(pwd -P)/bin/verify-checks.XXXXXX"); \
+	checks_pid=; \
+	trap 'status=$$?; trap - 0; [ -z "$$checks_pid" ] || kill "$$checks_pid" 2>/dev/null || true; rm -f "$$checks"; exit "$$status"' 0; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	$(MAKE) --no-print-directory lint build-targets > "$$checks" 2>&1 & checks_pid=$$!; \
+	tests=0; $(MAKE) --no-print-directory test-full || tests=$$?; \
+	checks_status=0; wait "$$checks_pid" || checks_status=$$?; checks_pid=; \
+	cat "$$checks"; \
+	if [ "$$tests" -ne 0 ] || [ "$$checks_status" -ne 0 ]; then \
+		echo "verify: test-full exit $$tests, lint/build-targets exit $$checks_status" >&2; \
+		exit 1; \
+	fi
 
 verify-no-deps:
 	@count=$$(go list -m all | wc -l); \
