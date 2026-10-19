@@ -454,7 +454,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 	output := "Review looks focused.\n\n```tao-review-json\n{\n  \"verdict\": \"changes_requested\",\n  \"summary\": \"One finding should be fixed.\",\n  \"findings\": [\n    {\"severity\": \"major\", \"file\": \"internal/run/review.go\", \"line\": 42, \"message\": \"Fix this.\", \"suggestion\": \"Adjust the code.\"}\n  ]\n}\n```\n"
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: output}}
 	git := &fakeReviewGit{head: "head123"}
-	store := plan.NewFileRepository("")
+	store := unscopedFileRepository(t)
 
 	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(git), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
 	if err != nil {
@@ -553,7 +553,7 @@ func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testin
 		executor.requests = append(executor.requests, request)
 		return AgentSessionResult{Output: outputs[len(executor.requests)-1]}, ctx.Err()
 	})
-	review, err := createReviewWithAgentSession(context.Background(), executorFunc, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	review, err := createReviewWithAgentSession(context.Background(), executorFunc, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(unscopedFileRepository(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +687,7 @@ func TestCreateReviewWithAgentSessionConsumesFreshCorrectionBeforeHardInterrupti
 				t.Fatalf("recovered interruption = %#v, want sentinel", recovered)
 			}
 		}()
-		_, _ = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+		_, _ = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(unscopedFileRepository(t)))
 	}()
 
 	persisted, err := plan.ReadState(planDir)
@@ -739,7 +739,7 @@ func TestCreateReviewWithAgentSessionSkipsCorrectionForValidTypedApproval(t *tes
 	persistReviewState(t, planDir, detail)
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: output}}
 
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(unscopedFileRepository(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +775,7 @@ func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T
 		}
 		return AgentSessionResult{Output: "```tao-review-proposal-json\n{bad}\n```"}, ctx.Err()
 	})
-	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", Models: runtimeconfig.ModelSelection{Effort: "base-effort", ReviewEffort: "review-effort"}, reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", Models: runtimeconfig.ModelSelection{Effort: "base-effort", ReviewEffort: "review-effort"}, reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(unscopedFileRepository(t)))
 	repairErr, ok := errors.AsType[*reviewProposalRepairError](err)
 	if !ok || repairErr.category != "proposal_invalid" || !strings.Contains(err.Error(), "valid typed commit proposal") {
 		t.Fatalf("correction exhaustion error = %v", err)
@@ -898,7 +898,7 @@ func TestCreateReviewWithAgentSessionUsesWorkspaceBaseSHA(t *testing.T) {
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	store := plan.NewFileRepository("")
+	store := unscopedFileRepository(t)
 
 	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Base: detail.State.Repo.BaseCommit}, fileReviewRecordFactory(store))
 	if err != nil {
@@ -938,7 +938,7 @@ func TestCreateReviewWithAgentSessionPrefersLiveMergeBaseAfterRebase(t *testing.
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
 	git := &fakeReviewGit{head: "head123", defaultBranch: "main", mergeBase: "live-merge-base"}
-	store := plan.NewFileRepository("")
+	store := unscopedFileRepository(t)
 
 	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(git), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Base: detail.State.Repo.BaseCommit}, fileReviewRecordFactory(store))
 	if err != nil {
@@ -976,7 +976,7 @@ func TestCreateReviewWithAgentSessionFallsBackToRecordedBaseWhenMergeBaseFails(t
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	store := plan.NewFileRepository("")
+	store := unscopedFileRepository(t)
 
 	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", defaultBranch: "main", mergeBaseErr: errors.New("merge-base unavailable")}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
 	if err != nil {
@@ -1023,7 +1023,7 @@ func TestCreateReviewWithAgentSessionPreservesArtifactWhenRefreshedGateRefuses(t
 		}
 		return AgentSessionResult{Output: "replacement review artifact\n"}, nil
 	})
-	_, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	_, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(unscopedFileRepository(t)))
 	if err == nil || !strings.Contains(err.Error(), "002-race") {
 		t.Fatalf("review error = %v, want refreshed pending-work refusal", err)
 	}
@@ -1653,7 +1653,7 @@ func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T)
 	detail.State.Plan.LastRunCommitPolicy = CommitPolicyPlan.String()
 	detail.State.Plan.LastRunStartingDirty = []string{"README.md"}
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
-	repo := plan.NewFileRepository("")
+	repo := unscopedFileRepository(t)
 	execution, err := (Service{dependencies: RunDependencies{reviewGitFactory: fixedReviewGit(&fakeReviewGit{}), PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo}}).prepareReviewExecution(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}})
 	if err != nil {
 		t.Fatal(err)
@@ -1789,7 +1789,7 @@ func TestCreateReviewWithAgentSessionFallsBackToBaseCommitWithoutWorkspace(t *te
 	persistReviewState(t, planDir, detail)
 
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
-	store := plan.NewFileRepository("")
+	store := unscopedFileRepository(t)
 
 	review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(store))
 	if err != nil {
@@ -2037,7 +2037,7 @@ func TestReviewRangePresenterResolvedRangeAndOrdering(t *testing.T) {
 					t.Fatalf("Git root = %q", root)
 				}
 				return git
-			}}, request, fileReviewRecordFactory(plan.NewFileRepository("")))
+			}}, request, fileReviewRecordFactory(unscopedFileRepository(t)))
 			if err != nil {
 				t.Fatal(err)
 			}

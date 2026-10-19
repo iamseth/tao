@@ -80,7 +80,7 @@ func TestVerifiedCompletionFixtureOwnerEnvIsolation(t *testing.T) {
 
 func reloadVerifiedCompletion(t *testing.T, request SliceCompletionRequest) *plan.PlanRecord {
 	t.Helper()
-	record, err := plan.NewFileRepository("").ResolvePlanRecord(context.Background(), request.Record.Dir())
+	record, err := unscopedFileRepository(t).ResolvePlanRecord(context.Background(), request.Record.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}

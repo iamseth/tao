@@ -123,7 +123,7 @@ func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
 		}
 		return agent.SessionResult{}, ctx.Err()
 	})
-	repository := plan.NewFileRepository("")
+	repository := unscopedFileRepository(t)
 	var events []plan.Event
 	runner := newAgentSessionRunner(agentSessionRunnerConfig{
 		runtimeEnv: runEnvSnapshot(map[string]string{"TAO_SESSION_WARN_PERCENT": "10"}),
@@ -928,7 +928,7 @@ func TestSliceCompletionLifetimeDeadOwnerCleanup(t *testing.T) {
 // Exercise the full transaction in a different process, not just the lease probe.
 func completionVerifiedChild(t *testing.T, dir, mode string) {
 	t.Helper()
-	record, err := plan.NewFileRepository("").ResolvePlanRecord(context.Background(), dir)
+	record, err := unscopedFileRepository(t).ResolvePlanRecord(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

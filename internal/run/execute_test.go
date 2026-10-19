@@ -133,7 +133,7 @@ func TestExecuteRecordedReworkModel(t *testing.T) {
 					dependencies := RunDependencies{
 						CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 						TransportRetryDelay: func(context.Context, time.Duration) error { return nil },
-						LogAppender:         plan.NewFileRepository(""),
+						LogAppender:         unscopedFileRepository(t),
 					}
 					dependencies.SliceExecutor = newAgentExecutor(descriptor, ExecutionConfig{ResolvedRunOptions: options}, dependencies, "", nil)
 					service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: dependencies})

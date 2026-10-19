@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -112,11 +113,10 @@ func writeLeakGuardState(t *testing.T) string {
 }
 
 func newLeakGuardTestRunner(planDir string, commandRunner CommandRunner) agentSessionRunner {
-	_ = planDir
 	runtime := &leakGuardRuntime{}
 	return newAgentSessionRunner(agentSessionRunnerConfig{
 		descriptor:    agent.Descriptor{Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
-		logAppender:   plan.NewFileRepository(""),
+		logAppender:   plan.NewFileRepository(filepath.Dir(planDir)),
 		commandRunner: commandRunner,
 	})
 }

@@ -57,6 +57,7 @@ if [ "$1" = env ]; then
 fi
 printf '%s\n' "$HOME" "$XDG_CONFIG_HOME" "$GIT_CONFIG_GLOBAL" "$GIT_CONFIG_NOSYSTEM" "${GOCACHE-}" "${GOPATH-}" "${GOMODCACHE-}" > observed
 printf '%s\n' "$@" > arguments
+printf '%s\n' "$PATH" > path
 [ -d "$HOME" ] && [ -d "$XDG_CONFIG_HOME" ] || exit 85
 case "$MODE" in
  test-failure) exit 43 ;;
@@ -130,6 +131,7 @@ fi
 							t.Errorf("Go path = %q, want %q", observed[i+4], want)
 						}
 					}
+					assertMakeTestToolchainPath(t, strings.TrimSuffix(readMakeFile(t, filepath.Join(root, "path")), "\n"), tools)
 					args := readMakeFile(t, filepath.Join(root, "arguments"))
 					if args != "test\n-count=1\n-run\nTest With Spaces\n-coverprofile=coverage.out\n./...\n" {
 						t.Errorf("arguments: %q", args)
@@ -181,6 +183,34 @@ fi
 				t.Errorf("XDG config changed: %q", got)
 			}
 		})
+	}
+}
+
+// On a macOS host whose git is the xcrun shim, make test resolves /usr/bin
+// tools from the real toolchain directory while earlier entries keep
+// precedence; elsewhere PATH is unchanged.
+func assertMakeTestToolchainPath(t *testing.T, path, tools string) {
+	t.Helper()
+	entries := strings.Split(path, string(os.PathListSeparator))
+	if entries[0] != tools {
+		t.Errorf("PATH lost earlier entry precedence: %q", path)
+	}
+	shim, err := exec.LookPath("git")
+	if err != nil || shim != "/usr/bin/git" {
+		return
+	}
+	out, err := exec.Command("xcrun", "--find", "git").Output()
+	if err != nil {
+		return
+	}
+	toolchain := filepath.Dir(strings.TrimSpace(string(out)))
+	for i, entry := range entries {
+		if entry == "/usr/bin" {
+			if i == 0 || entries[i-1] != toolchain {
+				t.Errorf("PATH does not resolve /usr/bin tools from %s first: %q", toolchain, path)
+			}
+			return
+		}
 	}
 }
 

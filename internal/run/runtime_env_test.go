@@ -31,7 +31,7 @@ func TestComposedSnapshotSessionAdmission(t *testing.T) {
 			runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 				return agent.SessionResult{Metrics: &agent.Metrics{Cost: 1}}, nil
 			})
-			runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+			runner, dir, root := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Now())
 			runner.runtimeEnv = snapshot
 			_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true}})
 			var exceeded *budgetExceededError
@@ -80,7 +80,7 @@ func TestSessionsIgnoreUnusedInvalidBudgets(t *testing.T) {
 			calls++
 			return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 100}}, nil
 		})
-		runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+		runner, dir, root := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Now())
 		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid", runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid"})
 		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Metrics: metrics})
 		if err != nil || calls != 1 {
@@ -117,7 +117,7 @@ func TestInjectedSessionCapsStableAcrossHandoffs(t *testing.T) {
 				})
 			}}
 			detail := runPathSessionDetail(t, t.TempDir(), plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
-			repository := plan.NewFileRepository("")
+			repository := unscopedFileRepository(t)
 			config, err := prepareRequestConfig(ExecutionConfig{RuntimeEnv: snapshot}, Request{ResolvedRunOptions: ResolvedRunOptions{SessionTimeout: time.Minute}})
 			if err != nil {
 				t.Fatal(err)
@@ -181,7 +181,7 @@ func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
 				FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "initial-failure",
 			}
 			persistRunArtifacts(t, planDir, detail)
-			repo := plan.NewFileRepository("")
+			repo := unscopedFileRepository(t)
 			before, err := repo.ResolvePlan(context.Background(), planDir)
 			if err != nil {
 				t.Fatal(err)
@@ -265,7 +265,7 @@ func TestNonSlicePreparationIgnoresInvalidBudgets(t *testing.T) {
 				}),
 				ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
 			}
-			service := NewService(plan.NewFileRepository(""), io.Discard, Options{})
+			service := NewService(unscopedFileRepository(t), io.Discard, Options{})
 			if _, err := service.prepareRequestRunExecution(context.Background(), detail, Request{RecoveryMode: RecoveryMode{Reverify: reverify}}, config); err != nil {
 				t.Fatalf("unused budgets blocked non-slice preparation: %v", err)
 			}
@@ -296,7 +296,7 @@ func TestSnapshotThresholdsReachPacketWarningsAndReview(t *testing.T) {
 	persistReviewState(t, detail.Dir, detail)
 	detail.Events = []plan.Event{{Type: plan.EventTypeAgentMetrics, SliceID: "001-a", Metrics: &plan.AgentMetrics{OutputTokens: 8}}}
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "```tao-review-json\n{\"verdict\":\"comment\",\"summary\":\"Inconclusive\",\"findings\":[]}\n```"}}
-	_, err = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{RuntimeEnv: snapshot, CommitPolicy: CommitPolicyNone, reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head"})}, ReviewRun{Detail: detail}, fileReviewRecordFactory(plan.NewFileRepository("")))
+	_, err = createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{RuntimeEnv: snapshot, CommitPolicy: CommitPolicyNone, reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head"})}, ReviewRun{Detail: detail}, fileReviewRecordFactory(unscopedFileRepository(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestDirectSessionUsesBuiltinBudgets(t *testing.T) {
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 1}}, nil
 	})
-	runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+	runner, dir, root := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Now())
 	_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Metrics: &AgentSessionMetricsRequest{SliceID: "001-a", Role: plan.AgentRoleExecution, EnforceSliceCaps: true}})
 	if err != nil {
 		t.Fatalf("omitted configuration must use built-ins, not process caps: %v", err)

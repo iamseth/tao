@@ -40,6 +40,9 @@ build-targets:
 clean:
 	@rm -rvf bin $(COVERAGE_FILE)
 
+# On macOS the /usr/bin/git shim re-execs through xcrun on every call, about 3x
+# the cost of Git itself, so test resolves /usr/bin tools from the real
+# toolchain directory instead; earlier PATH entries keep precedence.
 test:
 	@set -e; \
 	mkdir -p bin; \
@@ -57,6 +60,11 @@ test:
 	export GOCACHE="$$cache" GOPATH="$$gopath" GOMODCACHE="$$modcache"; \
 	export HOME="$$scratch/home" XDG_CONFIG_HOME="$$scratch/xdg"; \
 	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1; \
+	if real_git=$$(xcrun --find git 2>/dev/null) && [ "$$(command -v git)" = /usr/bin/git ]; then \
+		toolchain=$$(dirname "$$real_git"); path=; IFS=:; \
+		for dir in $$PATH; do [ "$$dir" = /usr/bin ] && path="$$path:$$toolchain"; path="$$path:$$dir"; done; \
+		unset IFS; export PATH="$${path#:}"; \
+	fi; \
 	go test $(GO_TEST_FLAGS) -coverprofile=$(COVERAGE_FILE) ./...; \
 	awk 'NR>1 { \
 		n=split($$1,p,"/"); pkg=p[1]; \

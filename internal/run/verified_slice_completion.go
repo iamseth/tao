@@ -182,7 +182,9 @@ func (s SliceCompletionService) repairCompletionTiming(ctx context.Context, requ
 }
 
 func reloadCompletionRequest(ctx context.Context, request *SliceCompletionRequest) error {
-	record, err := plan.NewFileRepository("").ResolvePlanRecord(ctx, request.Record.Dir())
+	// An absolute plan path never consults the plans root, so root it at the
+	// plan's parent instead of discovering the current repository with Git.
+	record, err := plan.NewFileRepository(filepath.Dir(request.Record.Dir())).ResolvePlanRecord(ctx, request.Record.Dir())
 	if err != nil {
 		return fmt.Errorf("reload slice completion: %w", err)
 	}

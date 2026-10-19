@@ -44,7 +44,7 @@ func TestAgentFactoryReviewLaunches(t *testing.T) {
 				detail := runPathSessionDetail(t, root, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
 				detail.State.Repo.BaseCommit = "base123"
 				persistReviewState(t, detail.Dir, detail)
-				repository := plan.NewFileRepository("")
+				repository := unscopedFileRepository(t)
 				calls := 0
 				var launchArgs []string
 				fake := phaseTelemetryStarter(t, kind, output, plan.AgentMetricsReported)
@@ -95,7 +95,7 @@ func TestAgentFactoryUnavailableReviewerDoesNotFallback(t *testing.T) {
 				return nil, failure
 			}
 			dir := t.TempDir()
-			caps := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: reviewer}}, RunDependencies{ProcessStarter: starter, LogAppender: plan.NewFileRepository("")})).runCapabilities()
+			caps := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: reviewer}}, RunDependencies{ProcessStarter: starter, LogAppender: unscopedFileRepository(t)})).runCapabilities()
 			if calls != 0 {
 				t.Fatal("factory probed runtime availability")
 			}
@@ -113,7 +113,7 @@ func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
 		for _, cancel := range []bool{false, true} {
 			root := t.TempDir()
 			detail := runPathSessionDetail(t, root, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
-			repository := plan.NewFileRepository("")
+			repository := unscopedFileRepository(t)
 			implementation := AgentPi
 			if reviewer == AgentPi {
 				implementation = AgentClaude

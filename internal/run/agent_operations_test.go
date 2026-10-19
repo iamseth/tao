@@ -217,7 +217,7 @@ func TestAgentOperationModels(t *testing.T) {
 					detail.State.Plan.ChangeType = plan.ChangeTypeFix
 					detail.State.Repo.BaseCommit = "base123"
 					persistReviewState(t, detail.Dir, detail)
-					repository := plan.NewFileRepository("")
+					repository := unscopedFileRepository(t)
 					want := selection.base
 					role := runtimeconfig.ModelRoleDefault
 					switch operation {
@@ -465,7 +465,7 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 						if err := os.WriteFile(filepath.Join(detail.Dir, "events.jsonl"), nil, 0o600); err != nil {
 							t.Fatal(err)
 						}
-						repository := plan.NewFileRepository("")
+						repository := unscopedFileRepository(t)
 						var sessionErr error
 						switch outcome {
 						case "failed":
@@ -813,7 +813,7 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 				metrics := tt.metrics
 				return agent.SessionResult{Output: "partial", Metrics: &metrics}, nil
 			})
-			repository := plan.NewFileRepository("")
+			repository := unscopedFileRepository(t)
 			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
 			runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 
@@ -856,7 +856,7 @@ func TestRunAgentSessionCanonicalStopCaps(t *testing.T) {
 		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 			return agent.SessionResult{Output: "partial", Metrics: &agent.Metrics{Cost: 0.25}}, nil
 		})
-		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Now())
 		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetSliceCostStop: "0", runtimeconfig.EnvBudgetSliceCostWarn: "0"})
 
 		got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
@@ -882,7 +882,7 @@ func TestRunAgentSessionCanonicalStopCaps(t *testing.T) {
 			calls++
 			return agent.SessionResult{Metrics: &agent.Metrics{Cost: 0.25}}, nil
 		})
-		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Now())
+		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Now())
 		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvBudgetSliceCostStop: "1", runtimeconfig.EnvBudgetSliceCostWarn: "2"})
 
 		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{
@@ -898,7 +898,7 @@ func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "100")
 	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, "100")
 	t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "")
-	repository := plan.NewFileRepository("")
+	repository := unscopedFileRepository(t)
 	current := agent.Metrics{SessionID: "current", OutputTokens: 41}
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Metrics: &current}, nil
@@ -1094,7 +1094,7 @@ func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
 		descriptor: agent.Descriptor{
 			Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime },
 		},
-		logAppender:   plan.NewFileRepository(""),
+		logAppender:   unscopedFileRepository(t),
 		eventAppender: eventAppenderFunc(func(string, plan.Event) error { appendCalls++; return nil }),
 		now:           time.Now,
 	})
@@ -1117,7 +1117,7 @@ func TestRunAgentSessionPromptCapture(t *testing.T) {
 				return agent.SessionResult{Output: "output", FinalText: "final", Metrics: &agent.Metrics{OutputTokens: 12}}, nil
 			})
 			timestamp := time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC)
-			runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), &log, timestamp)
+			runner, dir, root := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), &log, timestamp)
 			if blocked {
 				if err := os.WriteFile(promptcapture.Dir(dir), []byte("blocked"), 0o600); err != nil {
 					t.Fatal(err)
@@ -1159,7 +1159,7 @@ func TestPullRequestSessionsCaptureDistinctPrompts(t *testing.T) {
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Output: "https://github.com/example/repo/pull/1", FinalText: "body"}, nil
 	})
-	runner, dir, root := sessionEventTestRunner(t, runtime, plan.NewFileRepository(""), io.Discard, time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC))
+	runner, dir, root := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC))
 	if _, err := createPullRequestWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestRun{PlanDir: dir, PlanID: "plan-a", RepoRoot: root}); err != nil {
 		t.Fatal(err)
 	}
@@ -1201,7 +1201,7 @@ func TestRunAgentSessionPlanTelemetryAndCapIsolation(t *testing.T) {
 				}
 				return agent.SessionResult{Output: "partial output", FinalText: "final", Metrics: &agent.Metrics{OutputTokens: 100, Cost: 5}}, runErr
 			})
-			repository := plan.NewFileRepository("")
+			repository := unscopedFileRepository(t)
 			runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
 			runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 			got, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: planDir, RepoRoot: repoRoot, Metrics: &request})
@@ -1243,7 +1243,7 @@ func TestRunAgentSessionTelemetryFailuresPreserveProviderOutcome(t *testing.T) {
 					calls++
 					return agent.SessionResult{Output: "output", Metrics: &agent.Metrics{OutputTokens: 100}}, runErr
 				})
-				repository := plan.NewFileRepository("")
+				repository := unscopedFileRepository(t)
 				appendCalls := 0
 				appender := eventAppenderFunc(func(dir string, event plan.Event) error {
 					appendCalls++
@@ -1283,7 +1283,7 @@ func TestRunAgentSessionPreSessionFailureDoesNotEmitMetrics(t *testing.T) {
 				return agent.SessionResult{}, nil
 			})
 		}},
-		logAppender:   plan.NewFileRepository(""),
+		logAppender:   unscopedFileRepository(t),
 		eventAppender: eventAppenderFunc(func(string, plan.Event) error { t.Fatal("event for nonexistent session"); return nil }),
 		commandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return guardErr },
 	})
@@ -1300,7 +1300,7 @@ func TestRunAgentSessionUnavailableMetricsRemainUnmeasured(t *testing.T) {
 		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 			return agent.SessionResult{Metrics: missing, MetricsWarning: "private warning"}, nil
 		})
-		repository := plan.NewFileRepository("")
+		repository := unscopedFileRepository(t)
 		runner, planDir, repoRoot := sessionEventTestRunner(t, runtime, repository, io.Discard, time.Now())
 		runner.runtimeEnv = runtimeconfig.RuntimeEnv()
 		// Prior usage must not turn this unavailable measurement into a cap check.
@@ -1330,7 +1330,7 @@ func TestRunAgentSessionUnavailableMetricsRemainUnmeasured(t *testing.T) {
 func TestRunAgentSessionCapsExcludeAttributedNonExecutionHistory(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "100")
 	t.Setenv(runtimeconfig.EnvBudgetSliceOutputTokensWarn, "100")
-	repository := plan.NewFileRepository("")
+	repository := unscopedFileRepository(t)
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Metrics: &agent.Metrics{OutputTokens: 40}}, nil
 	})
@@ -1407,7 +1407,7 @@ func TestImplementationCompletionGrace(t *testing.T) {
 			runner := newAgentSessionRunner(agentSessionRunnerConfig{
 				runtimeEnv: runEnvSnapshot(nil), sessionTimeout: tc.timeout,
 				descriptor:  agent.Descriptor{Label: "fake", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
-				logAppender: plan.NewFileRepository(""),
+				logAppender: unscopedFileRepository(t),
 			})
 			_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, VerificationCommands: tc.commands, Metrics: &AgentSessionMetricsRequest{Role: tc.role, SliceID: "001-a"}})
 			if err != nil || calls != 1 {
@@ -1459,7 +1459,7 @@ func TestImplementationWrapUpPolicy(t *testing.T) {
 			runner := newAgentSessionRunner(agentSessionRunnerConfig{
 				runtimeEnv: runEnvSnapshot(values), sessionTimeout: tc.timeout,
 				descriptor:  agent.Descriptor{Label: "fake", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }},
-				logAppender: plan.NewFileRepository(""),
+				logAppender: unscopedFileRepository(t),
 			})
 			// Configuration is invocation-local, even if the process environment changes.
 			t.Setenv(runtimeconfig.EnvSessionWarnPercent, "invalid-after-snapshot")
@@ -1484,7 +1484,7 @@ func sessionEventTestRunner(t *testing.T, runtime agent.Runtime, appender plan.E
 			Label: "test", MetricsMessage: "captured test metrics",
 			NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime },
 		},
-		logAppender:      plan.NewFileRepository(""),
+		logAppender:      unscopedFileRepository(t),
 		eventAppender:    appender,
 		sessionLogWriter: logWriter,
 		now:              func() time.Time { return timestamp },
@@ -1514,7 +1514,7 @@ func timeoutTestRunExecution(sessionTimeout time.Duration, runtime agent.Runtime
 			executor := newAgentExecutor(descriptor, execution.Config, execution.Dependencies, execution.StartingBranch, execution.StartingDirtyPaths)
 			return agentRunCapabilities{sliceExecutor: executor, pullRequestBodyGenerator: executor}
 		},
-		LogAppender:       plan.NewFileRepository(""),
+		LogAppender:       plan.NewFileRepository(repoRoot),
 		PlanRecordFactory: memoryPlanRecordFactory,
 	})
 	execution.ExecutionRoot = repoRoot

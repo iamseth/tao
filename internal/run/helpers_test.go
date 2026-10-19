@@ -73,7 +73,7 @@ func (r *memoryRunRepository) PlanRecord(detail *plan.PlanDetail) (*plan.PlanRec
 func (r *memoryRunRepository) OpenLogAppend(planDir string) (*os.File, error) { return nil, nil }
 
 func (r *memoryRunRepository) AppendEvent(planDir string, event plan.Event) error {
-	return plan.NewFileRepository("").AppendEvent(planDir, event)
+	return plan.NewFileRepository(filepath.Dir(planDir)).AppendEvent(planDir, event)
 }
 
 func persistRunArtifacts(t *testing.T, planDir string, detail *plan.PlanDetail) {
@@ -496,4 +496,12 @@ func runCallBefore(calls []string, before string, after string) bool {
 		}
 	}
 	return beforeIndex >= 0 && afterIndex >= 0 && beforeIndex < afterIndex
+}
+
+// unscopedFileRepository is for tests that address plans by absolute
+// directory. NewFileRepository("") would discover the current repository with
+// Git, which runs against the developer checkout and costs two processes.
+func unscopedFileRepository(t *testing.T) *plan.FileRepository {
+	t.Helper()
+	return plan.NewFileRepository(t.TempDir())
 }

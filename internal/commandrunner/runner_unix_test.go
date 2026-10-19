@@ -305,8 +305,10 @@ func TestVerificationIdentityDescendants(t *testing.T) {
 			}
 			if mode == "timeout" {
 				// The one-second probe bound includes process startup. If it
-				// expires before publication, no child cleanup can be asserted.
-				if _, err := os.Stat(pid); errors.Is(err, os.ErrNotExist) {
+				// expires before publication completes (no file yet, or the
+				// redirect created it but the PID was never written), no child
+				// cleanup can be asserted.
+				if data, err := os.ReadFile(pid); errors.Is(err, os.ErrNotExist) || (err == nil && len(bytes.TrimSpace(data)) == 0) { // #nosec G304 -- test-owned PID path.
 					return
 				}
 			}
