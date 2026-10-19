@@ -53,6 +53,7 @@ func TestComposedSnapshotSessionAdmission(t *testing.T) {
 }
 
 func TestInvalidSessionCapsRejectBeforeLaunch(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvMaxSliceCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			runner := agentSessionRunner{runtimeEnv: *runEnvSnapshot(map[string]string{key: "invalid"})}
@@ -66,6 +67,7 @@ func TestInvalidSessionCapsRejectBeforeLaunch(t *testing.T) {
 }
 
 func TestSessionsIgnoreUnusedInvalidBudgets(t *testing.T) {
+	t.Parallel()
 	for _, metrics := range []*AgentSessionMetricsRequest{
 		nil,
 		{Role: plan.AgentRoleReview},
@@ -140,6 +142,7 @@ func TestInjectedSessionCapsStableAcrossHandoffs(t *testing.T) {
 }
 
 func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{runtimeconfig.EnvMaxSliceCostDeprecated, runtimeconfig.EnvBudgetSliceToolCallsDeprecated, runtimeconfig.EnvBudgetPlanCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			snapshot := runEnvSnapshot(map[string]string{key: "invalid"})
@@ -158,6 +161,7 @@ func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
 }
 
 func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{
 		runtimeconfig.EnvMaxSliceOutputTokensDeprecated, runtimeconfig.EnvMaxSliceCostDeprecated,
 		runtimeconfig.EnvBudgetSliceOutputTokensDeprecated, runtimeconfig.EnvBudgetSliceCostDeprecated,
@@ -244,6 +248,7 @@ func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
 }
 
 func TestNonSlicePreparationIgnoresInvalidBudgets(t *testing.T) {
+	t.Parallel()
 	for _, reverify := range []bool{true, false} {
 		name := "pull request recovery"
 		if reverify {

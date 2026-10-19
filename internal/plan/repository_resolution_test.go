@@ -12,6 +12,7 @@ import (
 )
 
 func TestPlanSlugAcceptsMinuteAndSecondLevelIDs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		id   string
 		want string
@@ -37,6 +38,7 @@ func TestPlanSlugAcceptsMinuteAndSecondLevelIDs(t *testing.T) {
 }
 
 func TestGetPlanResolvesMinuteAndSecondLevelIDs(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	legacyID := "20260427-1802-legacy-plan"
 	secondLevelID := "20260427-181045-second-plan"
@@ -71,6 +73,7 @@ func TestGetPlanResolvesMinuteAndSecondLevelIDs(t *testing.T) {
 }
 
 func TestGetPlanAcceptsExactIDBeforePrefix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802", "Exact Plan")
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")
@@ -86,6 +89,7 @@ func TestGetPlanAcceptsExactIDBeforePrefix(t *testing.T) {
 }
 
 func TestGetPlanExactRejectsPrefixSlugPathAndMismatchedArtifactID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	id := "20260427-1802-example-plan"
 	writeMinimalPlan(t, dir, id, "Example Plan")
@@ -116,6 +120,7 @@ func TestGetPlanExactRejectsPrefixSlugPathAndMismatchedArtifactID(t *testing.T) 
 }
 
 func TestGetPlanAcceptsUniquePrefix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")
 
@@ -130,6 +135,7 @@ func TestGetPlanAcceptsUniquePrefix(t *testing.T) {
 }
 
 func TestGetPlanAcceptsUniqueSlugAndSlugPrefix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")
 	writeMinimalPlan(t, dir, "20260427-1810-other-plan", "Other Plan")
@@ -147,6 +153,7 @@ func TestGetPlanAcceptsUniqueSlugAndSlugPrefix(t *testing.T) {
 }
 
 func TestGetPlanRejectsAmbiguousSlugPrefix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")
 	writeMinimalPlan(t, dir, "20260427-181045-example-two", "Example Two")
@@ -159,6 +166,7 @@ func TestGetPlanRejectsAmbiguousSlugPrefix(t *testing.T) {
 }
 
 func TestGetPlanInputAcceptsPlanDirectoryAndFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	planID := "20260427-1802-example-plan"
 	writeMinimalPlan(t, dir, planID, "Example Plan")
@@ -181,6 +189,7 @@ func TestGetPlanInputAcceptsPlanDirectoryAndFile(t *testing.T) {
 }
 
 func TestDeletePlanDeletesResolvedPlan(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		input func(root, id string) string
@@ -211,6 +220,7 @@ func TestDeletePlanDeletesResolvedPlan(t *testing.T) {
 }
 
 func TestDeletePlanRequiresInput(t *testing.T) {
+	t.Parallel()
 	_, err := NewFileRepository(t.TempDir()).DeletePlan(context.Background(), "", DeletePlanOptions{})
 	if err == nil || !strings.Contains(err.Error(), "plan input is required") {
 		t.Fatalf("expected missing input error, got %v", err)
@@ -218,6 +228,7 @@ func TestDeletePlanRequiresInput(t *testing.T) {
 }
 
 func TestDeletePlanPreservesAmbiguity(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")
 	writeMinimalPlan(t, dir, "20260427-1810-example-two", "Example Two")
@@ -234,6 +245,7 @@ func TestDeletePlanPreservesAmbiguity(t *testing.T) {
 }
 
 func TestDeletePlanDeletesInvalidDirectoryOnlyWithConfirmation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	planID := "20260427-1802-broken-plan"
 	planDir := filepath.Join(dir, planID)
@@ -266,6 +278,7 @@ func TestDeletePlanDeletesInvalidDirectoryOnlyWithConfirmation(t *testing.T) {
 }
 
 func TestDeletePlanRejectsActivePlans(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePlan(t, dir, "active", `{
   "schema":"tao.plan.state.v1",
@@ -290,6 +303,7 @@ func TestDeletePlanRejectsActivePlans(t *testing.T) {
 }
 
 func TestDeletePlanRejectsUnsafePathsBeforeRemoveAll(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := &recordingArtifactStore{}
 	repo := NewFileRepository(dir)
@@ -307,6 +321,7 @@ func TestDeletePlanRejectsUnsafePathsBeforeRemoveAll(t *testing.T) {
 }
 
 func TestGetPlanRejectsAmbiguousPrefix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "20260427-1802-example-plan", "Example Plan")
 	writeMinimalPlan(t, dir, "20260427-1810-example-plan", "Example Plan")
@@ -319,6 +334,7 @@ func TestGetPlanRejectsAmbiguousPrefix(t *testing.T) {
 }
 
 func TestGetPlanRejectsInvalidAndMissingIDs(t *testing.T) {
+	t.Parallel()
 	repo := NewFileRepository(t.TempDir())
 	for _, tc := range []struct {
 		id   string

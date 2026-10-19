@@ -7,6 +7,7 @@ import (
 )
 
 func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
+	t.Parallel()
 	current := "001-a"
 	approvedBy := "alice"
 	approvedAt := "2026-05-31T12:00:00Z"
@@ -105,6 +106,7 @@ func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 }
 
 func TestCloneSliceVerificationEvidence(t *testing.T) {
+	t.Parallel()
 	snapshot := testSliceVerificationSnapshot()
 	original := Slice{VerificationAttempt: &snapshot, CommitIntent: &SliceCommitIntent{Hash: "hash", Verification: &snapshot}, VerificationResults: snapshot.Runs}
 	clone := cloneSlice(original)
@@ -127,6 +129,7 @@ func TestCloneSliceVerificationEvidence(t *testing.T) {
 }
 
 func TestCloneSnapshotAliasRegressions(t *testing.T) {
+	t.Parallel()
 	threshold, observed, exit := 3.5, 4.5, 1
 	detail := &PlanDetail{
 		Events: []Event{{Paths: []string{"path"}, AmendedFields: []string{"tasks"}, Threshold: &threshold, Observed: &observed, ExitCode: &exit, Baseline: &FinalVerificationBaseline{Signatures: []string{"event"}}}},
@@ -156,6 +159,7 @@ func TestCloneSnapshotAliasRegressions(t *testing.T) {
 }
 
 func TestCloneNestedExtra(t *testing.T) {
+	t.Parallel()
 	original := Slice{Extra: map[string]any{"nested": []any{map[string]any{"value": "original"}, nil, true, 2.5, "text", []any{"leaf"}}}}
 	clone := cloneSlice(original)
 	if !reflect.DeepEqual(original.Extra, clone.Extra) {
@@ -172,6 +176,7 @@ func TestCloneNestedExtra(t *testing.T) {
 }
 
 func TestProgressSnapshotDetectsProgress(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{State: State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}}, Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}}}
 	before := SnapshotProgress(detail)
 	if ProgressedSince(detail, before) {

@@ -24,6 +24,7 @@ func commitOnBranch(t *testing.T, repoPath string, branch string, file string, c
 }
 
 func TestPlanManagedCleanupExcludesIntegrationWorktrees(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	start := strings.TrimSpace(runGit(t, repo.path, "rev-parse", "master"))
@@ -43,6 +44,7 @@ func TestPlanManagedCleanupExcludesIntegrationWorktrees(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupDecidesByGitState(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	physicalRoot, err := filepath.EvalSymlinks(repo.path)
 	if err != nil {
@@ -195,6 +197,7 @@ func TestPlanIntegrationCleanupDecidesByGitState(t *testing.T) {
 }
 
 func TestListIntegrationsDiscoversRegisteredNamespacePath(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	ctx := context.Background()
@@ -214,6 +217,7 @@ func TestListIntegrationsDiscoversRegisteredNamespacePath(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupPreservesCurrentBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	ctx := context.Background()
@@ -236,6 +240,7 @@ func TestPlanIntegrationCleanupPreservesCurrentBranch(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupRefusesMismatchedWorktreeBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	ctx := context.Background()
@@ -251,6 +256,7 @@ func TestPlanIntegrationCleanupRefusesMismatchedWorktreeBranch(t *testing.T) {
 }
 
 func TestPlanIntegrationCleanupExcludesActiveUnregisteredDirectory(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	path := filepath.Join(repo.path, ".tao", "integrations", "active")
@@ -264,6 +270,7 @@ func TestPlanIntegrationCleanupExcludesActiveUnregisteredDirectory(t *testing.T)
 }
 
 func TestPlanManagedCleanupIncludesOnlyExactOwnedAndLegacyBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	for _, branch := range []string{
@@ -311,6 +318,7 @@ func TestPlanManagedCleanupIncludesOnlyExactOwnedAndLegacyBranches(t *testing.T)
 }
 
 func TestPlanManagedCleanupDecidesByGitState(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	ctx := context.Background()
@@ -403,6 +411,7 @@ func TestPlanManagedCleanupDecidesByGitState(t *testing.T) {
 }
 
 func TestCleanManagedRechecksWorktreeCleanliness(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T) (*Manager, ManagedCleanup, string) {
 		t.Helper()
 		repo := newTestRepo(t)
@@ -473,6 +482,7 @@ func TestCleanManagedRechecksWorktreeCleanliness(t *testing.T) {
 }
 
 func TestCleanManagedSelectsBranchDeleteMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		item        ManagedCleanup
@@ -512,6 +522,7 @@ func TestCleanManagedSelectsBranchDeleteMode(t *testing.T) {
 }
 
 func TestCleanManagedRefusesUnmergedBeforeGitMutation(t *testing.T) {
+	t.Parallel()
 	var commands []string
 	manager, err := NewManager(Options{RepoRoot: t.TempDir(), Runner: func(_ context.Context, _ string, _ string, args []string, _ io.Writer, _ io.Writer) error {
 		commands = append(commands, workspaceGitKey(args))
@@ -530,6 +541,7 @@ func TestCleanManagedRefusesUnmergedBeforeGitMutation(t *testing.T) {
 }
 
 func TestPlanManagedCleanupForceRemovesUnmerged(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	ctx := context.Background()
@@ -556,6 +568,7 @@ func TestPlanManagedCleanupForceRemovesUnmerged(t *testing.T) {
 }
 
 func TestManagedBranchPrefix(t *testing.T) {
+	t.Parallel()
 	manager := newTestManager(t, newTestRepo(t).path)
 	if got := manager.ManagedBranchPrefix(); got != "tao/" {
 		t.Fatalf("expected default prefix tao/, got %q", got)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestPlanningSessionDuration(t *testing.T) {
+	t.Parallel()
 	created := time.Date(2026, 5, 3, 21, 0, 0, 0, time.UTC)
 	updated := created.Add(5*time.Minute + 750*time.Millisecond)
 	if got := PlanningSessionDuration(&PlanningSessionStats{TimeCreated: &created, TimeUpdated: &updated}); got != 5*time.Minute+1*time.Second {
@@ -26,6 +27,7 @@ func TestPlanningSessionDuration(t *testing.T) {
 }
 
 func TestSummarizePlanningSessionMetricsUsesPlanningStartedAt(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 6, 30, 400*int(time.Millisecond), time.UTC)
 	planningStartedAt := planCreatedAt.Add(-2*time.Minute - 1250*time.Millisecond)
 	sessionCreatedAt := planCreatedAt.Add(-10 * time.Minute)
@@ -48,6 +50,7 @@ func TestSummarizePlanningSessionMetricsUsesPlanningStartedAt(t *testing.T) {
 }
 
 func TestSummarizePlanningSessionMetricsFallsBackFromZeroPlanningStartedAt(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 6, 30, 0, time.UTC)
 	planningStartedAt := planCreatedAt
 	sessionCreatedAt := planCreatedAt.Add(-4 * time.Minute)
@@ -67,6 +70,7 @@ func TestSummarizePlanningSessionMetricsFallsBackFromZeroPlanningStartedAt(t *te
 }
 
 func TestSummarizePlanningSessionMetricsFallsBackFromFuturePlanningStartedAt(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 6, 30, 0, time.UTC)
 	planningStartedAt := planCreatedAt.Add(30 * time.Second)
 	sessionCreatedAt := planCreatedAt.Add(-3 * time.Minute)
@@ -86,6 +90,7 @@ func TestSummarizePlanningSessionMetricsFallsBackFromFuturePlanningStartedAt(t *
 }
 
 func TestSummarizePlanningSessionMetricsHidesSuspectStats(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 6, 30, 0, time.UTC)
 	planningStartedAt := planCreatedAt.Add(-2 * time.Minute)
 	stats := &PlanningSessionStats{
@@ -106,6 +111,7 @@ func TestSummarizePlanningSessionMetricsHidesSuspectStats(t *testing.T) {
 }
 
 func TestSummarizePlanningSessionMetricsHandlesMissingStats(t *testing.T) {
+	t.Parallel()
 	summary := SummarizePlanningSessionMetrics(nil, time.Date(2026, 5, 3, 21, 6, 30, 0, time.UTC))
 	if summary.Present || summary.Valid || summary.UnavailableReason != "" || summary.Duration != 0 || summary.TotalTokens != 0 || summary.TotalMessages != 0 {
 		t.Fatalf("missing stats should stay quiet: %+v", summary)
@@ -113,6 +119,7 @@ func TestSummarizePlanningSessionMetricsHandlesMissingStats(t *testing.T) {
 }
 
 func TestSummarizePlanningSessionMetricsRejectsStaleLegacyStats(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 6, 30, 0, time.UTC)
 	sessionCreatedAt := planCreatedAt.Add(-10 * time.Minute)
 	sessionUpdatedAt := planCreatedAt.Add(-5 * time.Minute)
@@ -133,6 +140,7 @@ func TestSummarizePlanningSessionMetricsRejectsStaleLegacyStats(t *testing.T) {
 }
 
 func TestSummarizePlanningSessionMetricsAllowsSafeLegacyFallback(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 6, 30, 250*int(time.Millisecond), time.UTC)
 	sessionCreatedAt := planCreatedAt.Add(-4*time.Minute - 750*time.Millisecond)
 	sessionUpdatedAt := planCreatedAt.Add(30 * time.Second)
@@ -150,6 +158,7 @@ func TestSummarizePlanningSessionMetricsAllowsSafeLegacyFallback(t *testing.T) {
 }
 
 func TestSummarizePopulatesPlanningSessionFields(t *testing.T) {
+	t.Parallel()
 	planCreatedAt := time.Date(2026, 5, 3, 21, 5, 0, 0, time.UTC)
 	planningStartedAt := planCreatedAt.Add(-5 * time.Minute)
 	detail := &PlanDetail{
@@ -174,6 +183,7 @@ func TestSummarizePopulatesPlanningSessionFields(t *testing.T) {
 }
 
 func TestSummarizePopulatesPullRequest(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Date(2026, 5, 26, 18, 30, 0, 0, time.UTC)
 	detail := &PlanDetail{State: State{Plan: PlanState{
 		ID:    "plan",
@@ -198,6 +208,7 @@ func TestSummarizePopulatesPullRequest(t *testing.T) {
 }
 
 func TestPlanLoadsFormalVerificationAndApproval(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePlan(t, dir, "formal", `{
   "schema":"tao.plan.state.v1",
@@ -246,6 +257,7 @@ func TestPlanLoadsFormalVerificationAndApproval(t *testing.T) {
 }
 
 func TestPlanLoadsPlanningSessionArtifacts(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "capture", "Capture Plan")
 	planDir := filepath.Join(dir, "capture")
@@ -308,6 +320,7 @@ func TestPlanLoadsPlanningSessionArtifacts(t *testing.T) {
 }
 
 func TestPlanWarnsWhenPlanningPromptExtractionFailed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "capture", "Capture Plan")
 	planDir := filepath.Join(dir, "capture")
@@ -336,6 +349,7 @@ func TestPlanWarnsWhenPlanningPromptExtractionFailed(t *testing.T) {
 }
 
 func TestRepositoryLoadsPlanningBriefArtifact(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "brief", "Brief Plan")
 	planDir := filepath.Join(dir, "brief")
@@ -375,6 +389,7 @@ None.
 }
 
 func TestRepositoryIgnoresHistoricalPreviewExtraFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "historical", "Historical Plan")
 	planDir := filepath.Join(dir, "historical")
@@ -398,6 +413,7 @@ func TestRepositoryIgnoresHistoricalPreviewExtraFile(t *testing.T) {
 }
 
 func TestRepositoryLoadsPlanNarrativeArtifact(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "narrative", "Narrative Plan")
 	planDir := filepath.Join(dir, "narrative")
@@ -421,6 +437,7 @@ func TestRepositoryLoadsPlanNarrativeArtifact(t *testing.T) {
 }
 
 func TestRepositoryDoesNotWarnWhenPlanNarrativeIsMissing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "legacy", "Legacy Plan")
 	planDir := filepath.Join(dir, "legacy")
@@ -442,6 +459,7 @@ func TestRepositoryDoesNotWarnWhenPlanNarrativeIsMissing(t *testing.T) {
 }
 
 func TestPlanWarnsWhenPlanningBriefIsMissingOrMalformed(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "missing", "Missing Brief")
 
@@ -471,6 +489,7 @@ func TestPlanWarnsWhenPlanningBriefIsMissingOrMalformed(t *testing.T) {
 }
 
 func TestPlanLoadsLegacyPlanWithoutPlanningSessionArtifacts(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "legacy", "Legacy Plan")
 
@@ -488,6 +507,7 @@ func TestPlanLoadsLegacyPlanWithoutPlanningSessionArtifacts(t *testing.T) {
 }
 
 func TestRepositoryLoadsCompatibleTelemetryMetadata(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "metrics", "Metrics Plan")
 	path := filepath.Join(dir, "metrics", "events.jsonl")
@@ -541,6 +561,7 @@ func TestRepositoryLoadsCompatibleTelemetryMetadata(t *testing.T) {
 }
 
 func TestRepositoryLoadsAgentMetricsEvents(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeMinimalPlan(t, dir, "metrics", "Metrics Plan")
 	if err := os.WriteFile(filepath.Join(dir, "metrics", "events.jsonl"), []byte(`{"type":"agent_metrics","timestamp":"2026-05-01T23:00:00Z","plan_id":"metrics","slice_id":"001-a","metrics":{"session_id":"session-1","provider_id":"anthropic","model_id":"claude","status":"completed","input_tokens":10,"output_tokens":5,"total_tokens":15,"cost":0.01,"tool_calls":2},"message":"captured metrics"}`+"\n"), 0o600); err != nil {

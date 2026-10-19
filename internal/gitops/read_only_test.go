@@ -14,6 +14,7 @@ import (
 )
 
 func TestReadOnlyProbes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	globals := []string{"-C", root, "--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "--literal-pathspecs"}
 	var calls [][]string
@@ -54,6 +55,7 @@ func TestReadOnlyProbes(t *testing.T) {
 }
 
 func TestListsLinkedWorktreeReadOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -122,6 +124,7 @@ func (e probeExit) Error() string { return "exit" }
 func (e probeExit) ExitCode() int { return int(e) }
 
 func TestVerifyCommit(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, out, stderr string
 		err               error

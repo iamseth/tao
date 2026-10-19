@@ -12,6 +12,7 @@ import (
 )
 
 func TestPrepareSubmodulesAbsentAndInspectionError(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 		t.Fatal("runner must not be called")
@@ -30,6 +31,7 @@ func TestPrepareSubmodulesAbsentAndInspectionError(t *testing.T) {
 }
 
 func TestPrepareSubmodulesCancellationAndRetry(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, ".gitmodules"))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -54,6 +56,7 @@ func TestPrepareSubmodulesCancellationAndRetry(t *testing.T) {
 }
 
 func TestPrepareSubmodulesDefaultRunnerAndClock(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	if err := os.WriteFile(filepath.Join(repo.path, ".gitmodules"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -118,6 +121,7 @@ func newNestedSubmoduleFixture(t *testing.T) nestedSubmoduleFixture {
 }
 
 func TestPrepareSubmodulesNestedPinnedRevisionsAndDirtyContent(t *testing.T) {
+	t.Parallel()
 	fixture := newNestedSubmoduleFixture(t)
 	child := filepath.Join(fixture.root, "modules/child")
 	leaf := filepath.Join(child, "nested")
@@ -161,6 +165,7 @@ func TestPrepareSubmodulesNestedPinnedRevisionsAndDirtyContent(t *testing.T) {
 }
 
 func TestPrepareSubmodulesConfiguredUpdateModes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		mode        string
@@ -218,6 +223,7 @@ func TestPrepareSubmodulesConfiguredUpdateModes(t *testing.T) {
 }
 
 func TestPrepareSubmodulesStatusValidation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		output string
@@ -264,6 +270,7 @@ func TestPrepareSubmodulesRespectsTransportPolicy(t *testing.T) {
 }
 
 func TestPrepareSubmodulesDefaultRunnerCancellation(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	writeFile(t, filepath.Join(repo.path, ".gitmodules"))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -275,6 +282,7 @@ func TestPrepareSubmodulesDefaultRunnerCancellation(t *testing.T) {
 }
 
 func TestPrepareDependenciesFallsBackToRunnerErrorWhenStderrEmpty(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeFile(t, root+"/yarn.lock")
 	metadata, err := PrepareDependencies(context.Background(), root, DefaultConfig(), func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {

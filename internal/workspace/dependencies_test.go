@@ -13,6 +13,7 @@ import (
 )
 
 func TestPrepareDependenciesSelectsCommandAndRunsInWorkspaceRoot(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "pnpm-lock.yaml"))
 	var gotCwd, gotName string
@@ -40,6 +41,7 @@ func TestPrepareDependenciesSelectsCommandAndRunsInWorkspaceRoot(t *testing.T) {
 }
 
 func TestPrepareDependenciesSkipsWhenAutoAndNoLockfile(t *testing.T) {
+	t.Parallel()
 	called := false
 	metadata, err := PrepareDependencies(context.Background(), t.TempDir(), DefaultConfig(), func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		called = true
@@ -57,6 +59,7 @@ func TestPrepareDependenciesSkipsWhenAutoAndNoLockfile(t *testing.T) {
 }
 
 func TestPrepareDependenciesRecordsFailure(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "package-lock.json"))
 	runnerErr := errors.New("exit status 1")
@@ -73,6 +76,7 @@ func TestPrepareDependenciesRecordsFailure(t *testing.T) {
 }
 
 func TestPrepareDependenciesSubmodulePipeline(t *testing.T) {
+	t.Parallel()
 	const gitCommand = "git submodule update --init --recursive"
 	const statusCommand = "git submodule status --recursive"
 	for _, tc := range []struct {

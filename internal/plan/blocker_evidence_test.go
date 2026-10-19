@@ -8,6 +8,7 @@ import (
 )
 
 func TestLatestPlanOwnedBlocker(t *testing.T) {
+	t.Parallel()
 	if got := LatestPlanOwnedBlocker(nil, "001-a"); got != nil {
 		t.Fatalf("nil detail returned %+v", got)
 	}
@@ -39,6 +40,7 @@ func TestLatestPlanOwnedBlocker(t *testing.T) {
 }
 
 func TestPlanOwnershipBase(t *testing.T) {
+	t.Parallel()
 	for _, detail := range []*PlanDetail{nil, {}, {State: State{Repo: Repo{BaseCommit: " \n "}}}} {
 		if got := PlanOwnershipBase(detail); got != "" {
 			t.Fatalf("missing base = %q", got)
@@ -50,6 +52,7 @@ func TestPlanOwnershipBase(t *testing.T) {
 }
 
 func TestClassifyBlockerPaths(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name           string
 		failing, owned []string
@@ -85,6 +88,7 @@ func TestClassifyBlockerPaths(t *testing.T) {
 }
 
 func TestWorktreeFingerprint(t *testing.T) {
+	t.Parallel()
 	for _, parts := range [][]string{nil, {""}, {"", ""}} {
 		if got := WorktreeFingerprint(parts...); got != "" {
 			t.Fatalf("empty parts fingerprint = %q", got)
@@ -108,6 +112,7 @@ func TestWorktreeFingerprint(t *testing.T) {
 }
 
 func TestBlockSliceWithEvidencePersists(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)

@@ -11,6 +11,7 @@ import (
 )
 
 func TestNilHeaderReporterLeavesRunBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 
@@ -23,6 +24,7 @@ func TestNilHeaderReporterLeavesRunBehaviorUnchanged(t *testing.T) {
 }
 
 func TestPanickingHeaderReporterDoesNotFailRun(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 
@@ -36,6 +38,7 @@ func TestPanickingHeaderReporterDoesNotFailRun(t *testing.T) {
 }
 
 func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
+	t.Parallel()
 	startedAt := time.Date(2026, 8, 12, 19, 0, 0, 0, time.UTC)
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &startedAt, nil)
 	detail.State.Repo.Name = "tao"
@@ -111,6 +114,7 @@ func TestHeaderReporterPublishesSliceProgressionAndMetricTotals(t *testing.T) {
 }
 
 func TestNewHeaderStateProjectsPrimaryRecurringFindingFile(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusInProgress, nil, nil, "001-a", plan.StatusInProgress, nil, nil)
 	detail.Events = []plan.Event{
 		{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, FindingsCount: 1, Findings: []plan.ReviewFinding{{File: "initial.go", Line: 1}}}},

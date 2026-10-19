@@ -18,6 +18,7 @@ func assertGitMaintenanceDisabled(t *testing.T, dir string) {
 }
 
 func TestNewTestRepoDisablesMaintenance(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	assertGitMaintenanceDisabled(t, repo.path)
 }

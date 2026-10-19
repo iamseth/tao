@@ -7,6 +7,7 @@ import (
 )
 
 func TestValidateApprovalContractWording(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		text string
@@ -60,6 +61,7 @@ func TestValidateApprovalContractWording(t *testing.T) {
 }
 
 func TestValidateApprovalContractFields(t *testing.T) {
+	t.Parallel()
 	text := "Facts are supplied through approval."
 	for _, field := range []string{"goal", "context", "tasks[0]", "tasks[1]", "approval.reason"} {
 		t.Run(field, func(t *testing.T) {
@@ -94,6 +96,7 @@ func TestValidateApprovalContractFields(t *testing.T) {
 }
 
 func TestValidateApprovalContractEligibility(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{StatusPending, StatusPlanned, StatusInProgress, StatusInReview, StatusReviewed, StatusChangesRequested, StatusVerificationFailed, StatusCompleted, StatusAbandoned, StatusSkipped, StatusBlocked, StatusInvalid, "", "unknown"} {
 		for _, required := range []bool{false, true} {
 			for _, approved := range []bool{false, true} {
@@ -120,6 +123,7 @@ func TestValidateApprovalContractEligibility(t *testing.T) {
 }
 
 func TestValidateApprovalContractDeclaredInputDoesNotExcuseContradiction(t *testing.T) {
+	t.Parallel()
 	slice := approvalContractSlice()
 	slice.RequiredInputs = []RequiredInput{{Path: "evidence.md", Kind: RequiredInputFile, Reason: "Actual observation record"}}
 	slice.Goal = "Facts are supplied through approval."

@@ -11,6 +11,7 @@ import (
 )
 
 func TestWorkspaceRebaseIntentRecordIsValidatedIdempotentAndExactClear(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -57,6 +58,7 @@ func TestWorkspaceRebaseIntentRecordIsValidatedIdempotentAndExactClear(t *testin
 }
 
 func TestWorkspaceRebaseSettlementPersistsBoundaryAndClearAtomically(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -101,6 +103,7 @@ func TestWorkspaceRebaseSettlementPersistsBoundaryAndClearAtomically(t *testing.
 }
 
 func TestWorkspaceRebaseIntentValidation(t *testing.T) {
+	t.Parallel()
 	valid := testWorkspaceRebaseIntent()
 	legacy := valid
 	legacy.CommitSeriesFingerprint = "v1:sha256:" + strings.Repeat("d", 64)
@@ -140,6 +143,7 @@ func TestWorkspaceRebaseIntentValidation(t *testing.T) {
 }
 
 func TestWorkspaceRebaseIntentClearRequiresDeclarationAndPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
 	field, ok := reflect.TypeOf(Workspace{}).FieldByName("RebaseIntent")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
 		t.Fatalf("Workspace.RebaseIntent must preserve by default, tag=%q", field.Tag.Get("json"))

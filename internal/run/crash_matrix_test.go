@@ -18,6 +18,7 @@ import (
 )
 
 func TestCompleteVerifiedCrashMatrix(t *testing.T) {
+	t.Parallel()
 	for _, outcome := range []string{plan.SliceCompletionCommitted, plan.SliceCompletionNoChanges, plan.SliceCompletionManualUncommitted} {
 		points := []string{"snapshot", "intent", "settlement"}
 		if outcome == plan.SliceCompletionCommitted {
@@ -159,6 +160,7 @@ func TestCompleteVerifiedCrashMatrix(t *testing.T) {
 }
 
 func TestCompleteVerifiedRecoveryRefusesExactBoundaryDrift(t *testing.T) {
+	t.Parallel()
 	for _, drift := range []string{"message", "parent", "worktree", "proposal"} {
 		t.Run(drift, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
@@ -215,6 +217,7 @@ func TestCompleteVerifiedRecoveryRefusesExactBoundaryDrift(t *testing.T) {
 }
 
 func TestRecoverCommitCrashMatrix(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		build         func(*testing.T, *crashfixture.Fixture) crashfixture.State
@@ -263,6 +266,7 @@ func TestRecoverCommitCrashMatrix(t *testing.T) {
 }
 
 func TestRecoverCommitRefusesParentMismatch(t *testing.T) {
+	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.SourceTarget)
 	_, request, intent := sliceRecoveryCrashInput(t, fixture)
@@ -275,6 +279,7 @@ func TestRecoverCommitRefusesParentMismatch(t *testing.T) {
 }
 
 func TestRecoverCommitRefusesMessageMismatch(t *testing.T) {
+	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.SourceTarget)
 	_, request, intent := sliceRecoveryCrashInput(t, fixture)
@@ -287,6 +292,7 @@ func TestRecoverCommitRefusesMessageMismatch(t *testing.T) {
 }
 
 func TestRecoverCommitRefusesDirtyWorktreeWithCommitCandidates(t *testing.T) {
+	t.Parallel()
 	fixture := crashfixture.New(t)
 	fixture.AfterGitMutation(t, crashfixture.SourceTarget)
 	if err := os.WriteFile(filepath.Join(fixture.SourceWorktree, "dirty.txt"), []byte("unsettled work\n"), 0o600); err != nil {

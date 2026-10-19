@@ -14,6 +14,7 @@ import (
 // Exercise the actual caller strategies, including durable file-backed failure
 // settlement, rather than two hand-built copies of the shared strategy.
 func TestReviewProposalCorrectionFailureParity(t *testing.T) {
+	t.Parallel()
 	const initial = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved exact range.\",\"findings\":[],\"commit_message\":\"malformed\"}\n```"
 	const valid = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve correction evidence\",\"body\":\"What:\\nPreserve exact review evidence.\\n\\nWhy:\\nKeep correction recovery bounded.\"}}\n```"
 	for _, tt := range []struct {

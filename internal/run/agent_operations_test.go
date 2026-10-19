@@ -23,8 +23,7 @@ import (
 )
 
 func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Parallel()
 	for _, tc := range []struct {
 		name                                                                               string
 		expected, owned, dirty, missingBase, invalidBase, missingSlice, headMoved, timeout bool
@@ -55,6 +54,7 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 		{name: "missing slice", missingSlice: true, wantLeak: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			control, execution := t.TempDir(), t.TempDir()
 			for _, root := range []string{control, execution} {
 				lifecycleGitRun(t, root, "init")
@@ -196,6 +196,7 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 }
 
 func TestAgentOperationModels(t *testing.T) {
+	t.Parallel()
 	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
 	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
 	for _, selection := range []struct {
@@ -320,6 +321,7 @@ func TestAgentOperationModels(t *testing.T) {
 }
 
 func TestRunSliceEscalationPreservesRoleEffort(t *testing.T) {
+	t.Parallel()
 	for _, override := range []string{"", "escalated-model"} {
 		t.Run("override="+override, func(t *testing.T) {
 			models := runtimeconfig.ModelSelection{Run: "run-model", Effort: "base-effort", RunEffort: "run-effort"}
@@ -346,6 +348,7 @@ func TestRunSliceEscalationPreservesRoleEffort(t *testing.T) {
 }
 
 func TestHistoricalProposalCorrectionModel(t *testing.T) {
+	t.Parallel()
 	for _, model := range []string{"", "v"} {
 		t.Run("model="+model, func(t *testing.T) {
 			fixture := newPullRequestOrchestrationFixture(t)
@@ -399,6 +402,7 @@ func TestHistoricalProposalCorrectionModel(t *testing.T) {
 }
 
 func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
+	t.Parallel()
 	executor := &recordingAgentSessionExecutor{}
 	err := runSliceWithAgentSession(context.Background(), executor, agentOperationOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated}, SliceRun{
 		PlanDir: "/plans/a", SliceID: "001-a", RepoRoot: "/repo", Resuming: true, ResumeAttempt: 2,
@@ -418,6 +422,7 @@ func TestRunSliceWithAgentSessionCarriesInterruptedResumePrompt(t *testing.T) {
 }
 
 func TestGeneratePullRequestBodySessionCarriesNativeAcceptanceContract(t *testing.T) {
+	t.Parallel()
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{FinalText: "body"}}
 	body, err := generatePullRequestBodyWithAgentSession(context.Background(), executor, agentOperationOptions{}, PullRequestBodyRun{
 		PlanDir: "/plans/a", PlanID: "plan-a", RepoRoot: "/repo", Title: "feat(pr): native format", DraftBody: "## Problem\n",
@@ -628,6 +633,7 @@ func phaseTelemetryStarter(t *testing.T, kind AgentKind, output string, availabi
 }
 
 func TestRunAgentSessionInvokesProviderExactlyOnce(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		calls++
@@ -646,6 +652,7 @@ func TestRunAgentSessionInvokesProviderExactlyOnce(t *testing.T) {
 }
 
 func TestRunAgentSessionCarriesVerificationCommandsToNeutralRuntime(t *testing.T) {
+	t.Parallel()
 	want := []string{"cd packages/commonStudent && pnpm test"}
 	var got agent.Session
 	runtime := agentRuntimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
@@ -666,6 +673,7 @@ func TestRunAgentSessionCarriesVerificationCommandsToNeutralRuntime(t *testing.T
 }
 
 func TestRunPathAgentSessionTimeoutIsClassified(t *testing.T) {
+	t.Parallel()
 	const sessionTimeout = time.Millisecond
 	repoRoot := t.TempDir()
 	detail := runPathSessionDetail(t, repoRoot, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
@@ -703,6 +711,7 @@ func TestRunPathAgentSessionTimeoutIsClassified(t *testing.T) {
 }
 
 func TestRunPathAgentSessionTimeoutLeavesFastSessionUnaffected(t *testing.T) {
+	t.Parallel()
 	const sessionTimeout = time.Hour
 	repoRoot := t.TempDir()
 	detail := runPathSessionDetail(t, repoRoot, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
@@ -737,6 +746,7 @@ func TestRunPathAgentSessionTimeoutLeavesFastSessionUnaffected(t *testing.T) {
 }
 
 func TestRunAgentSessionAppendsSessionTimeoutEvent(t *testing.T) {
+	t.Parallel()
 	const sessionTimeout = 95 * time.Second
 	timedOutAt := time.Date(2026, 7, 14, 2, 30, 0, 0, time.FixedZone("test", -5*60*60))
 	timeoutErr := &agent.SessionTimeoutError{Timeout: sessionTimeout}
@@ -841,6 +851,7 @@ func TestRunAgentSessionSliceBudgetCaps(t *testing.T) {
 }
 
 func TestRunAgentSessionCanonicalStopCaps(t *testing.T) {
+	t.Parallel()
 	t.Run("explicit zero stop still blocks", func(t *testing.T) {
 		runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 			return agent.SessionResult{Output: "partial", Metrics: &agent.Metrics{Cost: 0.25}}, nil
@@ -909,6 +920,7 @@ func TestRunAgentSessionSliceBudgetAccumulatesPriorMetrics(t *testing.T) {
 }
 
 func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing.T) {
+	t.Parallel()
 	plansRoot := t.TempDir()
 	planDir := filepath.Join(plansRoot, "plan-a")
 	if err := os.MkdirAll(planDir, 0o700); err != nil {
@@ -996,6 +1008,7 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 }
 
 func TestSliceBudgetExceededUsesInterruptedResumeBoundary(t *testing.T) {
+	t.Parallel()
 	input := interruptedInput()
 	before := input.Detail.Slices.Slices[0]
 	input.Detail.State.Plan.ID = "plan-a"
@@ -1028,6 +1041,7 @@ func TestSliceBudgetExceededUsesInterruptedResumeBoundary(t *testing.T) {
 }
 
 func TestRunAgentSessionTimeoutAppendFailurePreservesResult(t *testing.T) {
+	t.Parallel()
 	timeoutErr := &agent.SessionTimeoutError{Timeout: 2 * time.Minute}
 	want := AgentSessionResult{Output: "partial output", FinalText: "partial final text"}
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
@@ -1048,6 +1062,7 @@ func TestRunAgentSessionTimeoutAppendFailurePreservesResult(t *testing.T) {
 }
 
 func TestRunAgentSessionNonTimeoutErrorSkipsSessionTimeoutEvent(t *testing.T) {
+	t.Parallel()
 	runErr := errors.New("agent failed")
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{}, runErr
@@ -1068,6 +1083,7 @@ func TestRunAgentSessionNonTimeoutErrorSkipsSessionTimeoutEvent(t *testing.T) {
 }
 
 func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
+	t.Parallel()
 	timeoutErr := &agent.SessionTimeoutError{Timeout: time.Minute}
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{}, timeoutErr
@@ -1093,6 +1109,7 @@ func TestRunAgentSessionStateReadErrorSkipsSessionTimeoutEvent(t *testing.T) {
 }
 
 func TestRunAgentSessionPromptCapture(t *testing.T) {
+	t.Parallel()
 	for _, blocked := range []bool{false, true} {
 		t.Run(fmt.Sprint(blocked), func(t *testing.T) {
 			var log bytes.Buffer
@@ -1138,6 +1155,7 @@ func TestRunAgentSessionPromptCapture(t *testing.T) {
 }
 
 func TestPullRequestSessionsCaptureDistinctPrompts(t *testing.T) {
+	t.Parallel()
 	runtime := agentRuntimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 		return agent.SessionResult{Output: "https://github.com/example/repo/pull/1", FinalText: "body"}, nil
 	})
@@ -1254,6 +1272,7 @@ func TestRunAgentSessionTelemetryFailuresPreserveProviderOutcome(t *testing.T) {
 }
 
 func TestRunAgentSessionPreSessionFailureDoesNotEmitMetrics(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := runPathSessionDetail(t, repoRoot, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
 	guardErr := errors.New("fingerprint failed")

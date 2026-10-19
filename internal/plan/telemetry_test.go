@@ -8,6 +8,7 @@ import (
 )
 
 func TestAgentMetricsPromptIdentity(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{`{"session_id":"legacy"}`, `{"session_id":"captured","prompt_template":"run","prompt_hash":"abc123"}`} {
 		var got AgentMetrics
 		if err := json.Unmarshal([]byte(input), &got); err != nil {
@@ -38,6 +39,7 @@ func TestAgentMetricsPromptIdentity(t *testing.T) {
 }
 
 func TestAgentBudgetDefaults(t *testing.T) {
+	t.Parallel()
 	b := DefaultAgentBudget()
 	want := AgentBudgetThresholds{
 		Slice: AgentBudgetScopeThresholds{OutputTokens: 40000, Cost: 5, ToolCalls: 120, AssistantMessages: 80},
@@ -57,6 +59,7 @@ func TestAgentBudgetDefaults(t *testing.T) {
 }
 
 func TestAgentBudgetValidate(t *testing.T) {
+	t.Parallel()
 	b := DefaultAgentBudget()
 	tokens, cost := int64(39999), 19.5
 	b.Slice.OutputTokens.Stop = &tokens
@@ -96,6 +99,7 @@ func TestAgentBudgetValidate(t *testing.T) {
 }
 
 func TestAgentBudgetClone(t *testing.T) {
+	t.Parallel()
 	b := DefaultAgentBudget()
 	if !reflect.DeepEqual(b.Clone(), b) {
 		t.Fatal("clone changed nil stops")
@@ -126,6 +130,7 @@ func TestAgentBudgetClone(t *testing.T) {
 }
 
 func TestAgentBudgetJSON(t *testing.T) {
+	t.Parallel()
 	b := AgentBudget{}
 	zero := int64(0)
 	b.Slice.OutputTokens.Stop = &zero
@@ -140,6 +145,7 @@ func TestAgentBudgetJSON(t *testing.T) {
 }
 
 func TestAgentMetricsMeasurementRoundTrip(t *testing.T) {
+	t.Parallel()
 	fields := []string{"input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost"}
 	presence := func(m AgentMetrics) []bool {
 		return []bool{m.InputTokensPresent, m.OutputTokensPresent, m.ReasoningTokensPresent, m.CacheReadTokensPresent, m.CacheWriteTokensPresent, m.TotalTokensPresent, m.CostPresent}
@@ -200,6 +206,7 @@ func TestAgentMetricsMeasurementRoundTrip(t *testing.T) {
 }
 
 func TestAgentMetricsReasoningEffortRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, effort := range []string{"", "opaque:HIGH"} {
 		encoded, err := json.Marshal(AgentMetrics{ReasoningEffort: effort})
 		if err != nil {
@@ -223,6 +230,7 @@ func TestAgentMetricsReasoningEffortRoundTrip(t *testing.T) {
 }
 
 func TestAgentMetricsGoZeroPresence(t *testing.T) {
+	t.Parallel()
 	for _, present := range []bool{false, true} {
 		m := AgentMetrics{InputTokensPresent: present, OutputTokensPresent: present, ReasoningTokensPresent: present, CacheReadTokensPresent: present, CacheWriteTokensPresent: present, TotalTokensPresent: present, CostPresent: present}
 		encoded, err := json.Marshal(m)
@@ -258,6 +266,7 @@ func TestAgentMetricsGoZeroPresence(t *testing.T) {
 }
 
 func TestAgentMetricsRoleAndAvailabilityCompatibility(t *testing.T) {
+	t.Parallel()
 	for _, role := range []AgentRole{AgentRolePlanning, AgentRoleExecution, AgentRoleReview, AgentRoleRework, AgentRolePullRequest, AgentRoleMerge, AgentRoleUnknown, "", "future-role", " REVIEW "} {
 		for _, availability := range []AgentMetricsAvailability{AgentMetricsReported, AgentMetricsPartial, AgentMetricsUnavailable, "", "future-availability"} {
 			m := AgentMetrics{Role: role, Availability: availability}
@@ -302,6 +311,7 @@ func TestAgentMetricsRoleAndAvailabilityCompatibility(t *testing.T) {
 }
 
 func TestSummarizeAgentMetricsRolesReconcile(t *testing.T) {
+	t.Parallel()
 	roles := []AgentRole{AgentRoleReview, AgentRoleExecution, AgentRolePlanning, AgentRoleRework, AgentRolePullRequest, AgentRoleMerge, "future-role", "", AgentRoleExecution}
 	availability := []AgentMetricsAvailability{AgentMetricsReported, AgentMetricsPartial, AgentMetricsUnavailable, "future-value", ""}
 	var events []AgentMetricEvent
@@ -365,6 +375,7 @@ func TestSummarizeAgentMetricsRolesReconcile(t *testing.T) {
 }
 
 func TestEventDecodesAgentMetrics(t *testing.T) {
+	t.Parallel()
 	var event Event
 	if err := json.Unmarshal([]byte(`{
   "type":"agent_metrics",
@@ -412,6 +423,7 @@ func TestEventDecodesAgentMetrics(t *testing.T) {
 }
 
 func TestSummarizeRework(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		events []Event
@@ -447,6 +459,7 @@ func TestSummarizeRework(t *testing.T) {
 }
 
 func TestProjectReworkChurn(t *testing.T) {
+	t.Parallel()
 	review := func(sliceID string, findings ...ReviewFinding) Event {
 		return Event{
 			Type:    EventTypePlanReviewed,
@@ -625,6 +638,7 @@ func TestProjectReworkChurn(t *testing.T) {
 }
 
 func TestSummarizeAgentMetricsAggregatesTotalsAndFailures(t *testing.T) {
+	t.Parallel()
 	events := []AgentMetricEvent{
 		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", ProviderID: "anthropic", ModelID: "claude", Status: StatusCompleted, Result: StatusCompleted, InputTokens: 100, OutputTokens: 50, ReasoningTokens: 10, CacheReadTokens: 20, CacheWriteTokens: 5, TotalTokens: 185, Cost: 0.25, TotalMessages: 3, UserMessages: 1, AssistantMessages: 2, ErroredMessages: 0, ToolCalls: 3}},
 		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", ProviderID: "anthropic", ModelID: "claude", Status: StatusBlocked, Result: StatusBlocked, InputTokens: 30, OutputTokens: 10, TotalTokens: 40, Cost: 0.05, TotalMessages: 2, UserMessages: 1, AssistantMessages: 1, ErroredMessages: 1, ToolCalls: 1}},
@@ -653,6 +667,7 @@ func TestSummarizeAgentMetricsAggregatesTotalsAndFailures(t *testing.T) {
 }
 
 func TestSummarizeAgentMetricsClampsNegativeValues(t *testing.T) {
+	t.Parallel()
 	summary := SummarizeAgentMetrics([]AgentMetricEvent{{Metrics: AgentMetrics{
 		Status:            StatusCompleted,
 		Result:            StatusCompleted,
@@ -676,6 +691,7 @@ func TestSummarizeAgentMetricsClampsNegativeValues(t *testing.T) {
 }
 
 func TestAgentMetricsEventsFiltersMissingPayloads(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-a", Agent: "pi", Metrics: &AgentMetrics{SessionID: "session-1"}},
 		{Type: EventTypeAgentMetrics, PlanID: "plan", SliceID: "001-b", Metrics: &AgentMetrics{Agent: "pi", SessionID: "session-2", TotalTokens: 12}},
@@ -698,6 +714,7 @@ func TestAgentMetricsEventsFiltersMissingPayloads(t *testing.T) {
 }
 
 func TestSummarizeAgentMetricsAggregatesAgents(t *testing.T) {
+	t.Parallel()
 	events := []AgentMetricEvent{
 		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{Agent: "pi", SessionID: "pi-1", Status: StatusCompleted, Result: StatusCompleted, TotalTokens: 20, AssistantMessages: 2, ToolCalls: 3}},
 	}
@@ -715,6 +732,7 @@ func TestSummarizeAgentMetricsAggregatesAgents(t *testing.T) {
 }
 
 func TestAgentAuditTrailIncludesPlanningAndExecutionAgents(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		PlanningSession: PlanningSessionArtifacts{Stats: &PlanningSessionStats{Agent: "pi"}},
 		Events: []Event{
@@ -734,6 +752,7 @@ func TestAgentAuditTrailIncludesPlanningAndExecutionAgents(t *testing.T) {
 }
 
 func TestDefaultAgentBudgetThresholds(t *testing.T) {
+	t.Parallel()
 	got := DefaultAgentBudgetThresholds()
 	if got.Slice.OutputTokens != 40000 || got.Slice.Cost != 5 || got.Slice.ToolCalls != 120 || got.Slice.AssistantMessages != 80 || got.Slice.ErroredMessages != 0 {
 		t.Fatalf("unexpected slice defaults: %+v", got.Slice)
@@ -744,6 +763,7 @@ func TestDefaultAgentBudgetThresholds(t *testing.T) {
 }
 
 func TestAgentTelemetryBudgetWarningsUseScopedMetrics(t *testing.T) {
+	t.Parallel()
 	thresholds := DefaultAgentBudgetThresholds()
 	summary := SummarizeAgentMetrics([]AgentMetricEvent{
 		{PlanID: "plan", SliceID: "001-a", Metrics: AgentMetrics{SessionID: "session-1", OutputTokens: thresholds.Slice.OutputTokens + 1, Cost: thresholds.Slice.Cost + 1, ToolCalls: thresholds.Slice.ToolCalls + 1, AssistantMessages: thresholds.Slice.AssistantMessages + 1, ErroredMessages: 1, TotalTokens: 9999999}},
@@ -777,6 +797,7 @@ func TestAgentTelemetryBudgetWarningsUseScopedMetrics(t *testing.T) {
 }
 
 func TestAgentTelemetryBudgetWarningsUsePlanThresholds(t *testing.T) {
+	t.Parallel()
 	thresholds := DefaultAgentBudgetThresholds()
 	summary := SummarizeAgentMetrics([]AgentMetricEvent{
 		{SliceID: "001-a", Metrics: AgentMetrics{SessionID: "one", OutputTokens: 80000}},
@@ -800,6 +821,7 @@ func TestAgentTelemetryBudgetWarningsUsePlanThresholds(t *testing.T) {
 }
 
 func TestProjectReviewRoundsAssignsRequestedRoundsFromDurableOrdering(t *testing.T) {
+	t.Parallel()
 	findings := func(file string) *PlanReview {
 		return &PlanReview{
 			Status:        ReviewStatusCompleted,
@@ -836,6 +858,7 @@ func TestProjectReviewRoundsAssignsRequestedRoundsFromDurableOrdering(t *testing
 }
 
 func TestProjectReviewRoundsReportsIncompleteLegacyFindingPayloads(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		{Type: EventTypePlanReviewed, Review: &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested, FindingsCount: 2}},
 	}
@@ -849,6 +872,7 @@ func TestProjectReviewRoundsReportsIncompleteLegacyFindingPayloads(t *testing.T)
 }
 
 func TestProjectReviewRoundsIgnoresNonBlockingReviewFindings(t *testing.T) {
+	t.Parallel()
 	blocking := func(file string) *PlanReview {
 		return &PlanReview{
 			Status:        ReviewStatusCompleted,
@@ -896,6 +920,7 @@ func TestProjectReviewRoundsIgnoresNonBlockingReviewFindings(t *testing.T) {
 }
 
 func TestProjectReworkChurnCountsFirstReviewAfterPullRequestReopen(t *testing.T) {
+	t.Parallel()
 	blocking := func(file string, line int) *PlanReview {
 		return &PlanReview{
 			Status:        ReviewStatusCompleted,

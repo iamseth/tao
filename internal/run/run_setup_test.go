@@ -16,6 +16,7 @@ import (
 // the completeness guard internally, so a regression in defaulting surfaces here
 // rather than as a nil dereference during execution.
 func TestPrepareRunExecutionResolvesAllRequiredDependencies(t *testing.T) {
+	t.Parallel()
 	execution := preparedServiceExecution(t)
 	if err := requireResolvedDependencies(execution.Dependencies); err != nil {
 		t.Fatalf("expected a normal service-backed run to resolve all dependencies: %v", err)
@@ -23,6 +24,7 @@ func TestPrepareRunExecutionResolvesAllRequiredDependencies(t *testing.T) {
 }
 
 func TestReviewSelectionPreservesInjectedCapabilities(t *testing.T) {
+	t.Parallel()
 	for _, explicit := range []bool{false, true} {
 		injected := &recordingReviewCreator{}
 		factoryReview := &recordingReviewCreator{}
@@ -47,6 +49,7 @@ func TestReviewSelectionPreservesInjectedCapabilities(t *testing.T) {
 }
 
 func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Repo.Root = "/current-root"
 	detail.State.Workspace = &plan.Workspace{
@@ -83,6 +86,7 @@ func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *t
 }
 
 func TestPlacementNoticeMetadata(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name, recorded string
 		requested      runtimeconfig.ExecutionMode
@@ -145,6 +149,7 @@ func (w *placementFailWriter) Write([]byte) (int, error) {
 }
 
 func TestPlacementNoticePreservesPRRefusalDespiteOutputFailure(t *testing.T) {
+	t.Parallel()
 	failed := &placementFailWriter{}
 	for _, out := range []io.Writer{nil, io.Discard, failed} {
 		detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -170,6 +175,7 @@ func TestPlacementNoticePreservesPRRefusalDespiteOutputFailure(t *testing.T) {
 }
 
 func TestPlacementNoticeDoesNotChangeRepeatedPreparation(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		requested          runtimeconfig.ExecutionMode
 		recorded, wantRoot string
@@ -204,6 +210,7 @@ func TestPlacementNoticeDoesNotChangeRepeatedPreparation(t *testing.T) {
 // TestRequireResolvedDependenciesNamesMissingDependency asserts the guard trips
 // loudly and names the offending field when a required dependency stays nil.
 func TestRequireResolvedDependenciesNamesMissingDependency(t *testing.T) {
+	t.Parallel()
 	execution := preparedServiceExecution(t)
 	execution.Dependencies.SliceExecutor = nil
 

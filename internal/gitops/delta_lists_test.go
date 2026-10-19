@@ -10,6 +10,7 @@ import (
 )
 
 func TestDeltaListsTruncation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		kind, raw string
 		ends      []int
@@ -71,6 +72,7 @@ func TestDeltaListsTruncation(t *testing.T) {
 }
 
 func TestParseNameStatusZ(t *testing.T) {
+	t.Parallel()
 	raw := "A\x00 space\n雪\x00M\x00m\x00D\x00d\x00T\x00t\x00R100\x00old\x00new\x00C75\x00src\x00dst\x00"
 	got, err := ParseNameStatusZ(raw)
 	if err != nil || len(got) != 6 || got[0].Path != " space\n雪" || !reflect.DeepEqual(got[4], NameStatusEntry{Status: "R100", OldPath: "old", Path: "new"}) {
@@ -101,6 +103,7 @@ func FuzzDeltaLists(f *testing.F) {
 }
 
 func TestDeltaListCommands(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"name", "num", "status"} {
 		root := t.TempDir()
 		payload := "A\x00p\x00"
@@ -162,6 +165,7 @@ func TestDeltaListCommands(t *testing.T) {
 }
 
 func TestDeltaListStderrBound(t *testing.T) {
+	t.Parallel()
 	c := NewClient(t.TempDir(), func(_ context.Context, _, _ string, _ []string, _, stderr io.Writer) error {
 		payload := strings.Repeat("diagnostic", probeOutputLimit)
 		if n, err := io.WriteString(stderr, payload); n != len(payload) || err != nil {
@@ -178,6 +182,7 @@ func TestDeltaListStderrBound(t *testing.T) {
 }
 
 func TestCompleteListEveryByte(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		kind    string
 		records []string
@@ -209,6 +214,7 @@ func TestCompleteListEveryByte(t *testing.T) {
 }
 
 func TestDeltaListMalformed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ kind, raw string }{
 		{"name", "A\x00\x00"}, {"name", "R200\x00a\x00b\x00"},
 		{"num", "-\t1\tp\x00"}, {"num", "-1\t2\tp\x00"}, {"num", "9999999999999999999999\t2\tp\x00"}, {"num", "1\t2\t\x00\x00p\x00"},

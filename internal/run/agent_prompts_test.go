@@ -6,6 +6,7 @@ import (
 )
 
 func TestRenderPullRequestBodyPromptRequiresNativeStructureAndNoTaoNoise(t *testing.T) {
+	t.Parallel()
 	prompt := renderPullRequestBodyPrompt(pullRequestBodyPromptData{
 		PlanDir:    "/plans/plan-a",
 		PlanID:     "plan-a",

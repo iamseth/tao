@@ -16,6 +16,7 @@ import (
 )
 
 func TestLegacyPlacementJournalReplaysFrozenBytes(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -39,6 +40,7 @@ func TestLegacyPlacementJournalReplaysFrozenBytes(t *testing.T) {
 }
 
 func TestRecordedPlacementArtifacts(t *testing.T) {
+	t.Parallel()
 	for _, spelling := range []string{"worktree", "isolated", "current", "", "invalid"} {
 		t.Run(spelling, func(t *testing.T) {
 			dir := t.TempDir()
@@ -91,6 +93,7 @@ func TestRecordedPlacementArtifacts(t *testing.T) {
 }
 
 func TestReadEventsWarnsAndSkipsMalformedOrOversizedLines(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")
 	valid := `{"type":"plan_created","timestamp":"2026-05-03T23:31:31Z","plan_id":"plan-a","message":"created"}`
@@ -116,6 +119,7 @@ func TestReadEventsWarnsAndSkipsMalformedOrOversizedLines(t *testing.T) {
 }
 
 func TestStartSliceRequestMutationMatchesStartSlice(t *testing.T) {
+	t.Parallel()
 	startedAt := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	run := &SliceRunStart{CommitPolicy: "slice", StartingDirtyPaths: []string{"z.go", "a.go"}}
 	boundary := &SliceExecutionStart{Branch: "feature/a", Head: "abc123", WorkspaceStrategy: "isolated"}
@@ -206,6 +210,7 @@ func TestStartSliceRequestMutationMatchesStartSlice(t *testing.T) {
 }
 
 func TestStartSliceWritesStateSlicesAndEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail(dir)
@@ -237,6 +242,7 @@ func TestStartSliceWritesStateSlicesAndEvent(t *testing.T) {
 }
 
 func TestStartSliceDoesNotDuplicateStartedEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	first := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	second := first.Add(time.Minute)
@@ -265,6 +271,7 @@ func TestStartSliceDoesNotDuplicateStartedEvent(t *testing.T) {
 }
 
 func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail(dir)
@@ -295,6 +302,7 @@ func TestStartSlicePreservesUnknownJSONFields(t *testing.T) {
 }
 
 func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC)
 	detail := startSliceDetail(dir)
@@ -363,6 +371,7 @@ func TestPlanRecordLifecycleWritePreservesDecisionMetadataAndUnknownFields(t *te
 }
 
 func TestLoadPlanFilesWarnsForResolvableRuntimePrerequisiteCycle(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	for id, prerequisite := range map[string]string{"plan-a": "plan-b", "plan-b": "plan-a"} {
 		dir := filepath.Join(plansDir, id)
@@ -387,6 +396,7 @@ func TestLoadPlanFilesWarnsForResolvableRuntimePrerequisiteCycle(t *testing.T) {
 }
 
 func TestAutomaticReworkOperationsPreserveUnknownArtifactFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
 	detail.Dir = dir
@@ -427,6 +437,7 @@ func TestAutomaticReworkOperationsPreserveUnknownArtifactFields(t *testing.T) {
 }
 
 func TestPlanRecordFinalVerificationPreservesUnknownStateFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	stateJSON := `{"schema":"tao.plan.state.v1","status":"planned","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":["001-a"],"last_run_commit_policy":"","last_run_starting_dirty":[],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"custom_plan_field":"keep"},"global_invariants":[],"open_questions":[],"custom_state_field":"keep"}`
@@ -454,6 +465,7 @@ func TestPlanRecordFinalVerificationPreservesUnknownStateFields(t *testing.T) {
 }
 
 func TestPlanRecordFinalVerificationDeletesOmittedFailureEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	stateJSON := `{"schema":"tao.plan.state.v1","status":"planned","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":["001-a"],"last_run_commit_policy":"","last_run_starting_dirty":[],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"final_verification":{"command":"make verify","cwd":"/repo","head_sha":"head-a","result":"failed","failure_kind":"code","exit_code":1,"verified_at":"2026-05-03T23:00:00Z","unknown_verification":"keep"}},"global_invariants":[],"open_questions":[]}`
@@ -481,6 +493,7 @@ func TestPlanRecordFinalVerificationDeletesOmittedFailureEvidence(t *testing.T) 
 }
 
 func TestWriteStateAndSlicesUseSameDirectoryAtomicReplacement(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 
@@ -511,6 +524,7 @@ func TestWriteStateAndSlicesUseSameDirectoryAtomicReplacement(t *testing.T) {
 }
 
 func TestPlanReviewStatePersistence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	reviewedAt := time.Date(2026, 6, 28, 7, 1, 2, 0, time.UTC)
 	state := startSliceDetail(dir).State
@@ -542,6 +556,7 @@ func TestPlanReviewStatePersistence(t *testing.T) {
 }
 
 func TestWriteStateAndSlicesPreserveUnknownJSONFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	stateJSON := `{"schema":"tao.plan.state.v1","status":"planned","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":["001-a"],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"custom_plan_field":"keep"},"global_invariants":[],"open_questions":[],"custom_state_field":"keep"}`
@@ -592,6 +607,7 @@ func TestWriteStateAndSlicesPreserveUnknownJSONFields(t *testing.T) {
 }
 
 func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	existing := `{"schema":"tao.plan.state.v1","status":"in_review","created_at":"2026-05-03T23:00:00Z","updated_at":"2026-05-03T23:00:00Z","repo":{"name":"","root":"","branch":""},"plan":{"id":"plan-a","title":"Plan A","current_slice":null,"completed_slices":[],"pending_slices":[],"timing":{"started_at":null,"completed_at":null,"last_activity_at":null},"review":{"status":"completed","verdict":"approve","summary":"old","findings_count":1,"findings":[{"message":"old"}],"commit_message":{"subject":"fix(plan): old","body":"old"},"base":"base","head":"head","agent":"pi","reviewed_at":"2026-05-03T23:00:00Z","unknown_review":"keep"},"unknown_plan":"keep"},"global_invariants":[],"open_questions":[],"unknown_state":"keep"}`
@@ -658,6 +674,7 @@ func TestArtifactChangeSetLowersDeclaredIntentAndPreservesUnknownFields(t *testi
 }
 
 func TestPersistStateChangesRebasesReviewReplacementAndPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	state := startSliceDetail(dir).State
 	state.Plan.Review = &PlanReview{
@@ -724,6 +741,7 @@ func TestPersistStateChangesRebasesReviewReplacementAndPreservesUnknownFields(t 
 }
 
 func TestArtifactChangeSetThreadsThroughArtifactMutation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Plan.Review = &PlanReview{Summary: "old", Findings: []ReviewFinding{}, ReviewedAt: time.Date(2026, 5, 3, 23, 0, 0, 0, time.UTC)}
@@ -757,6 +775,7 @@ func TestArtifactChangeSetThreadsThroughArtifactMutation(t *testing.T) {
 }
 
 func TestArtifactChangeSetThreadsThroughSlicesUpdate(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.Slices.Slices[0].BlockerNote = "old blocker"
@@ -787,6 +806,7 @@ func TestArtifactChangeSetThreadsThroughSlicesUpdate(t *testing.T) {
 }
 
 func TestSliceBlockerClearAppliesAfterArtifactSliceRebase(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	baseline := startSliceDetail(dir)
 	baseline.State.Status = StatusBlocked
@@ -833,6 +853,7 @@ func TestSliceBlockerClearAppliesAfterArtifactSliceRebase(t *testing.T) {
 }
 
 func TestArtifactChangeSetPreparedBytesMatchAdapterStore(t *testing.T) {
+	t.Parallel()
 	seed := func(t *testing.T, dir string) *PlanDetail {
 		t.Helper()
 		detail := startSliceDetail(dir)
@@ -908,6 +929,7 @@ func (s *payloadArtifactStore) AppendEvent(_ string, event Event) error {
 }
 
 func TestVerificationEvidenceRoundTripAndLegacyShape(t *testing.T) {
+	t.Parallel()
 	const legacyRun = `{"command":"go test ./...","cwd":"/repo","result":"passed","details":"ok"}`
 	const legacyIntent = `{"hash":"intent-hash","policy":"slice","starting_branch":"tao/plan-a","starting_head":"base123","message":"feat: preserve work","created_at":"2026-07-19T15:44:35Z"}`
 	var run VerificationRun
@@ -958,6 +980,7 @@ func TestVerificationEvidenceRoundTripAndLegacyShape(t *testing.T) {
 }
 
 func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	completed := started.Add(2 * time.Minute)
@@ -995,6 +1018,7 @@ func TestCompleteSliceWritesStateSlicesAndEvent(t *testing.T) {
 }
 
 func TestCurrentSliceLifecycleClearWritersPersistNullAndPreserveUnknownPlanFields(t *testing.T) {
+	t.Parallel()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	transitioned := started.Add(time.Minute)
 	tests := []struct {
@@ -1133,6 +1157,7 @@ func TestCurrentSliceLifecycleClearWritersPersistNullAndPreserveUnknownPlanField
 }
 
 func TestArtifactMutationWasRecoveredMatchesCurrentSliceClear(t *testing.T) {
+	t.Parallel()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	completed := started.Add(time.Minute)
 	stale := startSliceDetail("")
@@ -1161,6 +1186,7 @@ func TestArtifactMutationWasRecoveredMatchesCurrentSliceClear(t *testing.T) {
 }
 
 func TestLoadPlanFilesAllowsLegacyStateWithoutWorkspaceMetadata(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "state.json"), `{
   "schema": "tao.plan.state.v1",
@@ -1194,6 +1220,7 @@ func TestLoadPlanFilesAllowsLegacyStateWithoutWorkspaceMetadata(t *testing.T) {
 }
 
 func TestCompleteSliceDoesNotDuplicateCompletedEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	completed := started.Add(time.Minute)
@@ -1218,6 +1245,7 @@ func TestCompleteSliceDoesNotDuplicateCompletedEvent(t *testing.T) {
 }
 
 func TestStartSliceAndCompleteSliceUpdateInMemoryDetail(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	completed := started.Add(90 * time.Second)
@@ -1255,6 +1283,7 @@ func TestStartSliceAndCompleteSliceUpdateInMemoryDetail(t *testing.T) {
 }
 
 func TestApproveSliceWritesApprovalAndEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 24, 23, 1, 2, 0, time.UTC)
 	detail := startSliceDetail(dir)
@@ -1280,6 +1309,7 @@ func TestApproveSliceWritesApprovalAndEvent(t *testing.T) {
 }
 
 func TestApproveSliceIsIdempotentAndPreservesMetadata(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	first := time.Date(2026, 5, 24, 23, 1, 2, 0, time.UTC)
 	second := first.Add(time.Minute)
@@ -1308,6 +1338,7 @@ func TestApproveSliceIsIdempotentAndPreservesMetadata(t *testing.T) {
 }
 
 func TestBlockSliceWritesCanonicalStateAndPreservesExecutionMetadata(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 7, 19, 15, 44, 35, 0, time.UTC)
 	blockedAt := started.Add(time.Minute)
@@ -1378,6 +1409,7 @@ func TestBlockSliceWritesCanonicalStateAndPreservesExecutionMetadata(t *testing.
 }
 
 func TestBlockSliceRejectsInvalidSelectionsWithoutMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		sliceID string
@@ -1428,6 +1460,7 @@ func TestBlockSliceRejectsInvalidSelectionsWithoutMutation(t *testing.T) {
 }
 
 func TestContinueBlockedPlanWritesInProgressState(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
 	detail := startSliceDetail(dir)
@@ -1466,6 +1499,7 @@ func TestContinueBlockedPlanWritesInProgressState(t *testing.T) {
 }
 
 func TestContinueBlockedRejectsOrdinarilyInProgressSlice(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -1483,6 +1517,7 @@ func TestContinueBlockedRejectsOrdinarilyInProgressSlice(t *testing.T) {
 }
 
 func TestApplyLifecycleMutationReturnsExplicitArtifacts(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	detail := startSliceDetail("")
 
@@ -1512,6 +1547,7 @@ func TestApplyLifecycleMutationReturnsExplicitArtifacts(t *testing.T) {
 }
 
 func TestPlanRecordMutationWritesThroughBoundDirectory(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	store := &recordingArtifactMutationStore{}
 	record, err := newPlanRecord(store, "/plans/plan-a", detail)
@@ -1539,6 +1575,7 @@ func TestPlanRecordMutationWritesThroughBoundDirectory(t *testing.T) {
 }
 
 func TestPlanRecordMutationRejectsMismatchedDirectoryWithoutWrites(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/right")
 	original := clonePlanDetail(detail)
 	store := &recordingArtifactMutationStore{}
@@ -1556,6 +1593,7 @@ func TestPlanRecordMutationRejectsMismatchedDirectoryWithoutWrites(t *testing.T)
 }
 
 func TestApplyArtifactMutationWritesThroughStore(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	store := &recordingArtifactMutationStore{}
 	events := []Event{
@@ -1585,6 +1623,7 @@ func TestApplyArtifactMutationWritesThroughStore(t *testing.T) {
 }
 
 func TestApplyArtifactMutationStopsOnWriteError(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	store := &recordingArtifactMutationStore{writeSlicesErr: errArtifactStore("write slices failed")}
 	event := Event{Type: EventTypeSliceStarted, PlanID: "plan-a", SliceID: "001-a"}
@@ -1604,6 +1643,7 @@ func TestApplyArtifactMutationStopsOnWriteError(t *testing.T) {
 }
 
 func TestApplyArtifactMutationDoesNotRecordFailedEventAppend(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	store := &recordingArtifactMutationStore{appendEventErr: errArtifactStore("append denied")}
 	event := Event{Type: EventTypeSliceStarted, PlanID: "plan-a", SliceID: "001-a"}
@@ -1623,6 +1663,7 @@ func TestApplyArtifactMutationDoesNotRecordFailedEventAppend(t *testing.T) {
 }
 
 func TestApplyArtifactMutationLeavesDetailUnchangedOnFailures(t *testing.T) {
+	t.Parallel()
 	event := Event{Type: EventTypeSliceStarted, PlanID: "plan-a", SliceID: "001-a"}
 	tests := []struct {
 		name      string
@@ -1660,6 +1701,7 @@ func TestApplyArtifactMutationLeavesDetailUnchangedOnFailures(t *testing.T) {
 }
 
 func TestLoadPlanFilesRestartCompatibilityMatrix(t *testing.T) {
+	t.Parallel()
 	originalState := []byte(`{"schema":"tao.plan.state.v1","status":"planned","plan":{"id":"plan-a"},"fixture":"original-state"}`)
 	originalSlices := []byte(`{"schema":"tao.plan.slices.v1","plan_id":"plan-a","slices":[],"fixture":"original-slices"}`)
 
@@ -1776,6 +1818,7 @@ func appendRestartEvent(t *testing.T, dir string, payload []byte) {
 }
 
 func TestPlanRecordStartSliceFailuresPreserveMemoryAndReplayJournal(t *testing.T) {
+	t.Parallel()
 	startedAt := time.Date(2026, 7, 18, 1, 30, 0, 0, time.UTC)
 	boundary := SliceExecutionStart{
 		Branch: "tao/plan-a", Head: "base123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree,
@@ -1827,6 +1870,7 @@ func TestPlanRecordStartSliceFailuresPreserveMemoryAndReplayJournal(t *testing.T
 }
 
 func TestPlanRecordRetrySettlesBeforeReevaluatingMutation(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1870,6 +1914,7 @@ func TestPlanRecordRetrySettlesBeforeReevaluatingMutation(t *testing.T) {
 }
 
 func TestPlanRecordRetryRejectsConflictingRecoveredExecutionBoundary(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1909,6 +1954,7 @@ func TestPlanRecordRetryRejectsConflictingRecoveredExecutionBoundary(t *testing.
 }
 
 func TestPlanRecordRetryRejectsConflictingRecoveredCompletionOutcome(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1954,6 +2000,7 @@ func TestPlanRecordRetryRejectsConflictingRecoveredCompletionOutcome(t *testing.
 }
 
 func TestPlanRecordPostUnlinkSyncFailurePublishesBeforeSameRecordRetry(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -1998,6 +2045,7 @@ func TestPlanRecordPostUnlinkSyncFailurePublishesBeforeSameRecordRetry(t *testin
 }
 
 func TestSingleTargetWriterWaitsForJournalAndRebasesOntoSettledSlices(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2077,6 +2125,7 @@ func TestSingleTargetWriterWaitsForJournalAndRebasesOntoSettledSlices(t *testing
 }
 
 func TestArtifactMutationConcurrentWritersPreserveNonOverlappingApprovals(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2153,6 +2202,7 @@ func TestArtifactMutationConcurrentWritersPreserveNonOverlappingApprovals(t *tes
 }
 
 func TestPlanRecordConcurrentStaleStateWritersMergeNewWorkspaceFields(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2201,6 +2251,7 @@ func TestPlanRecordConcurrentStaleStateWritersMergeNewWorkspaceFields(t *testing
 }
 
 func TestPlanRecordPersistsPreBoundWorkspaceMetadataWithCompleteArtifacts(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2240,6 +2291,7 @@ func TestPlanRecordPersistsPreBoundWorkspaceMetadataWithCompleteArtifacts(t *tes
 }
 
 func TestPlanRecordConstructorRecoveryPreservesPreBoundWorkspaceMetadata(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2317,6 +2369,7 @@ func TestPlanRecordConstructorRecoveryPreservesPreBoundWorkspaceMetadata(t *test
 }
 
 func TestPlanRecordConstructorRecoveryRejectsConcurrentStructuralChanges(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2365,6 +2418,7 @@ func TestPlanRecordConstructorRecoveryRejectsConcurrentStructuralChanges(t *test
 }
 
 func TestPlanRecordConstructorRecoveryPreservesPreBoundSliceEdits(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2422,6 +2476,7 @@ func TestPlanRecordConstructorRecoveryPreservesPreBoundSliceEdits(t *testing.T) 
 }
 
 func TestPlanRecordPersistStatePreservesLifecycleSettledAfterDetailLoad(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2475,6 +2530,7 @@ func TestPlanRecordPersistStatePreservesLifecycleSettledAfterDetailLoad(t *testi
 }
 
 func TestPlanRecordPersistStateRetryPreservesIntentAfterRecoveryAndJournalInstallFailure(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2542,6 +2598,7 @@ func TestPlanRecordPersistStateRetryPreservesIntentAfterRecoveryAndJournalInstal
 }
 
 func TestPlanRecordBoundToStaleDetailRefreshesSettledLifecycleMutation(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2604,6 +2661,7 @@ func TestPlanRecordBoundToStaleDetailRefreshesSettledLifecycleMutation(t *testin
 }
 
 func TestPlanRecordPersistArtifactsPreservesLifecycleSettledAfterBinding(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2664,6 +2722,7 @@ func TestPlanRecordPersistArtifactsPreservesLifecycleSettledAfterBinding(t *test
 }
 
 func TestPlanRecordPersistArtifactsPreservesConcurrentReopenSlices(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "reopen")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2730,6 +2789,7 @@ func TestPlanRecordPersistArtifactsPreservesConcurrentReopenSlices(t *testing.T)
 }
 
 func TestPlanRecordPersistArtifactsPreservesConcurrentSliceRemoval(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2792,6 +2852,7 @@ func TestPlanRecordPersistArtifactsPreservesConcurrentSliceRemoval(t *testing.T)
 }
 
 func TestPlanRecordPersistArtifactsRejectsConcurrentStructuralChanges(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2845,6 +2906,7 @@ func TestPlanRecordPersistArtifactsRejectsConcurrentStructuralChanges(t *testing
 }
 
 func TestPlanRecordPersistArtifactsRetryDoesNotRepublishStaleLifecycleState(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -2924,6 +2986,7 @@ func TestPlanRecordPersistArtifactsRetryDoesNotRepublishStaleLifecycleState(t *t
 }
 
 func TestPlanRecordPersistArtifactsRecoversFailurePrefixes(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"journal", "state", "slices", "remove"} {
 		t.Run(operation, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "plan-a")
@@ -2999,6 +3062,7 @@ func TestPlanRecordPersistArtifactsRecoversFailurePrefixes(t *testing.T) {
 }
 
 func TestPlanRecordPersistArtifactsRebasesEditsOverJournalCreatedAfterBinding(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -3061,6 +3125,7 @@ func TestPlanRecordPersistArtifactsRebasesEditsOverJournalCreatedAfterBinding(t 
 }
 
 func TestArtifactMutationRejectsInvalidLifecycleMutationWithoutWrites(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	original := clonePlanDetail(detail)
 	store := &recordingArtifactMutationStore{}
@@ -3080,6 +3145,7 @@ func TestArtifactMutationRejectsInvalidLifecycleMutationWithoutWrites(t *testing
 // TestPlanRecordLoadsLegacyStateAdvancedTornWrite keeps the compatibility path
 // explicit for plans torn before lifecycle mutations gained a journal.
 func TestPlanRecordLoadsLegacyStateAdvancedTornWrite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 5, 3, 23, 31, 31, 0, time.UTC)
 	completed := started.Add(time.Minute)
@@ -3129,6 +3195,7 @@ func TestPlanRecordLoadsLegacyStateAdvancedTornWrite(t *testing.T) {
 }
 
 func TestLegacyAutomaticCompletionTornWriteRequiresOutcomeRecovery(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	started := time.Date(2026, 7, 13, 20, 0, 0, 0, time.UTC)
 	completed := started.Add(time.Minute)
@@ -3181,6 +3248,7 @@ func TestLegacyAutomaticCompletionTornWriteRequiresOutcomeRecovery(t *testing.T)
 }
 
 func TestMarkBlockedContinuedRestartsBlockedSlice(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
 	detail := startSliceDetail("")
 	detail.Slices.Slices[0].Status = StatusBlocked
@@ -3194,6 +3262,7 @@ func TestMarkBlockedContinuedRestartsBlockedSlice(t *testing.T) {
 }
 
 func TestMarkBlockedContinuedFallsBackToFirstPending(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 3, 23, 45, 0, 0, time.UTC)
 	detail := startSliceDetail("")
 	detail.State.Status = StatusBlocked
@@ -3209,6 +3278,7 @@ func TestMarkBlockedContinuedFallsBackToFirstPending(t *testing.T) {
 }
 
 func TestMarkBlockedContinuedRejectsSafeguards(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*PlanDetail)

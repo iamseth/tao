@@ -54,6 +54,7 @@ func prerequisiteGitRunner(ancestors map[string]bool, calls *[]string) CommandRu
 }
 
 func TestCheckRuntimePrerequisitesClassifiesBlockingEvidence(t *testing.T) {
+	t.Parallel()
 	prOnly := prerequisiteDetail("pr-only")
 	prOnly.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "head"}
 	prOnly.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head"}
@@ -88,6 +89,7 @@ func TestCheckRuntimePrerequisitesClassifiesBlockingEvidence(t *testing.T) {
 }
 
 func TestCheckRuntimePrerequisitesDetectsCyclesAndSatisfiedAncestry(t *testing.T) {
+	t.Parallel()
 	dependent := prerequisiteDetail("dependent", "first")
 	first := mergedPrerequisite("first", "first-sha")
 	first.State.Plan.RuntimePrerequisites = []plan.RuntimePrerequisite{{PlanID: "second", Reason: "second first"}}
@@ -115,6 +117,7 @@ func TestCheckRuntimePrerequisitesDetectsCyclesAndSatisfiedAncestry(t *testing.T
 }
 
 func TestResolvePrerequisiteBaselineMatchesAutomaticPreparation(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
@@ -141,6 +144,7 @@ func TestResolvePrerequisiteBaselineMatchesAutomaticPreparation(t *testing.T) {
 }
 
 func TestResolvePrerequisiteBaselineUsesFreshPreparedWorkspaceHead(t *testing.T) {
+	t.Parallel()
 	detail := prerequisiteDetail("dependent", "required")
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, BaseBranch: "release", HeadSHA: "fresh-head"}
 	baseline, err := resolvePrerequisiteBaseline(context.Background(), detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated}}, nil, true)
@@ -150,6 +154,7 @@ func TestResolvePrerequisiteBaselineUsesFreshPreparedWorkspaceHead(t *testing.T)
 }
 
 func TestCheckRuntimePrerequisitesLegacyPlanHasNoEffects(t *testing.T) {
+	t.Parallel()
 	results, err := checkRuntimePrerequisites(context.Background(), nil, prerequisiteDetail("legacy"), "", nil)
 	if err != nil || results != nil {
 		t.Fatalf("legacy result = %#v, err = %v", results, err)

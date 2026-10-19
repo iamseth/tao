@@ -10,6 +10,7 @@ import (
 )
 
 func TestArtifactWriteErrorBranches(t *testing.T) {
+	t.Parallel()
 	filePath := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -29,6 +30,7 @@ func TestArtifactWriteErrorBranches(t *testing.T) {
 }
 
 func TestUnsupportedDirSyncErrors(t *testing.T) {
+	t.Parallel()
 	for _, err := range []error{syscall.EINVAL, syscall.ENOTSUP, syscall.ENOSYS} {
 		if !isUnsupportedDirSyncError(err) {
 			t.Fatalf("expected %v to be unsupported", err)

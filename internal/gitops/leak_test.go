@@ -12,6 +12,7 @@ import (
 )
 
 func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{
 		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"):   " M dirty.go\n?? new.txt\n",
 		key("-C", "/repo", "diff", "HEAD"):                                     "diff --git a/dirty.go b/dirty.go\n-old\n+new\n",
@@ -40,6 +41,7 @@ func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 }
 
 func TestDirtyFingerprintUntrackedExcludesTrackedPaths(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -107,6 +109,7 @@ func TestDirtyFingerprintEnumeratesNestedUntrackedFiles(t *testing.T) {
 }
 
 func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		_ = ctx
@@ -151,6 +154,7 @@ func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 }
 
 func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -226,6 +230,7 @@ func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
 }
 
 func TestDirtyFingerprintIncludesUntrackedBytesAndMode(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "scratch.txt")
 	if err := os.WriteFile(path, []byte("alpha\n"), 0o600); err != nil {

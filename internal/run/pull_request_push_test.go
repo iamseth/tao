@@ -9,6 +9,7 @@ import (
 )
 
 func TestPullRequestPushBranchPreservesLegacyUntypedPush(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail("", "head-new")
 	var calls []string
 	creator := deterministicPullRequestCreator{execution: testRunExecution(ExecutionConfig{}, RunDependencies{
@@ -30,6 +31,7 @@ func TestPullRequestPushBranchPreservesLegacyUntypedPush(t *testing.T) {
 }
 
 func TestPullRequestPushLeasePolicy(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		branch          string

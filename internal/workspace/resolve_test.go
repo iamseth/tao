@@ -12,6 +12,7 @@ import (
 )
 
 func TestLegacyPlacementResolutionAndCleanupOwnership(t *testing.T) {
+	t.Parallel()
 	for _, spelling := range []string{"worktree", "isolated"} {
 		t.Run(spelling, func(t *testing.T) {
 			detail := executionRootDetail("/repo", "plan-a", &plan.Workspace{Strategy: spelling, Path: "/worktrees/plan-a", Branch: "tao/plan-a"})
@@ -34,6 +35,7 @@ func TestLegacyPlacementResolutionAndCleanupOwnership(t *testing.T) {
 }
 
 func TestResolveExecutionRoot(t *testing.T) {
+	t.Parallel()
 	const repoRoot = "/repo/root"
 	const planID = "plan-a"
 	const worktreePath = "/repo/worktrees/plan-a"
@@ -167,6 +169,7 @@ func TestResolveExecutionRoot(t *testing.T) {
 }
 
 func TestPhysicalPathResolvesSymlinkedRoot(t *testing.T) {
+	t.Parallel()
 	physicalRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -186,6 +189,7 @@ func TestPhysicalPathResolvesSymlinkedRoot(t *testing.T) {
 }
 
 func TestResolveManagedWorktreeOwnershipRequiresCanonicalExactIdentity(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	worktree := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "alias")
@@ -214,6 +218,7 @@ func TestResolveManagedWorktreeOwnershipRequiresCanonicalExactIdentity(t *testin
 }
 
 func TestUnresolvedInvalidManagedWorktreeOwnersFailsClosedAndDisprovesExactMismatch(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	worktree := t.TempDir()
 	otherWorktree := t.TempDir()
@@ -260,6 +265,7 @@ func TestUnresolvedInvalidManagedWorktreeOwnersFailsClosedAndDisprovesExactMisma
 }
 
 func TestManagedWorktreeRecoveryCommandRunsPendingVerificationRepair(t *testing.T) {
+	t.Parallel()
 	detail := executionRootDetail("/repo", "plan-a", &plan.Workspace{HeadSHA: "head-a"})
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{
 		Command:     "make verify",
@@ -284,6 +290,7 @@ func TestManagedWorktreeRecoveryCommandRunsPendingVerificationRepair(t *testing.
 }
 
 func TestManagedWorktreeRecoveryCommandRoutesFinalVerificationByClassification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		kind            plan.FinalVerificationFailureKind
@@ -314,6 +321,7 @@ func TestManagedWorktreeRecoveryCommandRoutesFinalVerificationByClassification(t
 }
 
 func TestResolveManagedWorktreeOwnershipProjectsCommandlessRepairCapGuidance(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	worktree := t.TempDir()
 	detail := executionRootDetail(repoRoot, "plan-a", &plan.Workspace{
@@ -351,6 +359,7 @@ func TestResolveManagedWorktreeOwnershipProjectsCommandlessRepairCapGuidance(t *
 }
 
 func TestManagedWorktreeRecoveryCommandBoundsBlockedRecovery(t *testing.T) {
+	t.Parallel()
 	const planID = "plan-a"
 	boundary := &plan.SliceExecutionStart{
 		Branch: "feature/plan-a", Head: "base-a", CommitPolicy: "slice", WorkspaceStrategy: plan.WorkspaceStrategyWorktree,
@@ -426,6 +435,7 @@ func TestManagedWorktreeRecoveryCommandBoundsBlockedRecovery(t *testing.T) {
 }
 
 func TestResolveManagedWorktreeOwnershipIgnoresCleanedAndFailsClosedForMultiplePlans(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	worktree := t.TempDir()
 	makeDetail := func(id string) *plan.PlanDetail {
@@ -445,6 +455,7 @@ func TestResolveManagedWorktreeOwnershipIgnoresCleanedAndFailsClosedForMultipleP
 }
 
 func TestResolveRecordedWorktreeSupportsLegacyMetadata(t *testing.T) {
+	t.Parallel()
 	detail := executionRootDetail("/repo", "plan-a", &plan.Workspace{Root: ".tao/workspaces"})
 	got := ResolveRecordedWorktree(detail)
 	want := filepath.Join("/repo", ".tao/workspaces", "plan-a")

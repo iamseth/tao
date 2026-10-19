@@ -50,6 +50,7 @@ func findEventByType(events []Event, eventType string) *Event {
 }
 
 func TestAmendBlockedSliceMutatesOnlyRequestedFields(t *testing.T) {
+	t.Parallel()
 	detail := blockedAmendDetail()
 	original := clonePlanDetail(detail)
 	now := amendTime()
@@ -98,6 +99,7 @@ func TestAmendBlockedSliceMutatesOnlyRequestedFields(t *testing.T) {
 }
 
 func TestAmendRepairSliceAppendsOnly(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{StatusPending, StatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			detail := blockedAmendDetail()
@@ -127,6 +129,7 @@ func TestAmendRepairSliceAppendsOnly(t *testing.T) {
 }
 
 func TestAmendPendingSliceRecordsOnlyChangedFields(t *testing.T) {
+	t.Parallel()
 	detail := editPlanDetail()
 	detail.Slices.Slices[2].Goal = "Original goal"
 
@@ -150,6 +153,7 @@ func TestAmendPendingSliceRecordsOnlyChangedFields(t *testing.T) {
 }
 
 func TestAmendSliceDedupsExpectedFilesAndRecordsOnlyChangedFields(t *testing.T) {
+	t.Parallel()
 	detail := blockedAmendDetail()
 
 	request := SliceAmendmentRequest{Reason: "widen", AllowFiles: []string{" internal/x/x.go ", "internal/x/new.go", "internal/x/new.go"}, AddTasks: []string{"Existing task"}}
@@ -170,6 +174,7 @@ func TestAmendSliceDedupsExpectedFilesAndRecordsOnlyChangedFields(t *testing.T) 
 }
 
 func TestAmendSliceRefusals(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		setup    func(*PlanDetail)
@@ -218,6 +223,7 @@ func TestAmendSliceRefusals(t *testing.T) {
 }
 
 func TestAmendSliceBoundsReason(t *testing.T) {
+	t.Parallel()
 	detail := editPlanDetail()
 	long := strings.Repeat("r", maxBlockerNoteRunes+10)
 
@@ -235,6 +241,7 @@ func TestAmendSliceBoundsReason(t *testing.T) {
 }
 
 func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeEditPlan(t, dir)
 	repo := NewFileRepository(dir)

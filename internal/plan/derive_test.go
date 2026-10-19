@@ -13,6 +13,7 @@ import (
 )
 
 func TestSummarizeProjectsStructuredDecisionOverview(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{
 			ID: "plan", Title: "Explain the work",
@@ -46,6 +47,7 @@ func TestSummarizeProjectsStructuredDecisionOverview(t *testing.T) {
 }
 
 func TestSummarizeProjectsLegacyBriefWithoutInferringRank(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{ID: "legacy", Title: "A vague title"}},
 		PlanningBrief: PlanningBriefArtifact{Content: `# Planning Brief
@@ -79,6 +81,7 @@ No consumer parses Markdown independently.
 }
 
 func TestProjectDecisionOverviewUsesNarrativeOnlyAfterMissingLegacyBriefProse(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		PlanningBrief: PlanningBriefArtifact{Content: "## Constraints\nKeep it small.\n"},
 		PlanNarrative: PlanNarrativeArtifact{Content: "# Plan\n\n## Goal\nRecover the legacy narrative.\n\n## Benefit\nThe old plan remains understandable.\n"},
@@ -99,6 +102,7 @@ func TestProjectDecisionOverviewUsesNarrativeOnlyAfterMissingLegacyBriefProse(t 
 }
 
 func TestProjectDecisionOverviewRecognizesOnlyValidATXClosingSequences(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		heading string
@@ -122,6 +126,7 @@ func TestProjectDecisionOverviewRecognizesOnlyValidATXClosingSequences(t *testin
 }
 
 func TestProjectDecisionOverviewRecognizesTabSeparatedATXHeadings(t *testing.T) {
+	t.Parallel()
 	t.Run("target heading", func(t *testing.T) {
 		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "##\tGoal\nProject this goal.\n"}}
 		overview := ProjectDecisionOverview(detail)
@@ -140,6 +145,7 @@ func TestProjectDecisionOverviewRecognizesTabSeparatedATXHeadings(t *testing.T) 
 }
 
 func TestProjectDecisionOverviewHonorsMarkdownCodeIndentation(t *testing.T) {
+	t.Parallel()
 	t.Run("indented heading cannot create section", func(t *testing.T) {
 		detail := &PlanDetail{PlanNarrative: PlanNarrativeArtifact{Content: "    ## Goal\n    Example text is code, not rationale.\n"}}
 		overview := ProjectDecisionOverview(detail)
@@ -166,6 +172,7 @@ func TestProjectDecisionOverviewHonorsMarkdownCodeIndentation(t *testing.T) {
 }
 
 func TestProjectDecisionOverviewIgnoresHeadingsAfterNonClosingFenceMarkers(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		markdown string
@@ -215,6 +222,7 @@ func TestProjectDecisionOverviewIgnoresHeadingsAfterNonClosingFenceMarkers(t *te
 }
 
 func TestProjectDecisionOverviewBoundsListsTextAndControlsDeterministically(t *testing.T) {
+	t.Parallel()
 	criteria := make([]string, decisionOverviewMaxCriteria+3)
 	relationships := make([]PlanRelation, decisionOverviewMaxRelationships+3)
 	for i := range criteria {
@@ -269,6 +277,7 @@ func slicesEqual(left, right []string) bool {
 }
 
 func TestSummarizeCountsOriginalAndReworkSlicesAcrossRounds(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan", PendingSlices: []string{"002-original", "r102-fix", "r202-more"}}},
 		Slices: SlicesFile{Slices: []Slice{
@@ -297,6 +306,7 @@ func TestSummarizeCountsOriginalAndReworkSlicesAcrossRounds(t *testing.T) {
 }
 
 func TestDeriveReviewedReflectsPlanReview(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 
 	derived := Derive(detail, time.Time{})
@@ -325,6 +335,7 @@ func TestDeriveReviewedReflectsPlanReview(t *testing.T) {
 }
 
 func TestDeriveCompletionDoesNotRequireReview(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 
 	derived := Derive(detail, time.Time{})
@@ -342,6 +353,7 @@ func TestDeriveCompletionDoesNotRequireReview(t *testing.T) {
 }
 
 func TestPlanLifecycleStatusReflectsReviewAndMergeStages(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	if got := PlanLifecycleStatus(detail); got != StatusInReview {
 		t.Fatalf("unreviewed slice-complete status = %q, want %q", got, StatusInReview)
@@ -367,6 +379,7 @@ func TestPlanLifecycleStatusReflectsReviewAndMergeStages(t *testing.T) {
 }
 
 func TestFinalVerificationFailureProjectionAndRecoveryByClassification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		kind        FinalVerificationFailureKind
@@ -414,6 +427,7 @@ func TestFinalVerificationFailureProjectionAndRecoveryByClassification(t *testin
 }
 
 func TestLegacyFinalVerificationReplacementClearsStaleClassification(t *testing.T) {
+	t.Parallel()
 	detail := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
 	detail.Dir = t.TempDir()
 	if err := writeState(detail.Dir, detail.State); err != nil {
@@ -444,6 +458,7 @@ func TestLegacyFinalVerificationReplacementClearsStaleClassification(t *testing.
 }
 
 func TestLegacyGeneratedVerificationRepairsProjectCapReached(t *testing.T) {
+	t.Parallel()
 	detail := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
 	for _, head := range []string{"repair-head-a", "repair-head-b"} {
 		detail.Slices.Slices = append(detail.Slices.Slices, Slice{
@@ -471,6 +486,7 @@ func TestLegacyGeneratedVerificationRepairsProjectCapReached(t *testing.T) {
 }
 
 func TestFinalVerificationFailureDoesNotOverrideCompletionEvidence(t *testing.T) {
+	t.Parallel()
 	merged := failedFinalVerificationDetail(FinalVerificationFailureKindCode)
 	merged.Events = []Event{{Type: EventTypePlanMerged}}
 	if status := PlanLifecycleStatus(merged); status != StatusCompleted {
@@ -491,6 +507,7 @@ func TestFinalVerificationFailureDoesNotOverrideCompletionEvidence(t *testing.T)
 }
 
 func TestPlanIsPullRequestCompleteRequiresCurrentMatchingEvidence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		review   *PlanReview
@@ -534,6 +551,7 @@ func TestPlanIsPullRequestCompleteRequiresCurrentMatchingEvidence(t *testing.T) 
 }
 
 func TestPlanLifecycleStatusProjectsExistingPullRequestCompletion(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	review := &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
 	detail.State.Status = StatusReviewed
@@ -553,6 +571,7 @@ func TestPlanLifecycleStatusProjectsExistingPullRequestCompletion(t *testing.T) 
 }
 
 func TestPlanLifecycleStatusReopenInvalidatesPullRequestCompletion(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	review := &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
 	detail.State.Status = StatusCompleted
@@ -601,6 +620,7 @@ func TestPlanLifecycleStatusReopenInvalidatesPullRequestCompletion(t *testing.T)
 // gone. Current writes reach completed through RecordMerged or matching PR
 // evidence; the latter is handled by its explicit predicate before this arm.
 func TestPlanLifecycleStatusLegacyCompletedWithoutMergeEvent(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	detail.State.Status = StatusCompleted
 	detail.Events = nil
@@ -627,6 +647,7 @@ func TestPlanLifecycleStatusLegacyCompletedWithoutMergeEvent(t *testing.T) {
 // merged plan is reopened for rework: the stale plan_merged event must not keep
 // projecting completed while the reopened plan has pending work.
 func TestPlanLifecycleStatusReopenedAfterMergeIsNotCompleted(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	detail.Events = []Event{{Type: EventTypePlanMerged}}
 	if got := PlanLifecycleStatus(detail); got != StatusCompleted {
@@ -651,6 +672,7 @@ func TestPlanLifecycleStatusReopenedAfterMergeIsNotCompleted(t *testing.T) {
 // changes_requested, reopened, then reworked to slice-complete: it must project
 // in_review (awaiting a fresh verdict), not the stale changes_requested verdict.
 func TestPlanLifecycleStatusReworkClearsStaleReviewVerdict(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}
 	detail.Events = []Event{{Type: EventTypePlanReviewed, Review: detail.State.Plan.Review}}
@@ -683,6 +705,7 @@ func TestPlanLifecycleStatusReworkClearsStaleReviewVerdict(t *testing.T) {
 // lifecycleComplete gated on a raw pending count that treats skipped slices as
 // pending. Such a plan could neither finalize nor merge — permanently stuck.
 func TestLifecycleCompleteAllowsSkippedFinalSlice(t *testing.T) {
+	t.Parallel()
 	completedAt := time.Date(2026, 6, 28, 6, 40, 0, 0, time.UTC)
 	detail := &PlanDetail{
 		State: State{
@@ -711,6 +734,7 @@ func TestLifecycleCompleteAllowsSkippedFinalSlice(t *testing.T) {
 // projection: after a reopen supersedes the last review, ReviewVerdict must not
 // leak the stale persisted verdict (Reviewed already flips false via CurrentReview).
 func TestSummarizeClearsStaleReviewVerdictAfterReopen(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 6, 28, 7, 0, 0, 0, time.UTC)
 	detail := reviewedCapabilityDetail()
 	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested}
@@ -726,6 +750,7 @@ func TestSummarizeClearsStaleReviewVerdictAfterReopen(t *testing.T) {
 }
 
 func TestReviewAccessorsSeparateCurrentFromPersisted(t *testing.T) {
+	t.Parallel()
 	proposal := &ReviewCommitMessage{Subject: "fix(plan): proposal", Body: "body"}
 	review := PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Summary: "ready", CommitMessage: proposal}
 	detail := reviewedCapabilityDetail()
@@ -774,6 +799,7 @@ func TestReviewAccessorsSeparateCurrentFromPersisted(t *testing.T) {
 // external-merge detection could then re-record the old merge and delete the
 // branch holding the rework commits.
 func TestReviewSupersededByReopenIgnoresFailedReviewEvents(t *testing.T) {
+	t.Parallel()
 	failed := []Event{
 		{Type: EventTypePlanMerged},
 		{Type: EventTypePlanReopened},
@@ -804,6 +830,7 @@ func TestReviewSupersededByReopenIgnoresFailedReviewEvents(t *testing.T) {
 }
 
 func TestReworkScopeCommandShellRoundTrip(t *testing.T) {
+	t.Parallel()
 	values := []string{"plain.go", "scope notes.go", "it's.go", `double"quote.go`, "$(touch evaluated).go", "`touch evaluated`.go", "x; touch evaluated; #.go", "x & touch evaluated & #.go"}
 	for _, value := range values {
 		t.Run(value, func(t *testing.T) {
@@ -843,6 +870,7 @@ func TestReworkScopeCommandShellRoundTrip(t *testing.T) {
 }
 
 func TestReworkScopeNextAction(t *testing.T) {
+	t.Parallel()
 	for _, blocked := range []bool{false, true} {
 		d := scopeGateDetail()
 		if blocked {
@@ -864,6 +892,7 @@ func TestReworkScopeNextAction(t *testing.T) {
 }
 
 func TestRunCapabilitiesNeedsApprovalFromRunnableError(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Approval: &Approval{Required: true, Reason: "human sign-off"}}}},
@@ -887,6 +916,7 @@ func TestRunCapabilitiesNeedsApprovalFromRunnableError(t *testing.T) {
 }
 
 func TestRunCapabilitiesNeedsApprovalFromContinueError(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusBlocked, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusBlocked, Approval: &Approval{Required: true, Reason: "team review"}}}},
@@ -904,6 +934,7 @@ func TestRunCapabilitiesNeedsApprovalFromContinueError(t *testing.T) {
 }
 
 func TestRunCapabilitiesNoApprovalWhenRunnable(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
@@ -915,6 +946,7 @@ func TestRunCapabilitiesNoApprovalWhenRunnable(t *testing.T) {
 }
 
 func TestApprovalRequiredErrorCarriesTypedFields(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending, Approval: &Approval{Required: true, Reason: "security audit"}}}},
@@ -937,6 +969,7 @@ func TestApprovalRequiredErrorCarriesTypedFields(t *testing.T) {
 }
 
 func TestNoChangesCompletionHead(t *testing.T) {
+	t.Parallel()
 	fresh := func() *PlanDetail {
 		return &PlanDetail{Slices: SlicesFile{Slices: []Slice{
 			{CommitIntent: &SliceCommitIntent{Policy: "slice"}, Completion: &SliceCompletionOutcome{Outcome: SliceCompletionNoChanges, CommitSHA: " head123 "}},
@@ -984,6 +1017,7 @@ func TestNoChangesCompletionHead(t *testing.T) {
 }
 
 func TestSliceCompletionPending(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		intent     *SliceCommitIntent
@@ -1014,6 +1048,7 @@ func TestSliceCompletionPending(t *testing.T) {
 }
 
 func TestHasUnresolvedReworkStopUsesLatestAttemptSignal(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		events []Event
@@ -1035,6 +1070,7 @@ func TestHasUnresolvedReworkStopUsesLatestAttemptSignal(t *testing.T) {
 }
 
 func TestAbandonedLifecycleIsTerminalWithoutRewritingUnfinishedWork(t *testing.T) {
+	t.Parallel()
 	firstAt := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
 	detail := &PlanDetail{
 		State: State{Status: StatusAbandoned, Plan: PlanState{
@@ -1078,6 +1114,7 @@ func TestAbandonedLifecycleIsTerminalWithoutRewritingUnfinishedWork(t *testing.T
 }
 
 func TestSummarizeExposesAttentionSignals(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Status: StatusChangesRequested, Plan: PlanState{ID: "plan"}},
 		Slices: SlicesFile{Slices: []Slice{{
@@ -1093,6 +1130,7 @@ func TestSummarizeExposesAttentionSignals(t *testing.T) {
 }
 
 func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
+	t.Parallel()
 	const original = "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline"
 	guidance := func(paths string) string {
 		return original + "; the blocker names paths outside Plan-Owned Files (" + paths + "); authorize them with tao edit amend plan-a 001-a --reason-file FILE --allow-file PATH before tao run --continue"
@@ -1132,6 +1170,7 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 }
 
 func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
+	t.Parallel()
 	pending := func() *PlanDetail {
 		return &PlanDetail{
 			State:  State{Status: StatusPlanned, Plan: PlanState{ID: "plan-a", PendingSlices: []string{"001-a"}}},
@@ -1297,6 +1336,7 @@ func TestDeriveNextActionLifecyclePrecedence(t *testing.T) {
 }
 
 func TestDeriveNextActionClassifiesActiveSingleMergeIntent(t *testing.T) {
+	t.Parallel()
 	base := func() *PlanDetail {
 		return &PlanDetail{State: State{Status: StatusReviewed, Repo: Repo{Branch: "main"}, Plan: PlanState{
 			ID: "plan", MergeCommitIntent: &SingleMergeCommitIntent{
@@ -1336,6 +1376,7 @@ func TestDeriveNextActionClassifiesActiveSingleMergeIntent(t *testing.T) {
 }
 
 func TestDeriveNextActionKeepsRestartedSingleMergeRecoveryPending(t *testing.T) {
+	t.Parallel()
 	restartedAt := time.Date(2026, 9, 4, 22, 0, 0, 0, time.UTC)
 	detail := &PlanDetail{
 		State: State{Status: StatusReviewed, Plan: PlanState{
@@ -1359,6 +1400,7 @@ func TestDeriveNextActionKeepsRestartedSingleMergeRecoveryPending(t *testing.T) 
 }
 
 func TestDeriveNextActionUsesCurrentReviewForPendingPullRequestIntent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		review      *PlanReview
@@ -1418,6 +1460,7 @@ func TestDeriveNextActionUsesCurrentReviewForPendingPullRequestIntent(t *testing
 }
 
 func TestDeriveNextActionTreatsMergeAsTerminalWithIdentityBearingPullRequestIntent(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
 	detail.State.Plan.PullRequestIntent = &PullRequest{
@@ -1436,6 +1479,7 @@ func TestDeriveNextActionTreatsMergeAsTerminalWithIdentityBearingPullRequestInte
 }
 
 func TestDeriveNextActionPrefersCurrentFinalizationRecoveryAndClearsOnSuccess(t *testing.T) {
+	t.Parallel()
 	failedAt := time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC)
 	proposal := reviewedCapabilityDetail()
 	proposal.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Base: "base123", Head: "head123"}
@@ -1473,6 +1517,7 @@ func TestDeriveNextActionPrefersCurrentFinalizationRecoveryAndClearsOnSuccess(t 
 }
 
 func TestDeriveNextActionClassifiesPullRequestMismatchRecovery(t *testing.T) {
+	t.Parallel()
 	failedAt := time.Date(2026, 8, 31, 17, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name            string
@@ -1511,6 +1556,7 @@ func TestDeriveNextActionClassifiesPullRequestMismatchRecovery(t *testing.T) {
 }
 
 func TestDeriveNextActionClassifiesProposalCorrectionReinspectionRecovery(t *testing.T) {
+	t.Parallel()
 	failedAt := time.Date(2026, 8, 31, 17, 30, 0, 0, time.UTC)
 	tests := []struct {
 		name            string
@@ -1548,6 +1594,7 @@ func TestDeriveNextActionClassifiesProposalCorrectionReinspectionRecovery(t *tes
 }
 
 func TestCurrentFinalizationRecoveryMatchesLegacyReviewBaseFallback(t *testing.T) {
+	t.Parallel()
 	failedAt := time.Date(2026, 8, 30, 1, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name      string
@@ -1580,6 +1627,7 @@ func TestCurrentFinalizationRecoveryMatchesLegacyReviewBaseFallback(t *testing.T
 }
 
 func TestCurrentFinalizationRecoveryRejectsStaleBoundaries(t *testing.T) {
+	t.Parallel()
 	detail := reviewedCapabilityDetail()
 	detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Base: "new-base", Head: "new-head"}
 	detail.State.Plan.FinalizationFailure = &FinalizationFailure{
@@ -1595,6 +1643,7 @@ func TestCurrentFinalizationRecoveryRejectsStaleBoundaries(t *testing.T) {
 }
 
 func TestDeriveNextActionDescribesSliceRecoveryWithoutPartialCommand(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan-a", CurrentSlice: ptrString("001-a")}},
 		Slices: SlicesFile{Slices: []Slice{{
@@ -1614,6 +1663,7 @@ func TestDeriveNextActionDescribesSliceRecoveryWithoutPartialCommand(t *testing.
 }
 
 func TestDeriveNextActionClassifiesForcedAlternativesAsAdministrative(t *testing.T) {
+	t.Parallel()
 	for _, review := range []*PlanReview{
 		{Status: ReviewStatusCompleted, Verdict: ReviewVerdictChangesRequested},
 		{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove},

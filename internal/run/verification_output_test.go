@@ -33,6 +33,7 @@ func TestVerificationOutputTails(t *testing.T) {
 }
 
 func TestVerificationOutputDigestFraming(t *testing.T) {
+	t.Parallel()
 	for _, pair := range [][2]string{{"", ""}, {"ab", "c"}, {"a", "bc"}, {"\xff", "\x00"}} {
 		var out, errOut verificationTail
 		_, _ = out.Write([]byte(pair[0]))
@@ -52,6 +53,7 @@ func TestVerificationOutputDigestFraming(t *testing.T) {
 }
 
 func TestVerificationOutputInterleaving(t *testing.T) {
+	t.Parallel()
 	var a, b, c, d verificationTail
 	_, _ = a.Write([]byte("one"))
 	_, _ = b.Write([]byte("err"))

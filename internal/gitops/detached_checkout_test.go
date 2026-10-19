@@ -9,6 +9,7 @@ import (
 )
 
 func TestWithDetachedCheckout(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init")
 	runGitCommand(t, root, "config", "user.name", "Test")

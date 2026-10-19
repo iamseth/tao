@@ -15,6 +15,7 @@ import (
 )
 
 func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -49,6 +50,7 @@ func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
 }
 
 func TestWorktreeFingerprintParts(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -113,6 +115,7 @@ func TestWorktreeFingerprintParts(t *testing.T) {
 }
 
 func TestWorktreeFingerprintPartsGitErrors(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"rev-parse", "HEAD"}, {"status", "--porcelain=v1", "-z", "--untracked-files=all"}, {"diff", "HEAD"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			failure := errors.New("git unavailable")
@@ -152,6 +155,7 @@ func (r *fakeRunner) run(ctx context.Context, cwd string, name string, args []st
 }
 
 func TestCloneShallowHardened(t *testing.T) {
+	t.Parallel()
 	const url = "https://example.com/owner/repo.git"
 	const dir = "/scratch/repo snapshot"
 	wantArgs := []string{
@@ -189,6 +193,7 @@ func TestCloneShallowHardened(t *testing.T) {
 }
 
 func TestCloneShallowHardenedRejectsInvalidURL(t *testing.T) {
+	t.Parallel()
 	for _, url := range []string{"", "-", "--upload-pack=malicious"} {
 		t.Run(url, func(t *testing.T) {
 			runner := &fakeRunner{}
@@ -204,6 +209,7 @@ func TestCloneShallowHardenedRejectsInvalidURL(t *testing.T) {
 }
 
 func TestDiffBoundedDrainsOversizedOutput(t *testing.T) {
+	t.Parallel()
 	const (
 		chunkCount = 32
 		chunkSize  = 1024
@@ -237,6 +243,7 @@ func TestDiffBoundedDrainsOversizedOutput(t *testing.T) {
 }
 
 func TestActiveOperationAndLinkedWorktreeDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	gitDir := filepath.Join(root, ".git")
 	if err := os.MkdirAll(filepath.Join(gitDir, "rebase-merge"), 0o750); err != nil {
@@ -268,6 +275,7 @@ func TestActiveOperationAndLinkedWorktreeDirectory(t *testing.T) {
 }
 
 func TestTrackingDestinationAndExactPush(t *testing.T) {
+	t.Parallel()
 	key := func(args ...string) string { return strings.Join(append([]string{"-C", "/repo"}, args...), "\x00") }
 	runner := &fakeRunner{outputs: map[string]string{
 		key("config", "--get-all", "branch.feature.remote"):          "publish\n",
@@ -290,6 +298,7 @@ func TestTrackingDestinationAndExactPush(t *testing.T) {
 }
 
 func TestExactPushRejectsNonExactSourcesAndUnsafeRefs(t *testing.T) {
+	t.Parallel()
 	for _, sha := range []string{"HEAD", "abc123", "+" + strings.Repeat("a", 40), strings.Repeat("g", 40), ""} {
 		runner := &fakeRunner{}
 		err := NewClient("/repo", runner.run).PushExact(context.Background(), TrackingDestination{Remote: "origin", Ref: "refs/heads/main", PushURL: "/remote.git"}, sha)
@@ -307,6 +316,7 @@ func TestExactPushRejectsNonExactSourcesAndUnsafeRefs(t *testing.T) {
 }
 
 func TestTrackingDestinationRequiresUnambiguousConfiguration(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"detached", "missing remote", "missing merge", "multiple remotes", "multiple merges", "multiple endpoints"} {
 		t.Run(scenario, func(t *testing.T) {
 			key := func(args ...string) string { return strings.Join(append([]string{"-C", "/repo"}, args...), "\x00") }
@@ -342,6 +352,7 @@ func TestTrackingDestinationRequiresUnambiguousConfiguration(t *testing.T) {
 }
 
 func TestClientRootReturnsBinding(t *testing.T) {
+	t.Parallel()
 	if got := NewClient("/some/repo", nil).Root(); got != "/some/repo" {
 		t.Fatalf("Root() = %q, want %q", got, "/some/repo")
 	}
@@ -352,6 +363,7 @@ func TestClientRootReturnsBinding(t *testing.T) {
 }
 
 func TestClientConstructsTypedGitCommands(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{}, stderr: map[string]string{}, failures: map[string]error{}}
 	client := NewClient("/repo", runner.run)
 	ctx := context.Background()
@@ -389,6 +401,7 @@ func TestClientConstructsTypedGitCommands(t *testing.T) {
 }
 
 func TestIntegrationPrimitivesConstructCommands(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "merge-base", "main", "feature"): " abc123 \n",
@@ -448,6 +461,7 @@ func TestIntegrationPrimitivesConstructCommands(t *testing.T) {
 }
 
 func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"): "?? nested/a.go\n",
@@ -482,6 +496,7 @@ func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
 }
 
 func TestMergeFFOnlyWrapsFailureWithClearContext(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{},
 		stderr: map[string]string{
@@ -504,6 +519,7 @@ func TestMergeFFOnlyWrapsFailureWithClearContext(t *testing.T) {
 }
 
 func TestCommitPathsCommitsOnlyGivenPaths(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -540,6 +556,7 @@ func TestCommitPathsCommitsOnlyGivenPaths(t *testing.T) {
 }
 
 func TestCommitPathsRequiresPaths(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{}, stderr: map[string]string{}, failures: map[string]error{}}
 	client := NewClient("/repo", runner.run)
 
@@ -556,6 +573,7 @@ func TestCommitPathsRequiresPaths(t *testing.T) {
 }
 
 func TestOutputTrimmingAndRawOutput(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "branch", "--show-current"):      " feature \n",
@@ -600,6 +618,7 @@ func TestOutputTrimmingAndRawOutput(t *testing.T) {
 }
 
 func TestErrorFormattingIncludesGitCommandAndStderr(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs:  map[string]string{},
 		stderr:   map[string]string{key("-C", "/repo", "status", "--porcelain"): "fatal: not a git repository\n"},
@@ -617,6 +636,7 @@ func TestErrorFormattingIncludesGitCommandAndStderr(t *testing.T) {
 }
 
 func TestDefaultBranchUsesOriginHeadBeforeFallbacks(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"): "origin/trunk\n",
@@ -639,6 +659,7 @@ func TestDefaultBranchUsesOriginHeadBeforeFallbacks(t *testing.T) {
 }
 
 func TestDefaultBranchFallsBackToMainThenMaster(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "branch", "--format=%(refname:short)", "--list", "master"): "master\n",
@@ -675,6 +696,7 @@ func TestDefaultBranchFallsBackToMainThenMaster(t *testing.T) {
 }
 
 func TestLocalBranchExistsParsesListedBranches(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "branch", "--format=%(refname:short)", "--list", "feature"): "feature\n",
@@ -696,6 +718,7 @@ func TestLocalBranchExistsParsesListedBranches(t *testing.T) {
 }
 
 func TestPullRequestRemoteAndPushOperationsConstructExactCommands(t *testing.T) {
+	t.Parallel()
 	branch := "feature/native-pr-format"
 	ref := "refs/heads/" + branch
 	runner := &fakeRunner{
@@ -756,6 +779,7 @@ func TestPullRequestRemoteAndPushOperationsConstructExactCommands(t *testing.T) 
 }
 
 func TestPullRequestRemoteAndPushOperationsReportErrors(t *testing.T) {
+	t.Parallel()
 	branch := "feature/native-pr-format"
 	ref := "refs/heads/" + branch
 	lookup := key("-C", "/repo", "ls-remote", "--heads", "origin", ref)
@@ -782,6 +806,7 @@ func TestPullRequestRemoteAndPushOperationsReportErrors(t *testing.T) {
 }
 
 func TestRemoteTrackingBranchExistsMatchesExactBranchAcrossRemotes(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/repo", "for-each-ref", "--format=%(refname)", "refs/remotes"): strings.Join([]string{
@@ -805,6 +830,7 @@ func TestRemoteTrackingBranchExistsMatchesExactBranchAcrossRemotes(t *testing.T)
 }
 
 func TestRemoteBranchExistsQueriesConfiguredRemotesForExactRef(t *testing.T) {
+	t.Parallel()
 	branch := "feature/native-pr-format"
 	ref := "refs/heads/" + branch
 	runner := &fakeRunner{
@@ -831,6 +857,7 @@ func TestRemoteBranchExistsQueriesConfiguredRemotesForExactRef(t *testing.T) {
 }
 
 func TestRemoteBranchExistsPropagatesRemoteLookupFailure(t *testing.T) {
+	t.Parallel()
 	lookup := key("-C", "/repo", "ls-remote", "--heads", "origin", "refs/heads/feature/native-pr-format")
 	runner := &fakeRunner{
 		outputs: map[string]string{key("-C", "/repo", "remote"): "origin\n"},
@@ -847,6 +874,7 @@ func TestRemoteBranchExistsPropagatesRemoteLookupFailure(t *testing.T) {
 }
 
 func TestDeleteBranchForceHandling(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{}, stderr: map[string]string{}, failures: map[string]error{}}
 	client := NewClient("/repo", runner.run)
 	ctx := context.Background()
@@ -869,6 +897,7 @@ func TestDeleteBranchForceHandling(t *testing.T) {
 }
 
 func TestBranchHelpersConstructCommandsAndPreserveBooleanFailures(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{key("-C", "/repo", "rev-parse", "--verify", "feature"): "abc123\n"},
 		stderr:  map[string]string{},
@@ -911,6 +940,7 @@ func TestBranchHelpersConstructCommandsAndPreserveBooleanFailures(t *testing.T) 
 }
 
 func TestMergedIntoMechanismDistinguishesAncestryAndSquash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
@@ -965,6 +995,7 @@ func key(args ...string) string {
 }
 
 func TestAddTrackedStagesIndexKnownPathsUnderNewlyIgnoredDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 

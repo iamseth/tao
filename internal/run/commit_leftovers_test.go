@@ -12,6 +12,7 @@ import (
 )
 
 func TestCommitLeftoversDetectsRunProducedFilesSortedDeduped(t *testing.T) {
+	t.Parallel()
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"b.go"}},
 	})
@@ -28,6 +29,7 @@ func TestCommitLeftoversDetectsRunProducedFilesSortedDeduped(t *testing.T) {
 }
 
 func TestCommitLeftoversCleanTreeReturnsNone(t *testing.T) {
+	t.Parallel()
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"internal/run/commit_leftovers.go"}},
 	})
@@ -42,6 +44,7 @@ func TestCommitLeftoversCleanTreeReturnsNone(t *testing.T) {
 }
 
 func TestCommitLeftoversExcludesTaoAndStartingDirtyPaths(t *testing.T) {
+	t.Parallel()
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"internal/run/commit_leftovers.go"}},
 	})
@@ -58,6 +61,7 @@ func TestCommitLeftoversExcludesTaoAndStartingDirtyPaths(t *testing.T) {
 }
 
 func TestCommitLeftoversSurfacesAmbiguousStatusEntry(t *testing.T) {
+	t.Parallel()
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"new.go"}},
 	})

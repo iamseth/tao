@@ -8,6 +8,7 @@ import (
 )
 
 func TestBoundRunAbortMessage(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ name, input, want string }{
 		{"empty", "", ""},
 		{"first line", "  first error  \r\nsecond error", "first error"},
@@ -23,6 +24,7 @@ func TestBoundRunAbortMessage(t *testing.T) {
 }
 
 func TestLatestRunAbort(t *testing.T) {
+	t.Parallel()
 	abort := Event{Type: EventTypeRunAborted, AbortKind: RunAbortKindOther, Message: "error", SliceID: "001-a", HeadSHA: "head"}
 	for _, tt := range []struct {
 		name   string
@@ -51,6 +53,7 @@ func TestLatestRunAbort(t *testing.T) {
 }
 
 func TestRunAbortDerivationNeutrality(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{StatusPlanned, StatusInProgress} {
 		t.Run(status, func(t *testing.T) {
 			detail := &PlanDetail{

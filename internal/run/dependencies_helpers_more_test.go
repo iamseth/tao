@@ -11,6 +11,7 @@ import (
 )
 
 func TestReviewRangePresenterIsOptionalDependency(t *testing.T) {
+	t.Parallel()
 	deps := RunDependencies{}
 	without := requireResolvedDependencies(deps).Error()
 	deps.ReviewRangePresenter = func(*plan.PlanDetail, string, string) {}
@@ -24,6 +25,7 @@ func TestReviewRangePresenterIsOptionalDependency(t *testing.T) {
 }
 
 func TestRunDependencyHelperAccessors(t *testing.T) {
+	t.Parallel()
 	runner := func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }
 	now := func() time.Time { return time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC) }
 	appender := eventAppenderFunc(func(string, plan.Event) error { return nil })

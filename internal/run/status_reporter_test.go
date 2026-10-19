@@ -16,6 +16,7 @@ import (
 )
 
 func TestServiceExecuteReportsStatus(t *testing.T) {
+	t.Parallel()
 	planID := "20260710-0051-herdr-status"
 	executorErr := errors.New("executor failed")
 
@@ -55,6 +56,7 @@ func TestServiceExecuteReportsStatus(t *testing.T) {
 }
 
 func TestServiceExecuteReportsStatusOnPanic(t *testing.T) {
+	t.Parallel()
 	reporter := &recordingStatusReporter{}
 	recovered := servicePanicValue(t, reporter)
 	if recovered == nil {
@@ -67,6 +69,7 @@ func TestServiceExecuteReportsStatusOnPanic(t *testing.T) {
 }
 
 func TestServiceExecutePublishesInvocationAndObservablePhases(t *testing.T) {
+	t.Parallel()
 	planID := "20260710-0051-live-status"
 	reporter := &recordingInvocationStatusReporter{}
 	if err := executeServiceWithStatusReporter(t, context.Background(), reporter, &countingSliceExecutor{}, planID); err != nil {
@@ -95,6 +98,7 @@ func TestServiceExecutePublishesInvocationAndObservablePhases(t *testing.T) {
 }
 
 func TestRunStatusLabelCapsCustomStatus(t *testing.T) {
+	t.Parallel()
 	if got := runStatusLabel("20260710-0051-herdr-status"); got != "run herdr-status" {
 		t.Fatalf("expected slug label, got %q", got)
 	}

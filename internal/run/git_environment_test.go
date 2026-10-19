@@ -9,6 +9,7 @@ import (
 )
 
 func TestRunGitEnvironment(t *testing.T) {
+	t.Parallel()
 	const childKey = "TAO_TEST_GIT_ENV_CHILD"
 	if os.Getenv(childKey) == "1" {
 		if os.Getenv("TAO_TEST_GIT_ENV_SENTINEL") != "retained" || os.Getenv("TAO_TEST_COMPLETION_DIR") != "coordination-sentinel" {

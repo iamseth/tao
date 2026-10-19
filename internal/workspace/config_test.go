@@ -9,6 +9,7 @@ import (
 )
 
 func TestDefaultConfigValues(t *testing.T) {
+	t.Parallel()
 	config := DefaultConfig()
 
 	if config.Root != ".tao/workspaces" {
@@ -23,6 +24,7 @@ func TestDefaultConfigValues(t *testing.T) {
 }
 
 func TestResolvePlanBranchMapsEveryChangeType(t *testing.T) {
+	t.Parallel()
 	for _, changeType := range plan.SupportedChangeTypes() {
 		detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "20260812-183359-native-pr-format", ChangeType: changeType}}}
 		identity, err := ResolvePlanBranch(detail, DefaultConfig())
@@ -37,6 +39,7 @@ func TestResolvePlanBranchMapsEveryChangeType(t *testing.T) {
 }
 
 func TestResolvePlanBranchPreservesLegacyAndRecordedBranches(t *testing.T) {
+	t.Parallel()
 	legacy := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "20260812-183359-legacy-plan"}}}
 	identity, err := ResolvePlanBranch(legacy, DefaultConfig())
 	if err != nil {
@@ -58,6 +61,7 @@ func TestResolvePlanBranchPreservesLegacyAndRecordedBranches(t *testing.T) {
 }
 
 func TestResolvePlanBranchRejectsTypedPlanWithoutSafeTimestampedSlug(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{"plan-a", "20260812-183359-", "20260812-183359-unsafe_slug"} {
 		detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: id, ChangeType: plan.ChangeTypeFix}}}
 		if _, err := ResolvePlanBranch(detail, DefaultConfig()); err == nil || !strings.Contains(err.Error(), "safe non-empty timestamped slug") {
@@ -67,6 +71,7 @@ func TestResolvePlanBranchRejectsTypedPlanWithoutSafeTimestampedSlug(t *testing.
 }
 
 func TestConfigAllowsCurrentCompatibilityStrategy(t *testing.T) {
+	t.Parallel()
 	config := DefaultConfig()
 	config.Strategy = runtimeconfig.ExecutionModeCurrent
 
@@ -76,6 +81,7 @@ func TestConfigAllowsCurrentCompatibilityStrategy(t *testing.T) {
 }
 
 func TestConfigRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*Config)

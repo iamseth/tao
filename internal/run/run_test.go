@@ -18,6 +18,7 @@ import (
 )
 
 func TestPlanOwnedFiles(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		base   string
@@ -65,6 +66,7 @@ func TestPlanOwnedFiles(t *testing.T) {
 }
 
 func TestRenderRunPacketIncludesPlanOwnedFilesOnHandoff(t *testing.T) {
+	t.Parallel()
 	for _, resuming := range []bool{false, true} {
 		detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 		detail.State.Repo.BaseCommit = "base123"
@@ -82,6 +84,7 @@ func TestRenderRunPacketIncludesPlanOwnedFilesOnHandoff(t *testing.T) {
 }
 
 func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
 	runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
@@ -118,6 +121,7 @@ func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
 }
 
 func TestRunTestBuilders(t *testing.T) {
+	t.Parallel()
 	dependencies := testDependencies(nil, nil)
 	options := testOptions(dependencies)
 	if options.ExecutionConfig != (ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}) {
@@ -151,6 +155,7 @@ func TestRunTestBuilders(t *testing.T) {
 }
 
 func TestRunFinalizesPlanCompletedByCurrentInvocation(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-2 * time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -177,6 +182,7 @@ func TestRunFinalizesPlanCompletedByCurrentInvocation(t *testing.T) {
 }
 
 func TestRunDoesNotFinalizeAlreadyCompletePlan(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 	var calls []string
@@ -193,6 +199,7 @@ func TestRunDoesNotFinalizeAlreadyCompletePlan(t *testing.T) {
 }
 
 func TestRunPrintsFreshReviewHintForAlreadyInReviewPlan(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 
@@ -206,6 +213,7 @@ func TestRunPrintsFreshReviewHintForAlreadyInReviewPlan(t *testing.T) {
 }
 
 func TestFinalizerDoesNotFinalizeAlreadyCompletePlan(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 	var calls []string
@@ -227,6 +235,7 @@ func TestFinalizerDoesNotFinalizeAlreadyCompletePlan(t *testing.T) {
 }
 
 func TestFinalizerPrintsFreshReviewHintForAlreadyInReviewPlan(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
 	finalizer := newFinalizer(&out, testRunExecutionWithOptions(Options{}))
@@ -245,6 +254,7 @@ func TestFinalizerPrintsFreshReviewHintForAlreadyInReviewPlan(t *testing.T) {
 }
 
 func TestRunDoesNotFinalizeWhenMaxSlicesStopsBeforeCompletion(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a", "002-b"}, nil, "001-a", plan.StatusPending, nil, nil)
 	reloaded := runPlanDetail(plan.StatusInProgress, []string{"002-b"}, []string{"001-a"}, "002-b", plan.StatusPending, nil, nil)
 	var out bytes.Buffer
@@ -267,6 +277,7 @@ func TestRunDoesNotFinalizeWhenMaxSlicesStopsBeforeCompletion(t *testing.T) {
 }
 
 func TestAutomaticSliceRequiresCleanBoundaryWhileNoneIsExempt(t *testing.T) {
+	t.Parallel()
 	runner := (&scriptedGitRunner{Outputs: map[string]string{"status --porcelain": " M README.md\n"}}).Run
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}}, RunDependencies{CommandRunner: runner})
 	if err := requireCleanAutomaticSliceStart(context.Background(), execution, "."); err == nil || !strings.Contains(err.Error(), "commit or stash") || !strings.Contains(err.Error(), "commit policy none") {
@@ -279,6 +290,7 @@ func TestAutomaticSliceRequiresCleanBoundaryWhileNoneIsExempt(t *testing.T) {
 }
 
 func TestCurrentModeAutomaticSliceRejectsProtectedBranchBeforeAgentWork(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = t.TempDir()
 	started := false
@@ -308,6 +320,7 @@ func TestCurrentModeAutomaticSliceRejectsProtectedBranchBeforeAgentWork(t *testi
 }
 
 func TestAutomaticSliceBoundaryUsesPreparedBranchAndHead(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	runner := (&scriptedGitRunner{Branch: "prepared-feature", Head: "prepared-head"}).Run
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}}, testDependencies(nil, runner))
@@ -322,6 +335,7 @@ func TestAutomaticSliceBoundaryUsesPreparedBranchAndHead(t *testing.T) {
 }
 
 func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		branch  string
@@ -361,6 +375,7 @@ func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
 }
 
 func TestRunPreflightBlocksInvalidSelectedSliceBeforeExecutor(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
 		Dir:   "/plans/plan-a",
@@ -401,6 +416,7 @@ func TestRunPreflightBlocksInvalidSelectedSliceBeforeExecutor(t *testing.T) {
 }
 
 func TestRunPreflightUsesExecutionRootForPathChecks(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "generated_test.go"), []byte("package generated\n"), 0o600); err != nil {
@@ -432,6 +448,7 @@ func TestRunPreflightUsesExecutionRootForPathChecks(t *testing.T) {
 }
 
 func TestRunPreflightChecksRequiredInputsAfterPreparingAuthoritativeRoot(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name             string
 		prepareWorkspace func(*testing.T, string)
@@ -506,6 +523,7 @@ func TestRunPreflightChecksRequiredInputsAfterPreparingAuthoritativeRoot(t *test
 }
 
 func TestRunPreflightAllowsExpectedFutureFileWarningBeforeRunning(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = repo
@@ -540,6 +558,7 @@ func TestRunPreflightAllowsExpectedFutureFileWarningBeforeRunning(t *testing.T) 
 }
 
 func TestRunPreflightPrintsWarningsAndContinues(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
 		Dir:    "/plans/plan-a",
@@ -569,6 +588,7 @@ func TestRunPreflightPrintsWarningsAndContinues(t *testing.T) {
 }
 
 func TestRunPreflightPrintsGuardrailWarningsBeforeRunning(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = t.TempDir()
 	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/..."}
@@ -598,6 +618,7 @@ func TestRunPreflightPrintsGuardrailWarningsBeforeRunning(t *testing.T) {
 }
 
 func TestRunPreflightPrintsBudgetWarningsBeforeRunning(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = t.TempDir()
 	detail.Slices.Slices[0].Verification.Commands = []string{"go test"}
@@ -625,6 +646,7 @@ func TestRunPreflightPrintsBudgetWarningsBeforeRunning(t *testing.T) {
 }
 
 func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Slices.Slices[0].Goal = "Use packet context"
 	detail.Slices.Slices[0].RequiredInputs = []plan.RequiredInput{{Path: "run.go", Kind: plan.RequiredInputFile, Reason: "runtime contract"}}
@@ -650,6 +672,7 @@ func TestRunPassesSelectedSlicePacketToExecutor(t *testing.T) {
 }
 
 func TestRunPassesWorkspaceRootAndControlPlanDirToExecutor(t *testing.T) {
+	t.Parallel()
 	controlDir := t.TempDir()
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -683,6 +706,7 @@ func TestRunPassesWorkspaceRootAndControlPlanDirToExecutor(t *testing.T) {
 }
 
 func TestPrepareExecutionWorkspaceDefaultsToWorktree(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = repoRoot
@@ -706,6 +730,7 @@ func TestPrepareExecutionWorkspaceDefaultsToWorktree(t *testing.T) {
 }
 
 func TestPrepareExecutionWorkspaceWorktreeRunOptionOverridesPlanCurrent(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = repoRoot
@@ -729,6 +754,7 @@ func TestPrepareExecutionWorkspaceWorktreeRunOptionOverridesPlanCurrent(t *testi
 }
 
 func TestServiceExecuteWorkspaceStrategyWorktreeOverridesPlanCurrent(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = t.TempDir()
@@ -759,6 +785,7 @@ func TestServiceExecuteWorkspaceStrategyWorktreeOverridesPlanCurrent(t *testing.
 }
 
 func TestServiceExecuteRefusesDirtyReadyWorkspaceBeforePreparation(t *testing.T) {
+	t.Parallel()
 	workspaceRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = t.TempDir()
@@ -798,6 +825,7 @@ func TestServiceExecuteRefusesDirtyReadyWorkspaceBeforePreparation(t *testing.T)
 }
 
 func TestServiceExecuteRefusesActiveSequencerInReadyWorkspaceBeforePreparation(t *testing.T) {
+	t.Parallel()
 	workspaceRoot := t.TempDir()
 	writeLinkedWorktreeSequencer(t, workspaceRoot)
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -834,6 +862,7 @@ func TestServiceExecuteRefusesActiveSequencerInReadyWorkspaceBeforePreparation(t
 }
 
 func TestServiceExecuteRefusesDirtyUnrecordedManagedWorkspaceBeforePreparation(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
 	if err := os.MkdirAll(workspaceRoot, 0o750); err != nil {
@@ -872,6 +901,7 @@ func TestServiceExecuteRefusesDirtyUnrecordedManagedWorkspaceBeforePreparation(t
 }
 
 func TestServiceExecuteRefusesDirtyRecordedWorkspaceBeforeMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		strategy string
@@ -927,6 +957,7 @@ func TestServiceExecuteRefusesDirtyRecordedWorkspaceBeforeMutation(t *testing.T)
 }
 
 func TestServiceExecuteStartsNextAutomaticSliceAfterMaxSlicesStop(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	if err := os.MkdirAll(planDir, 0o700); err != nil {
@@ -1007,6 +1038,7 @@ func TestServiceExecuteStartsNextAutomaticSliceAfterMaxSlicesStop(t *testing.T) 
 }
 
 func TestCompletedAutomaticSliceProvesBoundaryRequiresConsistentLatestEvidence(t *testing.T) {
+	t.Parallel()
 	newDetail := func() *plan.PlanDetail {
 		detail := runPlanDetail(plan.StatusInProgress, []string{"002-b"}, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 		detail.State.Workspace = &plan.Workspace{
@@ -1042,6 +1074,7 @@ func TestCompletedAutomaticSliceProvesBoundaryRequiresConsistentLatestEvidence(t
 }
 
 func TestServiceExecuteMigratesLegacyCompletedSliceWorkspaceHead(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	if err := os.MkdirAll(planDir, 0o700); err != nil {
@@ -1133,6 +1166,7 @@ func TestServiceExecuteMigratesLegacyCompletedSliceWorkspaceHead(t *testing.T) {
 }
 
 func TestServiceExecuteResumesInterruptedAutomaticSliceBeforeWorkspaceMutation(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	completed := interruptedServiceRunDetail(t, root)
@@ -1201,6 +1235,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceBeforeWorkspaceMutation(t
 }
 
 func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		runner func(*testing.T, string) CommandRunner
@@ -1303,6 +1338,7 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 }
 
 func TestServiceExecuteRefusesInterruptedAutomaticSliceWithActiveSequencer(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeLinkedWorktreeSequencer(t, root)
 	detail := interruptedServiceRunDetail(t, root)
@@ -1332,6 +1368,7 @@ func TestServiceExecuteRefusesInterruptedAutomaticSliceWithActiveSequencer(t *te
 }
 
 func TestServiceExecuteResumesInterruptedAutomaticSliceThenRunsNextSlice(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	initial := interruptedServiceRunDetail(t, root)
 	planDir := initial.Dir
@@ -1415,6 +1452,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceThenRunsNextSlice(t *test
 }
 
 func TestServiceExecuteResumesAgainAfterASecondProviderInterruption(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	var calls []string
@@ -1466,6 +1504,7 @@ func TestServiceExecuteResumesAgainAfterASecondProviderInterruption(t *testing.T
 }
 
 func TestInterruptedResumeFailureEventWarningPreservesProviderError(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	providerErr := errors.New("provider connection lost")
@@ -1492,6 +1531,7 @@ func TestInterruptedResumeFailureEventWarningPreservesProviderError(t *testing.T
 }
 
 func TestServiceExecuteRoutesCommitIntentWithoutAgent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Hash: "intent", Policy: CommitPolicySlice.String()}
@@ -1510,6 +1550,7 @@ func TestServiceExecuteRoutesCommitIntentWithoutAgent(t *testing.T) {
 }
 
 func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.Slices.Slices[0].ExecutionStart = nil
@@ -1543,6 +1584,7 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 }
 
 func TestServiceExecuteRepairsMissingStartEventAfterReload(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	workspaceRoot := t.TempDir()
@@ -1636,6 +1678,7 @@ func TestServiceExecuteRepairsMissingStartEventAfterReload(t *testing.T) {
 }
 
 func TestServiceExecuteRepairsStateAdvancedSliceStartAfterReload(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	workspaceRoot := t.TempDir()
@@ -1728,6 +1771,7 @@ func TestServiceExecuteRepairsStateAdvancedSliceStartAfterReload(t *testing.T) {
 }
 
 func TestServiceExecuteRefusesInterruptedBoundaryDriftAndManualOwnership(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		strategy string
@@ -1784,6 +1828,7 @@ func TestServiceExecuteRefusesInterruptedBoundaryDriftAndManualOwnership(t *test
 }
 
 func TestServiceExecuteWaitsForIsolatedWorkspacePreparationBeforeAgent(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
@@ -1829,6 +1874,7 @@ func TestServiceExecuteWaitsForIsolatedWorkspacePreparationBeforeAgent(t *testin
 }
 
 func TestServiceExecuteDoesNotRebaseCurrentMode(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	planDir := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a", "002-b"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -1888,6 +1934,7 @@ func TestServiceExecuteDoesNotRebaseCurrentMode(t *testing.T) {
 }
 
 func TestServiceExecuteWorkspaceStrategyCurrentOverridesPlanWorktree(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = t.TempDir()
@@ -1925,6 +1972,7 @@ func TestServiceExecuteWorkspaceStrategyCurrentOverridesPlanWorktree(t *testing.
 }
 
 func TestRenderWorkPromptIncludesRunPacket(t *testing.T) {
+	t.Parallel()
 	prompt, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", RunPacket: "# Tao Run Packet\n\n- ID: plan-a", CommitPolicy: CommitPolicySlice.String()})
 	if err != nil {
 		t.Fatal(err)
@@ -1937,6 +1985,7 @@ func TestRenderWorkPromptIncludesRunPacket(t *testing.T) {
 }
 
 func TestRenderWorkPromptIncludesInterruptedResumeInstructions(t *testing.T) {
+	t.Parallel()
 	prompt, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", CommitPolicy: CommitPolicySlice.String(), Resuming: true, ResumeAttempt: 3})
 	if err != nil {
 		t.Fatal(err)
@@ -1956,6 +2005,7 @@ func TestRenderWorkPromptIncludesInterruptedResumeInstructions(t *testing.T) {
 }
 
 func TestRenderWorkPromptRejectsRemovedPlanPolicy(t *testing.T) {
+	t.Parallel()
 	_, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", CommitPolicy: CommitPolicyPlan.String()})
 	if err == nil || !strings.Contains(err.Error(), "plan was removed; use slice or none") {
 		t.Fatalf("expected prompt migration error, got %v", err)
@@ -1963,6 +2013,7 @@ func TestRenderWorkPromptRejectsRemovedPlanPolicy(t *testing.T) {
 }
 
 func TestRunWorkPromptInstructsSliceComplete(t *testing.T) {
+	t.Parallel()
 	prompt, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", CommitPolicy: CommitPolicyNone.String()})
 	if err != nil {
 		t.Fatal(err)
@@ -1975,6 +2026,7 @@ func TestRunWorkPromptInstructsSliceComplete(t *testing.T) {
 }
 
 func TestRunPostAgentBlockShowsBoundedPersistedReason(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name   string
 		reason string
@@ -2013,6 +2065,7 @@ func TestRunPostAgentBlockShowsBoundedPersistedReason(t *testing.T) {
 }
 
 func TestContinuePlanOwnedBlocker(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"unchanged", "pending fallback", "tracked changed", "untracked changed", "deleted", "head advanced", "prose only", "no fingerprint", "new prose block", "new block without fingerprint", "empty root", "missing root", "git error"} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -2106,6 +2159,7 @@ func TestContinuePlanOwnedBlocker(t *testing.T) {
 }
 
 func TestServiceExecuteRefusesUnchangedPlanOwnedBlocker(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.State.Status = plan.StatusBlocked
@@ -2141,6 +2195,7 @@ func TestServiceExecuteRefusesUnchangedPlanOwnedBlocker(t *testing.T) {
 }
 
 func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
@@ -2170,6 +2225,7 @@ func TestRunContinueRestartsBlockedPlanBeforeCapabilityGate(t *testing.T) {
 }
 
 func TestExecuteDetailAfterContinueRunsReopenedReworkSlice(t *testing.T) {
+	t.Parallel()
 	for _, spent := range []bool{true, false} {
 		name := "unspent continue rejects reopened plan"
 		if spent {
@@ -2224,6 +2280,7 @@ func TestExecuteDetailAfterContinueRunsReopenedReworkSlice(t *testing.T) {
 }
 
 func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparation(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
@@ -2309,6 +2366,7 @@ func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparati
 }
 
 func TestRunContinueDoesNotSkipVerificationPreflight(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
 		Dir:   "/plans/plan-a",
@@ -2339,6 +2397,7 @@ func TestRunContinueDoesNotSkipVerificationPreflight(t *testing.T) {
 }
 
 func TestRunResumeChecksRequiredInputsBeforeRepairOrHandoff(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.Events = nil
@@ -2373,6 +2432,7 @@ func TestRunResumeChecksRequiredInputsBeforeRepairOrHandoff(t *testing.T) {
 }
 
 func TestRunStartsSliceBeforeExecutor(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	var out bytes.Buffer
@@ -2405,6 +2465,7 @@ func TestRunStartsSliceBeforeExecutor(t *testing.T) {
 }
 
 func TestRunPersistsExecutionRootWhenStartingSlice(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -2439,6 +2500,7 @@ func TestRunPersistsExecutionRootWhenStartingSlice(t *testing.T) {
 }
 
 func TestSelectedSliceRunnerPersistsLastRunCommitPolicyAtStart(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = planDir
@@ -2473,6 +2535,7 @@ func TestSelectedSliceRunnerPersistsLastRunCommitPolicyAtStart(t *testing.T) {
 }
 
 func TestStartSliceRecordsAutomaticRunBoundary(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	executionRoot := t.TempDir()
 	startedAt := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
@@ -2534,6 +2597,7 @@ func TestStartSliceRecordsAutomaticRunBoundary(t *testing.T) {
 }
 
 func TestStartSlicePersistsLastRunStartingDirtyAndClearsItOnCleanStart(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a", "002-b"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -2570,6 +2634,7 @@ func TestStartSlicePersistsLastRunStartingDirtyAndClearsItOnCleanStart(t *testin
 }
 
 func TestRunRecordsRunContextTelemetry(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = planDir
@@ -2613,6 +2678,7 @@ func TestRunRecordsRunContextTelemetry(t *testing.T) {
 }
 
 func TestPrepareRunExecutionDefaultsRunDependencies(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repo := &memoryRunRepository{}
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -2650,6 +2716,7 @@ func TestPrepareRunExecutionDefaultsRunDependencies(t *testing.T) {
 }
 
 func TestExecutionRootResolverUsesCachedRoot(t *testing.T) {
+	t.Parallel()
 	cachedRoot := filepath.Join(t.TempDir(), "cached")
 	resolver := executionRootResolver(runExecution{
 		ExecutionRoot: cachedRoot,
@@ -2675,6 +2742,7 @@ func TestExecutionRootResolverUsesCachedRoot(t *testing.T) {
 }
 
 func TestExecutionRootResolverUsesCurrentWorkspaceRoot(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = repoRoot
@@ -2704,6 +2772,7 @@ func TestExecutionRootResolverUsesCurrentWorkspaceRoot(t *testing.T) {
 }
 
 func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := filepath.Join(t.TempDir(), "workspaces")
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
@@ -2808,6 +2877,7 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 }
 
 func TestPersistingRunPlanRecordReloadsLifecycleWithoutAliasing(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	repository := plantest.NewPersistingRepository()
 	record, err := persistingPlanRecord(repository, detail)
@@ -2859,6 +2929,7 @@ func TestPersistingRunPlanRecordReloadsLifecycleWithoutAliasing(t *testing.T) {
 }
 
 func TestRunDoesNotStartSliceBeforePreflightPasses(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &plan.PlanDetail{
 		Dir:   "/plans/plan-a",

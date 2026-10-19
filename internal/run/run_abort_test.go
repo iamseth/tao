@@ -44,6 +44,7 @@ func (r *abortRepository) OpenLogAppend(dir string) (*os.File, error) {
 }
 
 func TestServiceJournalsRunAbort(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                      string
 		err                       error
@@ -131,6 +132,7 @@ func TestServiceJournalsRunAbort(t *testing.T) {
 }
 
 func TestRunAbortEnrichmentBounded(t *testing.T) {
+	t.Parallel()
 	for _, stalledGit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stalled_git=%t", stalledGit), func(t *testing.T) {
 			dir := t.TempDir()

@@ -72,6 +72,7 @@ import (
 // TestClearableFieldsRoundTrip verifies that each intended-clearable field can
 // be zeroed through the real WriteState write path and reloads as the zero value.
 func TestClearableFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
 	type roundTripCase struct {
 		name  string
 		setup func(t *testing.T, dir string)
@@ -213,6 +214,7 @@ func TestClearableFieldsRoundTrip(t *testing.T) {
 }
 
 func TestSliceVerificationReplacementDoesNotRetainPriorRunFields(t *testing.T) {
+	t.Parallel()
 	record := sliceVerificationRecord(t)
 	first := testSliceVerificationSnapshot()
 	first.Runs[0].OriginalCommand = "go test ./missing/..."
@@ -260,6 +262,7 @@ func TestSliceVerificationReplacementDoesNotRetainPriorRunFields(t *testing.T) {
 }
 
 func TestSingleMergeResolutionOptionalLegacyShapeEmitsExactPresentState(t *testing.T) {
+	t.Parallel()
 	field, ok := reflect.TypeOf(SingleMergeCommitIntent{}).FieldByName("Resolution")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
 		t.Fatalf("SingleMergeCommitIntent.Resolution must preserve legacy shape with omitempty, tag=%q", field.Tag.Get("json"))
@@ -307,6 +310,7 @@ func TestSingleMergeResolutionOptionalLegacyShapeEmitsExactPresentState(t *testi
 }
 
 func TestDecisionMetadataPreservesByDefaultWithOmitEmpty(t *testing.T) {
+	t.Parallel()
 	planType := reflect.TypeOf(PlanState{})
 	for _, fieldName := range []string{"Decision", "Sequence"} {
 		field, ok := planType.FieldByName(fieldName)
@@ -317,6 +321,7 @@ func TestDecisionMetadataPreservesByDefaultWithOmitEmpty(t *testing.T) {
 }
 
 func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {
+	t.Parallel()
 	field, ok := reflect.TypeOf(Slice{}).FieldByName("BlockerNote")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
 		t.Fatalf("Slice.BlockerNote must preserve by default with omitempty, tag=%q", field.Tag.Get("json"))
@@ -372,6 +377,7 @@ func TestMigratedSliceBlockerNoteRequiresDeclaredClear(t *testing.T) {
 }
 
 func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
+	t.Parallel()
 	field, ok := reflect.TypeOf(PlanState{}).FieldByName("CurrentSlice")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
 		t.Fatalf("PlanState.CurrentSlice must preserve by default with omitempty, tag=%q", field.Tag.Get("json"))
@@ -420,6 +426,7 @@ func TestMigratedCurrentSliceRequiresDeclaredClear(t *testing.T) {
 }
 
 func TestMigratedFinalizationFailureRequiresDeclaredClear(t *testing.T) {
+	t.Parallel()
 	field, ok := reflect.TypeOf(PlanState{}).FieldByName("FinalizationFailure")
 	if !ok || !strings.Contains(field.Tag.Get("json"), "omitempty") {
 		t.Fatalf("PlanState.FinalizationFailure must preserve by default with omitempty, tag=%q", field.Tag.Get("json"))
@@ -467,6 +474,7 @@ func TestMigratedFinalizationFailureRequiresDeclaredClear(t *testing.T) {
 }
 
 func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
+	t.Parallel()
 	reviewType := reflect.TypeOf(PlanReview{})
 	for _, fieldName := range []string{"Verdict", "Summary", "FindingsCount", "Findings", "CommitMessage", "ReviewedAt"} {
 		field, ok := reviewType.FieldByName(fieldName)
@@ -533,6 +541,7 @@ func TestMigratedPlanReviewRequiresDeclaredReplacement(t *testing.T) {
 }
 
 func TestRecordWorkspaceReadyExplicitlyClearsPersistedDependencyEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	state := clearableContractBaseState()
 	state.Workspace = &Workspace{
@@ -569,6 +578,7 @@ func TestRecordWorkspaceReadyExplicitlyClearsPersistedDependencyEvidence(t *test
 }
 
 func TestMigratedWorkspaceFieldsRequireDeclaredClear(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		fieldName string
 		jsonKey   string

@@ -14,6 +14,7 @@ import (
 )
 
 func TestExecutionBoundaryActionsCharacterizeEveryDisposition(t *testing.T) {
+	t.Parallel()
 	const root = "/workspace/plan"
 	tests := []struct {
 		name        string
@@ -183,6 +184,7 @@ func TestExecutionBoundaryActionsCharacterizeEveryDisposition(t *testing.T) {
 }
 
 func TestExecutionBoundaryPreservesLegacyInferenceAndPostIntentRefusals(t *testing.T) {
+	t.Parallel()
 	t.Run("legacy boundary inference", func(t *testing.T) {
 		input := interruptedInput()
 		input.Detail.Slices.Slices[0].ExecutionStart.CommitPolicy = ""
@@ -224,6 +226,7 @@ func TestExecutionBoundaryPreservesLegacyInferenceAndPostIntentRefusals(t *testi
 }
 
 func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		config ExecutionConfig
@@ -319,6 +322,7 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 }
 
 func TestInspectUnrecordedTypedWorkspaceUsesDerivedBranchBoundary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		branch  string

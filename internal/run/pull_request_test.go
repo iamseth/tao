@@ -16,6 +16,7 @@ import (
 )
 
 func TestRunPullRequestFailureSkipsCheckout(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -46,6 +47,7 @@ func TestRunPullRequestFailureSkipsCheckout(t *testing.T) {
 }
 
 func TestRunPullRequestDisabledByDefault(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -66,6 +68,7 @@ func TestRunPullRequestDisabledByDefault(t *testing.T) {
 }
 
 func TestRunPullRequestNotCreatedForMaxSlicesStop(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a", "002-b"}, nil, "001-a", plan.StatusPending, nil, nil)
 	reloaded := runPlanDetail(plan.StatusInProgress, []string{"002-b"}, []string{"001-a"}, "002-b", plan.StatusPending, nil, nil)
 	reloaded.Slices.Slices = append([]plan.Slice{{ID: "001-a", Status: plan.StatusCompleted}}, reloaded.Slices.Slices...)
@@ -84,6 +87,7 @@ func TestRunPullRequestNotCreatedForMaxSlicesStop(t *testing.T) {
 }
 
 func TestServiceExecutePullRequestRejectsCommitPolicyNone(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail}}
 	executor := &countingSliceExecutor{}
@@ -98,6 +102,7 @@ func TestServiceExecutePullRequestRejectsCommitPolicyNone(t *testing.T) {
 }
 
 func TestServiceExecutePullRequestRejectsCurrentMode(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Dir = t.TempDir()
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail}}
@@ -124,6 +129,7 @@ func TestServiceExecutePullRequestRejectsCurrentMode(t *testing.T) {
 }
 
 func TestDeterministicPullRequestCreatorRejectsAbandonedPlanBeforeGitOrForge(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	detail.State.Status = plan.StatusAbandoned
 	detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypePlanAbandoned, Reason: "superseded by safer work"})
@@ -144,6 +150,7 @@ func TestDeterministicPullRequestCreatorRejectsAbandonedPlanBeforeGitOrForge(t *
 }
 
 func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullRequest(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	createdAt := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)
 	currentTime := createdAt.Add(-15 * time.Minute)
@@ -211,6 +218,7 @@ func TestDeterministicPullRequestCreatorPushesLabelsAssignsAndCreatesNativePullR
 }
 
 func TestDeterministicPullRequestCreatorIgnoresSameHeadPullRequestAgainstDifferentBase(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	runner := pullRequestCommandRunner(t, &calls, func(args []string, stdout io.Writer, _ io.Writer) error {
 		switch key := strings.Join(args, " "); {
@@ -242,6 +250,7 @@ func TestDeterministicPullRequestCreatorIgnoresSameHeadPullRequestAgainstDiffere
 }
 
 func TestDeterministicPullRequestCreatorIgnoresSameNamedForkPullRequest(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	runner := pullRequestCommandRunner(t, &calls, func(args []string, stdout io.Writer, _ io.Writer) error {
 		key := strings.Join(args, " ")
@@ -276,6 +285,7 @@ func TestDeterministicPullRequestCreatorIgnoresSameNamedForkPullRequest(t *testi
 }
 
 func TestDeterministicPullRequestCreatorStopsWhenDiffStatFails(t *testing.T) {
+	t.Parallel()
 	diffErr := errors.New("diff failed")
 	var calls []string
 	baseRunner := pullRequestCommandRunner(t, &calls, func(args []string, stdout io.Writer, _ io.Writer) error {
@@ -304,6 +314,7 @@ func TestDeterministicPullRequestCreatorStopsWhenDiffStatFails(t *testing.T) {
 }
 
 func TestDeterministicPullRequestCreatorFallsBackWithoutTaoNoise(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	var out bytes.Buffer
 	var createdBody string
@@ -337,6 +348,7 @@ func TestDeterministicPullRequestCreatorFallsBackWithoutTaoNoise(t *testing.T) {
 }
 
 func TestDeterministicPullRequestCreatorRejectsNoisyAgentBody(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	var out bytes.Buffer
 	creator := deterministicPullRequestCreator{
@@ -357,6 +369,7 @@ func TestDeterministicPullRequestCreatorRejectsNoisyAgentBody(t *testing.T) {
 }
 
 func TestPullRequestPreflightRejectsTypeOrHeadMismatchBeforeRemoteMutation(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name       string
 		changeType plan.ChangeType
@@ -383,6 +396,7 @@ func TestPullRequestPreflightRejectsTypeOrHeadMismatchBeforeRemoteMutation(t *te
 }
 
 func TestTypedPullRequestPushRejectsRemoteBranchCreatedAfterWorkspacePreparation(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	baseRunner := pullRequestCommandRunner(t, &calls, nil)
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -405,6 +419,7 @@ func TestTypedPullRequestPushRejectsRemoteBranchCreatedAfterWorkspacePreparation
 }
 
 func TestTypedPullRequestPushAllowsAlreadyPushedIdenticalHead(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	baseRunner := pullRequestCommandRunner(t, &calls, func(args []string, stdout io.Writer, _ io.Writer) error {
 		if strings.HasPrefix(strings.Join(args, " "), "pr list ") {
@@ -430,6 +445,7 @@ func TestTypedPullRequestPushAllowsAlreadyPushedIdenticalHead(t *testing.T) {
 }
 
 func TestTypedPullRequestPushAdvancesOwnedBranchForPullRequestRework(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head-new")
 	detail.State.Workspace = &plan.Workspace{Branch: "feature/plan-a", PushedSHA: "head-old"}
 	detail.State.Plan.PullRequest = &plan.PullRequest{
@@ -475,6 +491,7 @@ func TestTypedPullRequestPushAdvancesOwnedBranchForPullRequestRework(t *testing.
 }
 
 func TestTypedPullRequestPushRejectsStaleOwnedRemoteHead(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head-new")
 	detail.State.Workspace = &plan.Workspace{Branch: "feature/plan-a", PushedSHA: "head-old"}
 	var calls []string
@@ -499,6 +516,7 @@ func TestTypedPullRequestPushRejectsStaleOwnedRemoteHead(t *testing.T) {
 }
 
 func TestTypedPullRequestPushAdvancesRecordedLegacyTaoBranch(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head-new")
 	detail.State.Workspace = &plan.Workspace{Branch: "tao/plan-a", PushedSHA: "head-old"}
 	var calls []string
@@ -526,6 +544,7 @@ func TestTypedPullRequestPushAdvancesRecordedLegacyTaoBranch(t *testing.T) {
 }
 
 func TestPullRequestIntentHeadMismatchStopsBeforeRemoteMutation(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head-b")
 	detail.State.Plan.PullRequestIntent = &plan.PullRequest{
 		Number:  321,
@@ -548,6 +567,7 @@ func TestPullRequestIntentHeadMismatchStopsBeforeRemoteMutation(t *testing.T) {
 }
 
 func TestDeterministicPullRequestCreatorPreservesExistingLabelMetadataAndSupportsLegacyPlan(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		changeType plan.ChangeType
@@ -593,6 +613,7 @@ func TestDeterministicPullRequestCreatorPreservesExistingLabelMetadataAndSupport
 }
 
 func TestDeterministicPullRequestCreatorReportsLabelAndAssignmentFailures(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		fail string
@@ -627,6 +648,7 @@ func TestDeterministicPullRequestCreatorReportsLabelAndAssignmentFailures(t *tes
 }
 
 func TestDeterministicPullRequestCreatorLeavesExistingPullRequestMetadataUnchanged(t *testing.T) {
+	t.Parallel()
 	createdAt := "2026-05-21T20:00:00Z"
 	var calls []string
 	runner := pullRequestCommandRunner(t, &calls, func(args []string, stdout io.Writer, _ io.Writer) error {
@@ -665,6 +687,7 @@ func TestDeterministicPullRequestCreatorLeavesExistingPullRequestMetadataUnchang
 }
 
 func TestDeterministicPullRequestCreatorCapturesDiscoveryFallbackAfterLookup(t *testing.T) {
+	t.Parallel()
 	afterDiscovery := time.Date(2026, 8, 14, 3, 30, 0, 0, time.UTC)
 	for _, tt := range []struct {
 		name           string
@@ -704,6 +727,7 @@ func TestDeterministicPullRequestCreatorCapturesDiscoveryFallbackAfterLookup(t *
 }
 
 func TestDeterministicPullRequestCreatorStopsOnPreCreateLookupFailure(t *testing.T) {
+	t.Parallel()
 	lookupErr := errors.New("authentication failed")
 	var calls []string
 	runner := pullRequestCommandRunner(t, &calls, func(args []string, _ io.Writer, stderr io.Writer) error {
@@ -727,6 +751,7 @@ func TestDeterministicPullRequestCreatorStopsOnPreCreateLookupFailure(t *testing
 }
 
 func TestDeterministicPullRequestCreatorDoesNotClaimConcurrentHumanPullRequestAfterFailedCreate(t *testing.T) {
+	t.Parallel()
 	listCalls := 0
 	var calls []string
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
@@ -762,6 +787,7 @@ func TestDeterministicPullRequestCreatorDoesNotClaimConcurrentHumanPullRequestAf
 }
 
 func TestDeterministicPullRequestCreatorRepairsPartialPullRequestFromEmittedIdentity(t *testing.T) {
+	t.Parallel()
 	createCalls := 0
 	editCalls := 0
 	var calls []string
@@ -816,6 +842,7 @@ func TestDeterministicPullRequestCreatorRepairsPartialPullRequestFromEmittedIden
 }
 
 func TestDeterministicPullRequestCreatorRecoversAssignmentFailureAcrossAttempts(t *testing.T) {
+	t.Parallel()
 	created := false
 	createCalls := 0
 	editCalls := 0
@@ -886,6 +913,7 @@ func TestDeterministicPullRequestCreatorRecoversAssignmentFailureAcrossAttempts(
 }
 
 func TestDeterministicPullRequestCreatorDoesNotClaimDelayedHumanPullRequestWithoutIdentity(t *testing.T) {
+	t.Parallel()
 	listCalls := 0
 	createCalls := 0
 	editCalls := 0
@@ -990,6 +1018,7 @@ func approvedPullRequestDetail(changeType plan.ChangeType, head string) *plan.Pl
 }
 
 func TestPullRequestVerificationProjectionExcludesDiagnosticEvidence(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"", plan.VerificationSourceTao} {
 		t.Run("source="+source, func(t *testing.T) {
 			detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")

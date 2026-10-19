@@ -17,6 +17,7 @@ import (
 )
 
 func TestPathWithinRoot(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "root")
 	sep := string(filepath.Separator)
 	for _, tt := range []struct {
@@ -100,6 +101,7 @@ func TestExecutionPreparerCurrentPreservesRecordedLinkedLaunchRoot(t *testing.T)
 }
 
 func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []runtimeconfig.ExecutionMode{runtimeconfig.ExecutionModeIsolated, runtimeconfig.ExecutionModeCurrent} {
 		t.Run(mode.String(), func(t *testing.T) {
 			detail := executionPreparerPlanDetail(t.TempDir())
@@ -121,6 +123,7 @@ func TestExecutionPreparerRequiresPlanRecordFactory(t *testing.T) {
 }
 
 func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []runtimeconfig.ExecutionMode{"", runtimeconfig.ExecutionModeIsolated, runtimeconfig.ExecutionModeCurrent} {
 		t.Run("mode="+mode.String(), func(t *testing.T) {
 			repoRoot := t.TempDir()
@@ -155,6 +158,7 @@ func TestExecutionPreparerDefaultsToWorktree(t *testing.T) {
 }
 
 func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	detail := executionPreparerPlanDetail(repo.path)
 	detail.State.Repo.Branch = "master"
@@ -175,6 +179,7 @@ func TestExecutionPreparerCreatesTypedPlanBranch(t *testing.T) {
 }
 
 func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	newDetail := func() *plan.PlanDetail {
 		detail := executionPreparerPlanDetail(repo.path)
@@ -215,6 +220,7 @@ func TestExecutionPreparerRecoversTypedWorktreeAfterMetadataPersistenceFailure(t
 }
 
 func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	detail := executionPreparerPlanDetail(repo.path)
 	detail.State.Repo.Branch = "master"
@@ -234,6 +240,7 @@ func TestExecutionPreparerPreservesRecordedPlanBranch(t *testing.T) {
 }
 
 func TestExecutionPreparerRejectsTypedBranchCollision(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	detail := executionPreparerPlanDetail(repo.path)
 	detail.State.Repo.Branch = "master"
@@ -255,6 +262,7 @@ func TestExecutionPreparerRejectsTypedBranchCollision(t *testing.T) {
 }
 
 func TestExecutionPreparerWorktreeRunOptionOverridesPlanCurrent(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := executionPreparerPlanDetail(repoRoot)
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
@@ -278,6 +286,7 @@ func TestExecutionPreparerWorktreeRunOptionOverridesPlanCurrent(t *testing.T) {
 }
 
 func TestExecutionPreparerBlocksWorktreeAfterCurrentCheckoutVerification(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	detail := executionPreparerPlanDetail(repoRoot)
 	detail.State.Workspace = nil
@@ -309,6 +318,7 @@ func TestExecutionPreparerBlocksWorktreeAfterCurrentCheckoutVerification(t *test
 }
 
 func TestExecutionPreparerBlocksCurrentAfterWorktreeVerification(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspacePath := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
 	detail := executionPreparerPlanDetail(repoRoot)
@@ -341,6 +351,7 @@ func TestExecutionPreparerBlocksCurrentAfterWorktreeVerification(t *testing.T) {
 }
 
 func TestExecutionPreparerAllowsWorktreeResumeWithRelativeVerificationCWD(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := filepath.Join(repoRoot, ".tao", "workspaces")
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
@@ -371,6 +382,7 @@ func TestExecutionPreparerAllowsWorktreeResumeWithRelativeVerificationCWD(t *tes
 }
 
 func TestPriorExecutionWorkspaceClassificationPrefersRecordedExecutionRoots(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := filepath.Join(repoRoot, ".tao", "workspaces")
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
@@ -474,6 +486,7 @@ func TestPriorExecutionWorkspaceClassificationPrefersRecordedExecutionRoots(t *t
 }
 
 func TestVerificationCWDWorkspaceStrategy(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := filepath.Join(repoRoot, ".tao", "workspaces")
 	workspacePath := filepath.Join(workspaceRoot, "plan-a")
@@ -513,6 +526,7 @@ func TestVerificationCWDWorkspaceStrategy(t *testing.T) {
 }
 
 func TestExecutionPreparerBlocksMixedVerificationWorkspaces(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspacePath := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
 	currentCWD := filepath.Join(repoRoot, "internal", "workspace")
@@ -545,6 +559,7 @@ func TestExecutionPreparerBlocksMixedVerificationWorkspaces(t *testing.T) {
 }
 
 func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	readyAt := createdAt.Add(time.Minute)
 	repoRoot := t.TempDir()
@@ -600,6 +615,7 @@ func TestExecutionPreparerWritesPreparingThenReadyMetadata(t *testing.T) {
 }
 
 func TestPrepareRebasesStaleWorktreeBeforeRun(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	initialBase := gitHead(t, repo.path)
 	detail := executionPreparerPlanDetail(repo.path)
@@ -651,6 +667,7 @@ func (r rebaseRecorderFunc) SettleWorkspaceRebase(intent plan.WorkspaceRebaseInt
 }
 
 func TestPrepareRebaseRecordsBeforeMutationAndSettlesImmediately(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -693,6 +710,7 @@ func TestPrepareRebaseRecordsBeforeMutationAndSettlesImmediately(t *testing.T) {
 }
 
 func TestPrepareRebaseBinarySeriesRecordsBeforeMutationAndSettlesExactProof(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := newTestRepo(t)
 	commitTestFile(t, repo.path, "modified.bin", "\x00original\xff", "add binary to modify")
@@ -796,6 +814,7 @@ func TestPrepareRebaseBinarySeriesRecordsBeforeMutationAndSettlesExactProof(t *t
 }
 
 func TestPrepareRebaseBinaryConflictRefusesIsolatedReplayBeforeMutation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	repo := newTestRepo(t)
 	commitTestFile(t, repo.path, "shared.bin", "\x00original\xff", "add shared binary")
@@ -856,6 +875,7 @@ func TestPrepareRebaseBinaryConflictRefusesIsolatedReplayBeforeMutation(t *testi
 }
 
 func TestPrepareRebaseProofSettlesFeatureEditAfterUpstreamRename(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	commitTestFile(t, repo.path, "original.txt", "top\ntarget\nbottom\n", "add target")
 	manager := newTestManager(t, repo.path)
@@ -895,6 +915,7 @@ func TestPrepareRebaseProofSettlesFeatureEditAfterUpstreamRename(t *testing.T) {
 }
 
 func TestPrepareRebaseUsesRecordedBaseSHAWhenBaseBranchAdvances(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -943,6 +964,7 @@ func TestPrepareRebaseUsesRecordedBaseSHAWhenBaseBranchAdvances(t *testing.T) {
 }
 
 func TestPrepareRebaseRecordFailurePreventsMutation(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -963,6 +985,7 @@ func TestPrepareRebaseRecordFailurePreventsMutation(t *testing.T) {
 }
 
 func TestPrepareRebaseProofRefusesDivergentBaseBeforeMutation(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -996,6 +1019,7 @@ func TestPrepareRebaseProofRefusesDivergentBaseBeforeMutation(t *testing.T) {
 }
 
 func TestPrepareRebaseProofRefusesUpstreamEquivalentCommitBeforeMutation(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -1032,6 +1056,7 @@ func TestPrepareRebaseProofRefusesUpstreamEquivalentCommitBeforeMutation(t *test
 }
 
 func TestPrepareRebaseProofRefusesCommitThatWouldBecomeEmptyBeforeMutation(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	commitTestFile(t, repo.path, "shared.txt", "one\ntarget\nthree\n", "add shared file")
 	manager := newTestManager(t, repo.path)
@@ -1068,6 +1093,7 @@ func TestPrepareRebaseProofRefusesCommitThatWouldBecomeEmptyBeforeMutation(t *te
 }
 
 func TestPrepareRebaseSettlementFailureLeavesRewrittenHead(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -1095,6 +1121,7 @@ func TestPrepareRebaseSettlementFailureLeavesRewrittenHead(t *testing.T) {
 }
 
 func TestPrepareSkipsRebaseWhenBranchContainsDefault(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -1124,6 +1151,7 @@ func TestPrepareSkipsRebaseWhenBranchContainsDefault(t *testing.T) {
 }
 
 func TestPrepareRefusesDirtyStaleWorktree(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -1156,6 +1184,7 @@ func TestPrepareRefusesDirtyStaleWorktree(t *testing.T) {
 }
 
 func TestPrepareAbortsRebaseConflict(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	manager := newTestManager(t, repo.path)
 	metadata, err := manager.Prepare(context.Background(), PrepareOptions{PlanID: "plan-a", BaseBranch: "master"})
@@ -1191,6 +1220,7 @@ func TestPrepareAbortsRebaseConflict(t *testing.T) {
 }
 
 func TestPrepareUsesDefaultBranchForWorkspaceBase(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.path, "checkout", "-b", "feature")
 	commitTestFile(t, repo.path, "feature.txt", "feature only\n", "feature work")
@@ -1212,6 +1242,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBase(t *testing.T) {
 }
 
 func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultMissing(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.path, "update-ref", "refs/remotes/origin/main", "HEAD")
 	runGit(t, repo.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
@@ -1229,6 +1260,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultMissin
 }
 
 func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultIsOnlyTag(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.path, "tag", "--no-sign", "main")
 	runGit(t, repo.path, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -1251,6 +1283,7 @@ func TestPrepareUsesDefaultBranchForWorkspaceBaseFallbackWhenRemoteDefaultIsOnly
 }
 
 func TestExecutionPreparerSkipsUnchangedDependenciesOnReuse(t *testing.T) {
+	t.Parallel()
 	preparer, detail, workspacePath, installCalls := dependencyPreparerFixture(t, DefaultConfig(), nil)
 	oldFingerprint := detail.State.Workspace.DependencyFingerprint
 
@@ -1270,6 +1303,7 @@ func TestExecutionPreparerSkipsUnchangedDependenciesOnReuse(t *testing.T) {
 }
 
 func TestExecutionPreparerSoftFailsChangedDependenciesOnReuse(t *testing.T) {
+	t.Parallel()
 	installErr := false
 	preparer, detail, workspacePath, installCalls := dependencyPreparerFixture(t, DefaultConfig(), func(stderr io.Writer) error {
 		if !installErr {
@@ -1300,6 +1334,7 @@ func TestExecutionPreparerSoftFailsChangedDependenciesOnReuse(t *testing.T) {
 }
 
 func TestExecutionPreparerFreshDependencyFailureIsHard(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspacePath := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspacePath, "package-lock.json"), []byte("{}\n"), 0o600); err != nil {
@@ -1326,6 +1361,7 @@ func TestExecutionPreparerFreshDependencyFailureIsHard(t *testing.T) {
 }
 
 func TestExecutionPreparerRecordsSuccessfulDependencyFingerprint(t *testing.T) {
+	t.Parallel()
 	_, detail, workspacePath, _ := dependencyPreparerFixture(t, DefaultConfig(), nil)
 	want, err := dependencyLockfileFingerprint(workspacePath)
 	if err != nil {
@@ -1337,6 +1373,7 @@ func TestExecutionPreparerRecordsSuccessfulDependencyFingerprint(t *testing.T) {
 }
 
 func TestExecutionPreparerRemovedLockfileClearsPriorDependencyFingerprint(t *testing.T) {
+	t.Parallel()
 	preparer, detail, workspacePath, installCalls := dependencyPreparerFixture(t, DefaultConfig(), nil)
 	if err := os.Remove(filepath.Join(workspacePath, "package-lock.json")); err != nil {
 		t.Fatal(err)
@@ -1357,6 +1394,7 @@ func TestExecutionPreparerRemovedLockfileClearsPriorDependencyFingerprint(t *tes
 }
 
 func TestExecutionPreparerSubmodulesIndependentOfJSCache(t *testing.T) {
+	t.Parallel()
 	const gitCommand = "git submodule update --init --recursive"
 	for _, tc := range []struct {
 		name      string
@@ -1439,6 +1477,7 @@ func TestExecutionPreparerSubmodulesIndependentOfJSCache(t *testing.T) {
 }
 
 func TestExecutionPreparerSkippedSubmodulesBlockConsumers(t *testing.T) {
+	t.Parallel()
 	for _, cache := range []string{"fresh", "cached JS", "changed JS"} {
 		t.Run(cache, func(t *testing.T) {
 			fixture := newNestedSubmoduleFixture(t)
@@ -1491,6 +1530,7 @@ func TestExecutionPreparerSkippedSubmodulesBlockConsumers(t *testing.T) {
 }
 
 func TestExecutionPreparerChangedGitlinksWithCachedJS(t *testing.T) {
+	t.Parallel()
 	fixture := newNestedSubmoduleFixture(t)
 	writeFile(t, filepath.Join(fixture.root, "package-lock.json"))
 	detail := executionPreparerPlanDetail(fixture.root)

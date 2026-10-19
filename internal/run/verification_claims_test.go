@@ -12,6 +12,7 @@ import (
 )
 
 func TestLoadVerificationClaims(t *testing.T) {
+	t.Parallel()
 	if claims, err := LoadVerificationClaims(""); err != nil || claims != nil {
 		t.Fatalf("absent claims = %v, %v", claims, err)
 	}
@@ -67,6 +68,7 @@ func TestLoadVerificationClaims(t *testing.T) {
 }
 
 func TestMatchVerificationClaims(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +194,7 @@ func TestMatchVerificationClaims(t *testing.T) {
 }
 
 func TestVerificationClaimsBoundsAndDetails(t *testing.T) {
+	t.Parallel()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

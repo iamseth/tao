@@ -198,6 +198,9 @@ func completionLeaseLive(dir, token string) error {
 	if err != nil {
 		return fmt.Errorf("probe slice completion owner: %w", err)
 	}
+	// Probes unlock explicitly so a forked child's copy of this description
+	// cannot block the next exclusive owner.
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	return errors.New("slice completion owner ended")
 }
 
@@ -213,6 +216,7 @@ func removeEndedCompletionLease(dir, token string) {
 	defer func() { _ = file.Close() }()
 	if syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB) == nil {
 		_ = os.Remove(path) // #nosec G703 -- validated unique lease basename, no exclusive owner.
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	}
 }
 
@@ -255,7 +259,9 @@ func startSliceCompletionLifetime(ctx context.Context, planDir, sliceID string) 
 	}
 	token := filepath.Base(lease.Name())
 	cleanupLease := func() error {
-		return errors.Join(lease.Close(), os.Remove(lease.Name())) // #nosec G703 -- exclusively owned CreateTemp lease.
+		// Unlock before Close so a concurrently forked child cannot keep the
+		// lease looking live (see acquireCompletionFileLock).
+		return errors.Join(filelock.Unlock(lease), lease.Close(), os.Remove(lease.Name())) // #nosec G703 -- exclusively owned CreateTemp lease.
 	}
 	if err := filelock.TryLock(lease); err != nil {
 		_ = cleanupLease()

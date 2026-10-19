@@ -11,6 +11,7 @@ import (
 )
 
 func TestPlanRecordAbandonmentPreservesEvidenceAndFirstEvent(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	detail.State.Status = StatusBlocked
 	detail.State.Plan.CurrentSlice = ptrString("001-a")
@@ -67,6 +68,7 @@ func TestPlanRecordAbandonmentPreservesEvidenceAndFirstEvent(t *testing.T) {
 }
 
 func TestPlanRecordAbandonAllowsNonCompletedSourceStatuses(t *testing.T) {
+	t.Parallel()
 	statuses := []string{StatusPlanned, StatusInProgress, StatusBlocked, StatusInReview, StatusReviewed, StatusChangesRequested, StatusVerificationFailed}
 	for _, status := range statuses {
 		t.Run(status, func(t *testing.T) {
@@ -87,6 +89,7 @@ func TestPlanRecordAbandonAllowsNonCompletedSourceStatuses(t *testing.T) {
 }
 
 func TestPlanRecordAbandonRefusesProjectedCompletion(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		apply func(*PlanDetail)
@@ -120,6 +123,7 @@ func TestPlanRecordAbandonRefusesProjectedCompletion(t *testing.T) {
 }
 
 func TestPlanRecordAbandonRefusesUnsettledTransactionsWithoutChangingEvidence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		apply func(*PlanDetail)
@@ -163,6 +167,7 @@ func TestPlanRecordAbandonRefusesUnsettledTransactionsWithoutChangingEvidence(t 
 }
 
 func TestPlanRecordAbandonRefreshRefusesNonePolicyIntentBeforeCompletion(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -220,6 +225,7 @@ func TestPlanRecordAbandonRefreshRefusesNonePolicyIntentBeforeCompletion(t *test
 }
 
 func TestPlanRecordAbandonValidatesReasonAndPublishesAtomically(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("/plans/plan-a")
 	record, err := newPlanRecord(&recordingArtifactMutationStore{}, detail.Dir, detail)
 	if err != nil {
@@ -250,6 +256,7 @@ func TestPlanRecordAbandonValidatesReasonAndPublishesAtomically(t *testing.T) {
 }
 
 func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	started := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
@@ -285,6 +292,7 @@ func TestPlanRecordReviewStatusesBeforeMerge(t *testing.T) {
 }
 
 func TestPlanRecordPullRequestCompletionEvidenceOrders(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		reviewFirst bool
@@ -370,6 +378,7 @@ func TestPlanRecordPullRequestCompletionEvidenceOrders(t *testing.T) {
 }
 
 func TestPlanRecordPullRequestCompletionClearedByReplacementReview(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		apply func(*PlanRecord, time.Time) error
@@ -435,6 +444,7 @@ func TestPlanRecordPullRequestCompletionClearedByReplacementReview(t *testing.T)
 }
 
 func TestPlanRecordPullRequestRefreshRecomputesCompletion(t *testing.T) {
+	t.Parallel()
 	dir, detail, record, nextAt := newPullRequestCompletedRecord(t)
 	if err := record.RecordPullRequest(PullRequest{Number: 42, URL: "https://example.test/pull/42", CreatedAt: nextAt}, "tao/plan-a", "head456"); err != nil {
 		t.Fatal(err)
@@ -483,6 +493,7 @@ func newPullRequestCompletedRecord(t *testing.T) (string, *PlanDetail, *PlanReco
 }
 
 func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		replacement PlanReview
@@ -558,6 +569,7 @@ func TestPlanRecordReviewWritersReplaceKnownFieldsAndPreserveUnknownFields(t *te
 }
 
 func TestPlanRecordClearsCommitMessageFromNonApprovedReplacement(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	now := time.Date(2026, 7, 23, 19, 30, 0, 0, time.UTC)
@@ -615,6 +627,7 @@ func TestPlanRecordClearsCommitMessageFromNonApprovedReplacement(t *testing.T) {
 // reopen a non-reviewed status, and run sees no pending slices: a permanent
 // wedge with no re-establishment path.
 func TestTornFinalSliceWriteStillSettles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Status = StatusInReview
@@ -645,6 +658,7 @@ func TestTornFinalSliceWriteStillSettles(t *testing.T) {
 }
 
 func TestRecordReviewProposalCorrectionRejectsChangedConsumedMarker(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	record := testRecord(dir, detail)
@@ -690,6 +704,7 @@ func TestRecordReviewProposalCorrectionRejectsChangedConsumedMarker(t *testing.T
 }
 
 func TestPlanRecordMergedStatus(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	started := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
@@ -722,6 +737,7 @@ func TestPlanRecordMergedStatus(t *testing.T) {
 }
 
 func TestPlanRecordMergedRefusesAbandonedPlan(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Status = StatusAbandoned
@@ -742,6 +758,7 @@ func TestPlanRecordMergedRefusesAbandonedPlan(t *testing.T) {
 // must not overwrite it, or elapsed times inflate by the review/merge gap.
 // Legacy plans without the stamp record the merge instant instead.
 func TestPlanRecordMergedIsIdempotentForExactEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	record := testRecord(dir, detail)
@@ -761,6 +778,7 @@ func TestPlanRecordMergedIsIdempotentForExactEvidence(t *testing.T) {
 }
 
 func TestRecordMergedPreservesSliceCompletionTime(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	record := testRecord(dir, detail)

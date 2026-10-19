@@ -33,6 +33,7 @@ func TestWithPlanRunLockContentionMatchesPlanAndRunErrors(t *testing.T) {
 }
 
 func TestServiceExecuteReloadsPlanAfterAcquiringRunLock(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	initial := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)

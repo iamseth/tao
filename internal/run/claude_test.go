@@ -15,6 +15,7 @@ import (
 )
 
 func TestClaudeExecutorRunSliceUsesAutoPermissionAndLogsMetrics(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	var got fakeClaudeStart
@@ -52,6 +53,7 @@ func TestClaudeExecutorRunSliceUsesAutoPermissionAndLogsMetrics(t *testing.T) {
 }
 
 func TestClaudeExecutorCreatesPullRequestFromCapturedOutput(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	var got fakeClaudeStart
@@ -70,6 +72,7 @@ func TestClaudeExecutorCreatesPullRequestFromCapturedOutput(t *testing.T) {
 }
 
 func TestClaudeExecutorMissingMetricsWarnsAndRecordsUnavailable(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	var got fakeClaudeStart
@@ -93,6 +96,7 @@ func TestClaudeExecutorMissingMetricsWarnsAndRecordsUnavailable(t *testing.T) {
 }
 
 func TestClaudeExecutorSkipPermissionsUsesBypassMode(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	var got fakeClaudeStart

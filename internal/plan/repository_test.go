@@ -10,6 +10,7 @@ import (
 )
 
 func TestListPlansActiveUsesStateAndSlices(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePlan(t, dir, "active", `{
   "schema":"tao.plan.state.v1",
@@ -51,6 +52,7 @@ func TestListPlansActiveUsesStateAndSlices(t *testing.T) {
 }
 
 func TestListPlansMissingDirReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plans-that-do-not-exist")
 	repo := NewFileRepository(dir)
 	summaries, err := repo.ListPlans(context.Background(), PlanFilter{})
@@ -63,6 +65,7 @@ func TestListPlansMissingDirReturnsEmpty(t *testing.T) {
 }
 
 func TestSliceDurationFallsBackToTimestamps(t *testing.T) {
+	t.Parallel()
 	started := time.Date(2026, 4, 27, 18, 0, 0, 0, time.UTC)
 	completed := started.Add(90 * time.Second)
 	slice := Slice{Timing: SliceTiming{StartedAt: &started, CompletedAt: &completed}}
@@ -72,6 +75,7 @@ func TestSliceDurationFallsBackToTimestamps(t *testing.T) {
 }
 
 func TestPlanStateHelpers(t *testing.T) {
+	t.Parallel()
 	started := time.Date(2026, 4, 27, 18, 0, 0, 0, time.UTC)
 	completed := started.Add(2 * time.Minute)
 	detail := &PlanDetail{
@@ -114,6 +118,7 @@ func TestPlanStateHelpers(t *testing.T) {
 }
 
 func TestNextRunnableSlice(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"002-b"}, CompletedSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{
@@ -169,6 +174,7 @@ func TestNextRunnableSlice(t *testing.T) {
 }
 
 func TestDeriveIgnoresStaleCompletedCurrentSliceWithPendingWork(t *testing.T) {
+	t.Parallel()
 	current := "001-a"
 	detail := &PlanDetail{
 		State: State{Status: StatusInProgress, Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{"002-b"}, CompletedSlices: []string{"001-a"}}},
@@ -191,6 +197,7 @@ func TestDeriveIgnoresStaleCompletedCurrentSliceWithPendingWork(t *testing.T) {
 }
 
 func TestDeriveKeepsActiveEmptyPendingPlansIncompleteAndNotRunnable(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		status string
@@ -220,6 +227,7 @@ func TestDeriveKeepsActiveEmptyPendingPlansIncompleteAndNotRunnable(t *testing.T
 }
 
 func TestRunCapabilitiesFromLifecycle(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
@@ -238,6 +246,7 @@ func TestRunCapabilitiesFromLifecycle(t *testing.T) {
 }
 
 func TestRunCapabilitiesContinueMatchesBlockedLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		mutate      func(*PlanDetail)
@@ -280,6 +289,7 @@ func TestRunCapabilitiesContinueMatchesBlockedLifecycle(t *testing.T) {
 }
 
 func TestListPlansUsesSliceStatusForStaleCompletedState(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePlan(t, dir, "stale", `{
   "schema":"tao.plan.state.v1",
@@ -319,6 +329,7 @@ func TestListPlansUsesSliceStatusForStaleCompletedState(t *testing.T) {
 }
 
 func TestListPlansIncludesInvalidPlanWarningsAndSortFallback(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "invalid"), 0o750); err != nil {
 		t.Fatal(err)
@@ -348,6 +359,7 @@ func TestListPlansIncludesInvalidPlanWarningsAndSortFallback(t *testing.T) {
 }
 
 func TestPlanValidationAndEventWarnings(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writePlan(t, dir, "warn", `{
   "schema":"tao.plan.state.v1",

@@ -10,6 +10,7 @@ import (
 )
 
 func TestExplicitBaselineRepairAppendsSlice(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
 	branch := strings.TrimSpace(runCommitTestGitOutput(t, root, "branch", "--show-current"))
@@ -40,6 +41,7 @@ func TestExplicitBaselineRepairAppendsSlice(t *testing.T) {
 }
 
 func TestFinalizerBaselineFailureDoesNotScheduleRepair(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace = &plan.Workspace{HeadSHA: "head"}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindBaseline, Fingerprint: "failure"}

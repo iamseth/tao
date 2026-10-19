@@ -9,6 +9,7 @@ import (
 )
 
 func TestDefaultRunnerWithRealGitAndErrorWithoutStderr(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 

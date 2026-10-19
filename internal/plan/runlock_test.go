@@ -105,6 +105,7 @@ func TestWithRunLockIsReentrantAndReleasesAfterError(t *testing.T) {
 }
 
 func TestAcquireRunLockCreatesLockFile(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	createdAt := time.Date(2026, 6, 28, 3, 0, 0, 123, time.FixedZone("test", -5*60*60))
 
@@ -226,6 +227,7 @@ func TestAcquireRunLockTakesOverStaleLocks(t *testing.T) {
 }
 
 func TestPlanRunLockReleaseRemovesLockFile(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	lock, err := AcquireRunLock(planDir, "plan-a", time.Date(2026, 6, 28, 3, 30, 0, 0, time.UTC))
 	if err != nil {
@@ -291,6 +293,7 @@ func TestReadRunLockRejectsMissingOrInvalidPID(t *testing.T) {
 }
 
 func TestReadRunLockPreservesMissingFileError(t *testing.T) {
+	t.Parallel()
 	_, err := ReadRunLock(t.TempDir())
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ReadRunLock() error = %v, want os.ErrNotExist", err)
@@ -298,6 +301,7 @@ func TestReadRunLockPreservesMissingFileError(t *testing.T) {
 }
 
 func TestRunLockMetadataPreservesDuplicatePIDInterpretations(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		content   string
 		readPID   int
@@ -317,6 +321,7 @@ func TestRunLockMetadataPreservesDuplicatePIDInterpretations(t *testing.T) {
 }
 
 func TestRunLockReleasePreservesReplacement(t *testing.T) {
+	t.Parallel()
 	lock, err := AcquireRunLock(t.TempDir(), "plan-a", time.Now())
 	if err != nil {
 		t.Fatal(err)

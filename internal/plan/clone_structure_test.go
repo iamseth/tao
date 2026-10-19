@@ -161,6 +161,7 @@ func cloneLegacyContainerRepresentation(path string, a, b reflect.Value) bool {
 }
 
 func TestClonePlanDetailStructure(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"populated", "nil", "empty"} {
 		t.Run(mode, func(t *testing.T) {
 			detail := cloneFixture(t, reflect.TypeFor[PlanDetail](), "PlanDetail", mode).Interface().(PlanDetail)

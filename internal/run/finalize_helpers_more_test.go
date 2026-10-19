@@ -16,6 +16,7 @@ import (
 )
 
 func TestTypedPlacementFinalizationAndReview(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	worktreeRoot := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
 	for _, mode := range []ExecutionMode{"", ExecutionModeIsolated, ExecutionModeCurrent} {
@@ -62,6 +63,7 @@ func TestTypedPlacementFinalizationAndReview(t *testing.T) {
 }
 
 func TestFinalizerHelperDefaults(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies{OutputWriter: &out, CommandRunner: runGitFake(&[]string{}, nil)})
 	finalizer := newFinalizer(nil, execution)
@@ -75,6 +77,7 @@ func TestFinalizerHelperDefaults(t *testing.T) {
 }
 
 func TestFinalizerStopsBeforeRemoteMutationWhenPlanRecordBindingFails(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
 	bindErr := errors.New("injected file-backed plan record binding failure")
 	factoryCalls := 0
@@ -103,6 +106,7 @@ func TestFinalizerStopsBeforeRemoteMutationWhenPlanRecordBindingFails(t *testing
 }
 
 func TestFinalizerClassifiesPullRequestFailureRecovery(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		category string
 		want     string
@@ -135,6 +139,7 @@ func TestFinalizerClassifiesPullRequestFailureRecovery(t *testing.T) {
 }
 
 func TestPullRequestRecoveryBoundarySeparatesStructuralWorkspaceFailuresFromInspectionErrors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		prepare      func(*testing.T) (string, string)
@@ -225,6 +230,7 @@ func TestPullRequestRecoveryBoundarySeparatesStructuralWorkspaceFailuresFromInsp
 }
 
 func TestFinalizerMissingFailureRecorderSurfacesWrappedError(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
 	record := struct{ PlanMutationRecord }{}
 	localErr := errors.New("push rejected")
@@ -240,6 +246,7 @@ func TestFinalizerMissingFailureRecorderSurfacesWrappedError(t *testing.T) {
 }
 
 func TestFinalizerReplacementFailurePreservesCurrentRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
 	original := plan.FinalizationFailure{
 		Phase: plan.FinalizationFailurePhasePullRequest, Category: "publication_failed", Branch: "feature", HeadSHA: "head123",
@@ -270,6 +277,7 @@ func TestFinalizerReplacementFailurePreservesCurrentRecoveryEvidence(t *testing.
 }
 
 func TestFinalizerRunsReviewWhenEnabled(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	detail := completedReviewPlanDetail(planDir)
 	var out bytes.Buffer
@@ -298,6 +306,7 @@ func TestFinalizerRunsReviewWhenEnabled(t *testing.T) {
 }
 
 func TestFinalizerSkipsReviewWhenDisabled(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	var out bytes.Buffer
 	calls := 0
@@ -324,6 +333,7 @@ func TestFinalizerSkipsReviewWhenDisabled(t *testing.T) {
 }
 
 func TestFinalizerStopsPullRequestRunAfterFreshReviewCorrectionExhaustion(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
 	review := plan.PlanReview{
@@ -370,6 +380,7 @@ func TestFinalizerStopsPullRequestRunAfterFreshReviewCorrectionExhaustion(t *tes
 }
 
 func TestFinalizerReportsPullRequestCompletionOnlyForMatchingApproval(t *testing.T) {
+	t.Parallel()
 	validProposal := &plan.ReviewCommitMessage{
 		Subject: "fix(pr): finalize approved pull request",
 		Body:    "What:\nFinalize the approved branch head.\n\nWhy:\nHand off the exact reviewed change.",
@@ -489,6 +500,7 @@ func (r captureReviewRecord) RecordReviewError(review plan.PlanReview, agent str
 }
 
 func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	detail := completedReviewPlanDetail(planDir)
 	var out bytes.Buffer
@@ -534,6 +546,7 @@ func TestFinalizerReviewErrorIsBestEffort(t *testing.T) {
 }
 
 func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutRefinalizing(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	repoRoot := filepath.Join(plansDir, "repo")
@@ -713,6 +726,7 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 }
 
 func TestPendingPullRequestIntentAndReplacementNonApprovalRecommendsActionableNextStep(t *testing.T) {
+	t.Parallel()
 	for _, verdict := range []string{plan.ReviewVerdictComment, plan.ReviewVerdictChangesRequested} {
 		t.Run(verdict, func(t *testing.T) {
 			fixture := newPullRequestOrchestrationFixture(t)
@@ -770,6 +784,7 @@ func TestPendingPullRequestIntentAndReplacementNonApprovalRecommendsActionableNe
 }
 
 func TestFinalizerRepairsHistoricalApprovedProposalBeforePullRequestPreflight(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -818,6 +833,7 @@ func TestFinalizerRepairsHistoricalApprovedProposalBeforePullRequestPreflight(t 
 }
 
 func TestFinalizerRecordsHistoricalProposalCorrectionFailureAgainstFallbackBase(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -856,6 +872,7 @@ func TestFinalizerRecordsHistoricalProposalCorrectionFailureAgainstFallbackBase(
 }
 
 func TestFinalizerTreatsHistoricalProposalFailureAsConsumedCorrection(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Plan.ChangeType = plan.ChangeTypeFix
 	detail.State.Plan.Review = &plan.PlanReview{
@@ -901,6 +918,7 @@ func TestFinalizerTreatsHistoricalProposalFailureAsConsumedCorrection(t *testing
 }
 
 func TestFinalizerRecordsUninspectableWorktreeBeforePullRequestCreation(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head123")
 	statusErr := errors.New("status unavailable")
 	creatorCalls := 0
@@ -932,6 +950,7 @@ func TestFinalizerRecordsUninspectableWorktreeBeforePullRequestCreation(t *testi
 }
 
 func TestFinalizerReplacesPullRequestFailureOnlyAfterMatchingSuccess(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	failedAt := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
 	createdAt := failedAt.Add(time.Minute)
@@ -984,6 +1003,7 @@ func (r *failFirstPullRequestRecord) RecordPullRequest(pr plan.PullRequest, bran
 }
 
 func TestFinalizerInterruptedUnownedDiscoveryDoesNotAuthorizeMetadataRepair(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	createdAt := time.Date(2026, 8, 31, 18, 0, 0, 0, time.UTC)
 	identity := forge.PullRequest{Number: 42, URL: "https://github.com/iamseth/tao/pull/42", CreatedAt: createdAt}
@@ -1068,6 +1088,7 @@ func (r *failingFinalizationReplacementRecord) ClearFinalizationFailure(_ plan.F
 }
 
 func TestFinalizerCommitPolicyNoneSkipsReviewCleanlinessGate(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/run/finalize.go"}
 	var out bytes.Buffer
@@ -1107,6 +1128,7 @@ func TestFinalizerCommitPolicyNoneSkipsReviewCleanlinessGate(t *testing.T) {
 }
 
 func TestFinalizerReviewCleanlinessGateRunsBeforeReview(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/run/finalize.go"}
 	var out bytes.Buffer
@@ -1138,6 +1160,7 @@ func TestFinalizerReviewCleanlinessGateRunsBeforeReview(t *testing.T) {
 }
 
 func TestFinalizerVerifiesExecutionRootBeforeReview(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1176,6 +1199,7 @@ func TestFinalizerVerifiesExecutionRootBeforeReview(t *testing.T) {
 }
 
 func TestFinalizerVerificationFailureBlocksReviewAndRecordsResult(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/failing\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1208,6 +1232,7 @@ func TestFinalizerVerificationFailureBlocksReviewAndRecordsResult(t *testing.T) 
 }
 
 func TestFinalizerVerifiesWhenReviewDisabledAndRecordsNoDetection(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := completedReviewPlanDetail(t.TempDir())
 	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: false}}, RunDependencies{
@@ -1224,6 +1249,7 @@ func TestFinalizerVerifiesWhenReviewDisabledAndRecordsNoDetection(t *testing.T) 
 }
 
 func TestCurrentBranchHeadSuccessAndErrors(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	branch, head, err := currentBranchHead(context.Background(), testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runGitFake(&calls, nil)}), "/repo")
 	if err != nil {

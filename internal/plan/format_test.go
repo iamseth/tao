@@ -7,6 +7,7 @@ import (
 )
 
 func TestFormatDuration(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		d    time.Duration
@@ -27,6 +28,7 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestFormatHumanTime(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name string

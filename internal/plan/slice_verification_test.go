@@ -31,6 +31,7 @@ func sliceVerificationRecord(t *testing.T) *PlanRecord {
 }
 
 func TestRecordSliceVerificationPreservesLifecycleAndRejectsStaleWrites(t *testing.T) {
+	t.Parallel()
 	record := sliceVerificationRecord(t)
 	before := clonePlanDetail(record.Detail())
 	snapshot := testSliceVerificationSnapshot()
@@ -81,6 +82,7 @@ func TestRecordSliceVerificationPreservesLifecycleAndRejectsStaleWrites(t *testi
 }
 
 func TestSliceVerificationSnapshotValidation(t *testing.T) {
+	t.Parallel()
 	tests := map[string]func(*SliceVerificationSnapshot){
 		"version":       func(s *SliceVerificationSnapshot) { s.Version = 2 },
 		"attempt":       func(s *SliceVerificationSnapshot) { s.AttemptID = "" },
@@ -119,6 +121,7 @@ func TestSliceVerificationSnapshotValidation(t *testing.T) {
 }
 
 func TestRecordSliceVerificationAdmission(t *testing.T) {
+	t.Parallel()
 	tests := map[string]func(*PlanDetail){
 		"wrong selected slice": func(d *PlanDetail) { d.State.Plan.CurrentSlice = new("002-b") },
 		"pending":              func(d *PlanDetail) { d.Slices.Slices[0].Status = StatusPending },
@@ -144,6 +147,7 @@ func TestRecordSliceVerificationAdmission(t *testing.T) {
 }
 
 func TestRecordSliceVerificationPersistenceFailure(t *testing.T) {
+	t.Parallel()
 	record := sliceVerificationRecord(t)
 	before := clonePlanDetail(record.Detail())
 	ioStore := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: "slices"}
@@ -165,6 +169,7 @@ func TestRecordSliceVerificationPersistenceFailure(t *testing.T) {
 }
 
 func TestSliceVerificationIntentSnapshotIsImmutable(t *testing.T) {
+	t.Parallel()
 	record := sliceVerificationRecord(t)
 	snapshot := testSliceVerificationSnapshot()
 	snapshot.Runs[0].Result = "passed"
@@ -195,6 +200,7 @@ func TestSliceVerificationIntentSnapshotIsImmutable(t *testing.T) {
 }
 
 func TestSliceVerificationWritersRejectMalformedEvidence(t *testing.T) {
+	t.Parallel()
 	record := sliceVerificationRecord(t)
 	snapshot := testSliceVerificationSnapshot()
 	snapshot.Runs[0].OutputDigest = "malformed"
@@ -214,6 +220,7 @@ func TestSliceVerificationWritersRejectMalformedEvidence(t *testing.T) {
 }
 
 func TestVerificationClaimMismatchFieldsAreBounded(t *testing.T) {
+	t.Parallel()
 	event := Event{Type: EventTypeVerificationClaimMismatch, ClaimedResult: "passed", VerificationAttemptID: "attempt-1"}
 	data, err := json.Marshal(event)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 )
 
 func TestValidateCheckoutConfinementFields(t *testing.T) {
+	t.Parallel()
 	for _, phrase := range []string{"owning checkout", "control checkout", "main checkout", "another checkout"} {
 		for _, field := range []string{"goal", "context", "tasks[1]"} {
 			t.Run(phrase+"/"+field, func(t *testing.T) {
@@ -38,6 +39,7 @@ func TestValidateCheckoutConfinementFields(t *testing.T) {
 }
 
 func TestValidateCheckoutConfinementConservative(t *testing.T) {
+	t.Parallel()
 	for _, text := range []string{
 		"Inputs must be available in the execution worktree, not merely in the control checkout",
 		"Never edit the main checkout; avoid another checkout! Do not use the owning checkout? Reject the control checkout.",
@@ -65,6 +67,7 @@ func TestValidateCheckoutConfinementConservative(t *testing.T) {
 }
 
 func TestValidateCheckoutConfinementReportsEachField(t *testing.T) {
+	t.Parallel()
 	findings := validateCheckoutConfinement(Slice{
 		Status: StatusPending,
 		Goal:   "Inspect the main checkout", Context: "Inspect the owning checkout",

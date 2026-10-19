@@ -16,6 +16,20 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Set process-wide once so parallel tests never need t.Setenv: Git must
+	// not prompt, and an owner inherited from a managed Tao session must not
+	// leak into completion lifetime checks. Completion helper children are the
+	// exception: they inherit their owner from the parent test on purpose.
+	if err := os.Setenv("GIT_TERMINAL_PROMPT", "0"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if os.Getenv("TAO_TEST_COMPLETION_HELPER") == "" {
+		if err := os.Unsetenv(sliceCompletionOwnerEnv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 	cleanup, err := testenv.SetupGit()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -59,7 +73,13 @@ func canCopySliceRepo() bool {
 	}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "GIT_") && key != "GIT_CONFIG_GLOBAL" && key != "GIT_CONFIG_NOSYSTEM" {
+		// Editor and prompt settings cannot change a noninteractive fixture, and
+		// agent sessions commonly set them.
+		switch key {
+		case "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR":
+			continue
+		}
+		if strings.HasPrefix(key, "GIT_") {
 			return false
 		}
 	}

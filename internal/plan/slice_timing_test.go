@@ -10,6 +10,7 @@ import (
 )
 
 func TestSliceTimingCompletionRefusalIsReadOnly(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"absent", "conflict", "zero", "missing intent", "conflicting outcome", "abandoned"} {
 		t.Run(reason, func(t *testing.T) {
 			d := startSliceDetail("")
@@ -46,6 +47,7 @@ func TestSliceTimingCompletionRefusalIsReadOnly(t *testing.T) {
 }
 
 func TestRepairSliceStartedAtJournalRetry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	d := startSliceDetail(dir)
 	start := editTime()
@@ -84,6 +86,7 @@ func TestRepairSliceStartedAtJournalRetry(t *testing.T) {
 }
 
 func TestResolveSliceStartedAt(t *testing.T) {
+	t.Parallel()
 	start := editTime()
 	for _, tc := range []struct {
 		name     string
@@ -136,6 +139,7 @@ func TestResolveSliceStartedAt(t *testing.T) {
 }
 
 func TestRepairSliceStartedAtDurableAndCompletion(t *testing.T) {
+	t.Parallel()
 	for _, completion := range []bool{false, true} {
 		t.Run(map[bool]string{false: "repair", true: "completion"}[completion], func(t *testing.T) {
 			dir := t.TempDir()

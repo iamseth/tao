@@ -28,6 +28,7 @@ func writeCompletionInputFiles(t *testing.T, notes string, results string) Slice
 }
 
 func TestLoadSliceCompletionInputsBoundsAndNormalizes(t *testing.T) {
+	t.Parallel()
 	longDetails := strings.Repeat("x", maxCompletionVerificationDetailsRunes+10)
 	resultBytes, err := json.Marshal([]plan.VerificationRun{{Command: " go test ./internal/run ", CWD: "/repo", Result: " passed ", Details: longDetails}})
 	if err != nil {
@@ -55,6 +56,7 @@ func TestLoadSliceCompletionInputsBoundsAndNormalizes(t *testing.T) {
 }
 
 func TestLoadSliceCompletionInputsRejectsInvalidEvidence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		notes   string
@@ -97,6 +99,7 @@ func TestLoadSliceCompletionInputsRejectsInvalidEvidence(t *testing.T) {
 }
 
 func TestLoadSliceCompletionInputsRejectsExcessiveResultCount(t *testing.T) {
+	t.Parallel()
 	results := make([]plan.VerificationRun, maxCompletionVerificationResults+1)
 	for i := range results {
 		results[i] = plan.VerificationRun{Command: "true", CWD: "/repo", Result: "passed"}
@@ -199,6 +202,7 @@ func TestCompletionInputsStayRelativeToLinkedCheckoutCaller(t *testing.T) {
 }
 
 func TestSliceCompletionInputFilesRemoveIsBestEffort(t *testing.T) {
+	t.Parallel()
 	files := writeCompletionInputFiles(t, "ok", `[]`)
 	files.CommitProposalFile = filepath.Join(t.TempDir(), "missing.json")
 	files.Remove()
@@ -211,6 +215,7 @@ func TestSliceCompletionInputFilesRemoveIsBestEffort(t *testing.T) {
 }
 
 func TestLoadSliceCompletionInputsDecodesProposal(t *testing.T) {
+	t.Parallel()
 	files := writeCompletionInputFiles(t, "ok", `[]`)
 	files.CommitProposalFile = filepath.Join(t.TempDir(), "proposal.json")
 	proposal := `{"type":"feat","scope":"run","summary":"load completion inputs","what":"Load bounded inputs.","why":"Keep the CLI thin."}`

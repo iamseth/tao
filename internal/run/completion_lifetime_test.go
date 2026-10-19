@@ -22,8 +22,13 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+// TestMain unsets the owner, so the common case touches no environment and
+// stays safe in parallel tests; only tests that set an owner pay for t.Setenv.
 func clearSliceCompletionOwnerEnv(t *testing.T) {
 	t.Helper()
+	if _, set := os.LookupEnv(sliceCompletionOwnerEnv); !set {
+		return
+	}
 	t.Setenv(sliceCompletionOwnerEnv, "")
 	if err := os.Unsetenv(sliceCompletionOwnerEnv); err != nil {
 		t.Fatal(err)
@@ -83,6 +88,7 @@ func TestVerifiedCompletionFixtureClearsInheritedOwner(t *testing.T) {
 }
 
 func TestWrapUpPreservesCompletionDeadline(t *testing.T) {
+	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	root := t.TempDir()
 	detail := runPathSessionDetail(t, root, plan.StatusInProgress, []string{"001-a"}, nil, plan.StatusInProgress)
@@ -208,6 +214,7 @@ func TestSliceCompletionLifetimeActive(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeActiveChildDeath(t *testing.T) {
+	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	dir := t.TempDir()
 	owner := startCompletionHelper(t, dir, "owner", "")
@@ -228,6 +235,7 @@ func TestSliceCompletionLifetimeActiveChildDeath(t *testing.T) {
 }
 
 func TestSliceCompletionLifetimeDirect(t *testing.T) {
+	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	guard, err := BindSliceCompletionLifetime(context.Background(), t.TempDir(), "001")
 	if err != nil {
@@ -295,6 +303,7 @@ func TestSliceCompletionLifetimeManaged(t *testing.T) {
 // child shares Go contexts or descriptors with the other; only the lease token
 // crosses the provider environment boundary.
 func TestCompletionLifetimeHelperProcess(t *testing.T) {
+	t.Parallel()
 	mode := os.Getenv("TAO_TEST_COMPLETION_HELPER")
 	if mode == "" {
 		return
@@ -395,8 +404,9 @@ func TestCompletionLifetimeHelperProcess(t *testing.T) {
 			if sliceVerificationCommandTimeout != 10*time.Minute {
 				t.Fatal("production command cap changed")
 			}
-			// Behavioral command cap, independent of the observer's 30s budget.
-			runs, err = (SliceVerifier{}).verify(guard.Context(), request, 150*time.Millisecond)
+			// Behavioral command cap, independent of the observer's 30s budget,
+			// and long enough for the first heartbeat under parallel load.
+			runs, err = (SliceVerifier{}).verify(guard.Context(), request, 2*time.Second)
 			if !errors.Is(err, context.DeadlineExceeded) || guard.Check() != nil {
 				t.Fatalf("command cap lost or expired session: %v", err)
 			}
@@ -547,6 +557,7 @@ func assertCompletionHeartbeatStopped(t *testing.T, dir string) {
 }
 
 func TestSliceCompletionLifetimeAcrossProcesses(t *testing.T) {
+	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	for _, mode := range []string{"death", "timeout", "normal-end", "supersession", "disabled-timeout"} {
 		t.Run(mode, func(t *testing.T) {
@@ -670,6 +681,7 @@ func TestSliceCompletionLifetimeFailClosed(t *testing.T) {
 // Real provider paths exercise the shared session decorator, process starter,
 // inherited environment, and a nested CLI in its own process group.
 func TestSliceCompletionLifetimeLocalProviders(t *testing.T) {
+	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
 		for _, outcome := range []string{"normal", "death", "timeout"} {
@@ -838,6 +850,7 @@ func completionFakeProvider(t *testing.T, dir, mode string) {
 }
 
 func TestSliceCompletionLifetimeRoleScope(t *testing.T) {
+	t.Parallel()
 	clearSliceCompletionOwnerEnv(t)
 	for _, role := range []plan.AgentRole{plan.AgentRoleExecution, plan.AgentRoleRework, plan.AgentRoleReview, plan.AgentRolePullRequest} {
 		t.Run(string(role), func(t *testing.T) {
@@ -950,6 +963,7 @@ func completionVerifiedChild(t *testing.T, dir, mode string) {
 }
 
 func TestCompleteVerifiedConcurrentChildren(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
 	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("one writer"), 0o600); err != nil {
@@ -988,6 +1002,7 @@ func TestCompleteVerifiedConcurrentChildren(t *testing.T) {
 }
 
 func TestCompleteVerifiedParentLossAcrossProcesses(t *testing.T) {
+	t.Parallel()
 	for _, point := range []string{"verified-gate", "verified-boundary"} {
 		for _, loss := range []string{"death", "expiration", "supersession"} {
 			t.Run(point+"/"+loss, func(t *testing.T) {
@@ -1081,6 +1096,7 @@ func TestSliceCompletionLifetimeExpiredCheck(t *testing.T) {
 }
 
 func TestSliceCompletionOwnerEnvMatchesRunner(t *testing.T) {
+	t.Parallel()
 	if sliceCompletionOwnerEnv != commandrunner.SliceCompletionOwnerEnv {
 		t.Fatalf("owner env %q diverged from the runner's stripped key %q", sliceCompletionOwnerEnv, commandrunner.SliceCompletionOwnerEnv)
 	}

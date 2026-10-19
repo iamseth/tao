@@ -55,6 +55,7 @@ func resumeNoteFixture(t *testing.T) (ResumeNoteStore, *plan.PlanDetail, *plan.P
 }
 
 func TestResumeNoteRoundTrip(t *testing.T) {
+	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	before, _ := json.Marshal(detail)
 	if err := store.Save(detail, "001-a", "  next: inspect café 世界  "); err != nil {
@@ -115,6 +116,7 @@ func TestResumeNoteRoundTrip(t *testing.T) {
 }
 
 func TestResumeNoteFreshness(t *testing.T) {
+	t.Parallel()
 	store, detail, record := resumeNoteFixture(t)
 	if err := store.Save(detail, "001-a", "first block"); err != nil {
 		t.Fatal(err)
@@ -174,6 +176,7 @@ func cloneResumeNoteDetail(t *testing.T, detail *plan.PlanDetail) *plan.PlanDeta
 }
 
 func TestReadResumeNoteFileBounds(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, text string
 		valid      bool
@@ -236,6 +239,7 @@ func resumeNoteEntryPath(t *testing.T, store ResumeNoteStore) string {
 }
 
 func TestResumeNoteCorruptCache(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"json", "oversized", "empty", "text-bound", "version", "unknown", "trailer", "unreadable", "directory", "symlink", "fifo"} {
 		t.Run(kind, func(t *testing.T) {
 			store, detail, _ := resumeNoteFixture(t)
@@ -312,6 +316,7 @@ func TestResumeNoteCorruptCache(t *testing.T) {
 }
 
 func TestResumeNoteUnsafeStorage(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"control", "execution", "workspace", "git-ancestor", "home-link", "ancestor-link", "cache-link", "entry-link", "public-cache", "parent-file"} {
 		t.Run(kind, func(t *testing.T) {
 			store, detail, _ := resumeNoteFixture(t)
@@ -383,6 +388,7 @@ func TestResumeNoteUnsafeStorage(t *testing.T) {
 }
 
 func TestResumeNoteEventFreshness(t *testing.T) {
+	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	if err := store.Save(detail, "001-a", "context"); err != nil {
 		t.Fatal(err)
@@ -408,6 +414,7 @@ func TestResumeNoteEventFreshness(t *testing.T) {
 }
 
 func TestResumeNoteAmbiguousFreshness(t *testing.T) {
+	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	if err := store.Save(detail, "001-a", "context"); err != nil {
 		t.Fatal(err)
@@ -453,6 +460,7 @@ func TestResumeNoteAmbiguousFreshness(t *testing.T) {
 }
 
 func TestResumeNoteRestartCompletionAndFailedDeletion(t *testing.T) {
+	t.Parallel()
 	for _, restart := range []bool{false, true} {
 		t.Run(fmt.Sprint("restart=", restart), func(t *testing.T) {
 			store, detail, record := resumeNoteFixture(t)
@@ -508,6 +516,7 @@ func TestResumeNoteRestartCompletionAndFailedDeletion(t *testing.T) {
 }
 
 func TestResumeNoteFailedReplacementRetainsPreviousEntry(t *testing.T) {
+	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	if err := store.Save(detail, "001-a", "previous"); err != nil {
 		t.Fatal(err)
@@ -545,6 +554,7 @@ func TestResumeNoteFailedReplacementRetainsPreviousEntry(t *testing.T) {
 }
 
 func TestResumeNoteDigestKeysAndStaleEnvelope(t *testing.T) {
+	t.Parallel()
 	store, detail, _ := resumeNoteFixture(t)
 	hostileID := "../../escape/世界"
 	detail.State.Plan.CurrentSlice = &hostileID

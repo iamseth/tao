@@ -3,6 +3,7 @@ package plan
 import "testing"
 
 func TestPlanSummaryRunnable(t *testing.T) {
+	t.Parallel()
 	if !(PlanSummary{Status: StatusPlanned, PendingCount: 1}).Runnable() {
 		t.Fatal("planned pending summary should be runnable")
 	}
@@ -14,6 +15,7 @@ func TestPlanSummaryRunnable(t *testing.T) {
 }
 
 func TestAgentBudgetWarningsFromDetail(t *testing.T) {
+	t.Parallel()
 	thresholds := DefaultAgentBudgetThresholds()
 	detail := &PlanDetail{Events: []Event{{Type: EventTypeAgentMetrics, SliceID: "001-a", Metrics: &AgentMetrics{Agent: "pi", SessionID: "s", OutputTokens: thresholds.Plan.OutputTokens + 1, ToolCalls: thresholds.Plan.ToolCalls + 2, AssistantMessages: thresholds.Plan.AssistantMessages + 3, ErroredMessages: thresholds.Plan.ErroredMessages + 4}}}}
 	warnings := AgentBudgetWarnings(detail, thresholds)

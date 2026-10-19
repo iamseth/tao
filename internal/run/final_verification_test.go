@@ -105,6 +105,7 @@ func TestVerifyCompletedBranchCache(t *testing.T) {
 }
 
 func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		hasCommand bool
@@ -185,6 +186,7 @@ func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 }
 
 func TestVerifyCompletedBranchRecordsRepairStopOnlyAtExhaustion(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		attempts  int
@@ -244,6 +246,7 @@ func TestVerifyCompletedBranchRecordsRepairStopOnlyAtExhaustion(t *testing.T) {
 }
 
 func TestVerifyCompletedBranchReturnsRepairStopAppendFailureAtExhaustion(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -288,6 +291,7 @@ func TestVerifyCompletedBranchReturnsRepairStopAppendFailureAtExhaustion(t *test
 }
 
 func TestClassifyFinalVerificationFailure(t *testing.T) {
+	t.Parallel()
 	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer deadlineCancel()
 	cancelledCtx, cancel := context.WithCancel(context.Background())
@@ -317,6 +321,7 @@ func TestClassifyFinalVerificationFailure(t *testing.T) {
 }
 
 func TestFinalVerificationSignalExitCodeIsOmitted(t *testing.T) {
+	t.Parallel()
 	kind, code := classifyFinalVerificationFailure(context.Background(), finalVerificationProcessError(t, exec.Command("sh", "-c", "kill -TERM $$")))
 	if kind != plan.FinalVerificationFailureKindCode || code != nil {
 		t.Fatalf("signal classification = %q, %v, want code with nil exit code", kind, code)
@@ -324,6 +329,7 @@ func TestFinalVerificationSignalExitCodeIsOmitted(t *testing.T) {
 }
 
 func TestAppendFinalVerificationEventCopiesFailureEvidence(t *testing.T) {
+	t.Parallel()
 	exitCode := 127
 	var event plan.Event
 	finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
@@ -351,6 +357,7 @@ func finalVerificationProcessError(t *testing.T, command *exec.Cmd) error {
 }
 
 func TestVerifyCompletedBranchRefusesToRunWhenLiveHeadCannotBeResolved(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -379,6 +386,7 @@ func TestVerifyCompletedBranchRefusesToRunWhenLiveHeadCannotBeResolved(t *testin
 }
 
 func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@false\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -429,6 +437,7 @@ func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) 
 }
 
 func TestReverifyCompletedRunReplacesEvidenceAtSameHeadWithoutAppendingSlice(t *testing.T) {
+	t.Parallel()
 	for _, spelling := range []string{"worktree", "isolated"} {
 		t.Run(spelling, func(t *testing.T) { testReverifyPlacement(t, spelling) })
 	}
@@ -476,6 +485,7 @@ func testReverifyPlacement(t *testing.T, spelling string) {
 }
 
 func TestReverifyCompletedRunReplacesEvidenceAtAdvancedHead(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	failedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
@@ -509,6 +519,7 @@ func TestReverifyCompletedRunReplacesEvidenceAtAdvancedHead(t *testing.T) {
 }
 
 func TestAdvancedHeadReverifyFailurePreservesRepairAttemptCount(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	failedHead := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@false\n"), 0o600); err != nil {
@@ -550,6 +561,7 @@ func TestAdvancedHeadReverifyFailurePreservesRepairAttemptCount(t *testing.T) {
 }
 
 func TestVerifyCompletedBranchPreservesPersistedTimestampAndUsesCompletionForEvent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -596,6 +608,7 @@ func TestVerifyCompletedBranchPreservesPersistedTimestampAndUsesCompletionForEve
 }
 
 func TestVerifyCompletedBranchStateWriteFailureStillEmitsOutcomeEvent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -645,6 +658,7 @@ func TestVerifyCompletedBranchStateWriteFailureStillEmitsOutcomeEvent(t *testing
 }
 
 func TestAppendFinalVerificationEventPrefersFailureLines(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -700,6 +714,7 @@ func TestAppendFinalVerificationEventPrefersFailureLines(t *testing.T) {
 }
 
 func TestVerifyCompletedBranchTruncatesEventReason(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -731,6 +746,7 @@ func TestVerifyCompletedBranchTruncatesEventReason(t *testing.T) {
 }
 
 func TestFinalVerificationOutputKeepsBoundedTailWithExplicitTruncation(t *testing.T) {
+	t.Parallel()
 	prefix := strings.Repeat("successful package\n", 1000)
 	tail := "FAIL\tgithub.com/iamseth/tao/internal/actionable\nfinal assertion failed"
 	details, truncated := boundedFinalVerificationDetails(prefix + tail)
@@ -749,6 +765,7 @@ func TestFinalVerificationOutputKeepsBoundedTailWithExplicitTruncation(t *testin
 }
 
 func TestFinalVerificationOutputRetainsInvalidByteAwayFromCut(t *testing.T) {
+	t.Parallel()
 	retained := strings.Repeat("x", maxFinalVerificationOutputBytes-1) + "\xff"
 	details, truncated := boundedFinalVerificationDetails("discarded" + retained)
 	if !truncated {
@@ -760,6 +777,7 @@ func TestFinalVerificationOutputRetainsInvalidByteAwayFromCut(t *testing.T) {
 }
 
 func TestVerifyCompletedBranchEventAppendFailureIsBestEffort(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
 		t.Fatal(err)

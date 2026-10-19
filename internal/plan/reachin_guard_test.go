@@ -12,6 +12,7 @@ import (
 )
 
 func TestNoPlanReviewReachInsOutsidePlanPackage(t *testing.T) {
+	t.Parallel()
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")

@@ -6,6 +6,7 @@ import (
 )
 
 func TestWorkspaceMetadataRoundTrip(t *testing.T) {
+	t.Parallel()
 	state := State{
 		Plan: PlanState{ID: "plan"},
 		Workspace: &Workspace{
@@ -45,6 +46,7 @@ func TestWorkspaceMetadataRoundTrip(t *testing.T) {
 }
 
 func TestWorkspaceMetadataRemainsOptional(t *testing.T) {
+	t.Parallel()
 	var state State
 	if err := json.Unmarshal([]byte(`{"plan":{"id":"legacy"}}`), &state); err != nil {
 		t.Fatal(err)

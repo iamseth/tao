@@ -9,6 +9,7 @@ import (
 )
 
 func TestSliceCompletionLockProcesses(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	driver, err := plan.AcquireRunLock(dir, "plan", time.Now())
 	if err != nil {
@@ -46,6 +47,7 @@ func TestSliceCompletionLockProcesses(t *testing.T) {
 }
 
 func TestSliceCompletionLock(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	release, err := acquireSliceCompletionLock(dir)
 	if err != nil {

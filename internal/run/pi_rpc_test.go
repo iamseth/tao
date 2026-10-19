@@ -26,6 +26,7 @@ func testAgentExecutor(kind AgentKind, options agentExecutorOptions, logAppender
 }
 
 func TestSliceExecutorSelectsPiByDefault(t *testing.T) {
+	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
 	promptSeen := false
 	starter := fakePiSessionStarter(t, `done`, &promptSeen)
@@ -47,6 +48,7 @@ func TestSliceExecutorSelectsPiByDefault(t *testing.T) {
 }
 
 func TestPullRequestBodyGeneratorSelectsPiWhenRequested(t *testing.T) {
+	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}}, RunDependencies{LogAppender: repo})
 	resolveExecutorDefaults(&execution)
@@ -64,6 +66,7 @@ func TestPullRequestBodyGeneratorSelectsPiWhenRequested(t *testing.T) {
 }
 
 func TestPiExecutorSessionInfoWarningDoesNotFailCompletedWork(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	promptSeen := false
@@ -91,6 +94,7 @@ func TestPiExecutorSessionInfoWarningDoesNotFailCompletedWork(t *testing.T) {
 }
 
 func TestPiExecutorCreatesPullRequestFromCapturedOutput(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repo := plan.NewFileRepository(t.TempDir())
 	promptSeen := false
@@ -111,6 +115,7 @@ func TestPiExecutorCreatesPullRequestFromCapturedOutput(t *testing.T) {
 }
 
 func TestPiExecutorAppendsAgentMetricsEvent(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	promptSeen := false
@@ -137,6 +142,7 @@ func TestPiExecutorAppendsAgentMetricsEvent(t *testing.T) {
 }
 
 func TestPiAndClaudeCollectPlanScopedMetrics(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
 		t.Run(string(kind), func(t *testing.T) {
 			planDir := writeMetricsPlan(t, "/repo", "plan-a")
@@ -164,6 +170,7 @@ func TestPiAndClaudeCollectPlanScopedMetrics(t *testing.T) {
 }
 
 func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProcess(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	persistRunArtifacts(t, detail.Dir, detail)
@@ -256,6 +263,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 }
 
 func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	persistRunArtifacts(t, detail.Dir, detail)
@@ -318,6 +326,7 @@ func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *tes
 }
 
 func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		timeout        time.Duration
@@ -333,8 +342,10 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 			wantError: "WebSocket closed 1006",
 		},
 		{
-			name:    "session timeout",
-			timeout: time.Millisecond,
+			name: "session timeout",
+			// Long enough that the session starts before the deadline even
+			// when the package runs in parallel.
+			timeout: 250 * time.Millisecond,
 			serve: func(ctx context.Context, _ *fakePiProcess) {
 				<-ctx.Done()
 			},
@@ -396,6 +407,7 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 }
 
 func TestPiExecutorMarksAgentMetricsFailedOnPiError(t *testing.T) {
+	t.Parallel()
 	planDir := writeMetricsPlan(t, "/repo", "plan-a")
 	repo := plan.NewFileRepository(filepath.Dir(planDir))
 	executor := testAgentExecutor(AgentPi, agentExecutorOptions{Deps: agent.RuntimeDeps{ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (Process, error) {

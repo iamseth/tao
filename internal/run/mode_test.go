@@ -7,6 +7,7 @@ import (
 )
 
 func TestRunOptionAliasesMatchRuntimeConfigTypes(t *testing.T) {
+	t.Parallel()
 	request := Request{Input: "plan-a", ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{
 		CommitPolicy:  runtimeconfig.CommitPolicySlice,
 		ExecutionMode: runtimeconfig.ExecutionModeIsolated,

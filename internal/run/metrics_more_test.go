@@ -11,6 +11,7 @@ import (
 )
 
 func TestCollectAgentMetricsMapsNeutralMetricsAndMarksFailures(t *testing.T) {
+	t.Parallel()
 	result := agent.Metrics{
 		SessionID:        "stats-session",
 		ProviderID:       "stats-provider",

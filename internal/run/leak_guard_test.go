@@ -12,6 +12,7 @@ import (
 )
 
 func TestAgentSessionLeakGuardFailsForNewUntrackedControlFile(t *testing.T) {
+	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
 		Statuses:  []string{"", "?? leaked.txt\n"},
@@ -31,6 +32,7 @@ func TestAgentSessionLeakGuardFailsForNewUntrackedControlFile(t *testing.T) {
 }
 
 func TestAgentSessionLeakGuardFailsForAlreadyDirtyContentOnlyEdit(t *testing.T) {
+	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
 		Statuses:  []string{" M dirty.go\n", " M dirty.go\n"},
@@ -46,6 +48,7 @@ func TestAgentSessionLeakGuardFailsForAlreadyDirtyContentOnlyEdit(t *testing.T) 
 }
 
 func TestAgentSessionLeakGuardCurrentModeDoesNotCallGit(t *testing.T) {
+	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	var calls []string
 	runner := newLeakGuardTestRunner(planDir, func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -64,6 +67,7 @@ func TestAgentSessionLeakGuardCurrentModeDoesNotCallGit(t *testing.T) {
 }
 
 func TestAgentSessionLeakGuardAllowsPreExistingUnchangedDirt(t *testing.T) {
+	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
 		Statuses:  []string{" M dirty.go\n?? existing.txt\n", " M dirty.go\n?? existing.txt\n"},
@@ -78,6 +82,7 @@ func TestAgentSessionLeakGuardAllowsPreExistingUnchangedDirt(t *testing.T) {
 }
 
 func TestAgentSessionLeakGuardCoversPullRequestBodySession(t *testing.T) {
+	t.Parallel()
 	action := "drafting pull request body for plan plan-a"
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{

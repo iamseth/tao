@@ -15,6 +15,7 @@ import (
 )
 
 func TestMutationJournalDecodeValidation(t *testing.T) {
+	t.Parallel()
 	valid := testMutationJournal(t)
 	validBytes, err := encodeMutationJournal(valid)
 	if err != nil {
@@ -67,6 +68,7 @@ func TestMutationJournalDecodeValidation(t *testing.T) {
 }
 
 func TestMutationJournalPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
 	journal := testMutationJournal(t)
 	encoded, err := encodeMutationJournal(journal)
 	if err != nil {
@@ -108,6 +110,7 @@ func TestMutationJournalPreservesUnknownFields(t *testing.T) {
 }
 
 func TestMutationJournalRejectsEventMutationIDMismatch(t *testing.T) {
+	t.Parallel()
 	journal := testMutationJournal(t)
 	var event Event
 	if err := json.Unmarshal(journal.Events[0].Payload, &event); err != nil {
@@ -126,6 +129,7 @@ func TestMutationJournalRejectsEventMutationIDMismatch(t *testing.T) {
 }
 
 func TestMutationJournalSettlementFailurePrefixesAreRecoverable(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		failOperation   string
@@ -201,6 +205,7 @@ func TestMutationJournalSettlementFailurePrefixesAreRecoverable(t *testing.T) {
 }
 
 func TestMutationJournalRecoverySyncsVisibleEventBeforeRemoval(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -231,6 +236,7 @@ func TestMutationJournalRecoverySyncsVisibleEventBeforeRemoval(t *testing.T) {
 }
 
 func TestMutationJournalPostUnlinkSyncFailureCommitsNewEventAfterDirectorySync(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -262,6 +268,7 @@ func TestMutationJournalPostUnlinkSyncFailureCommitsNewEventAfterDirectorySync(t
 }
 
 func TestMutationJournalSettlementRejectsConflictingEvent(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -292,6 +299,7 @@ func TestMutationJournalSettlementRejectsConflictingEvent(t *testing.T) {
 }
 
 func TestMutationJournalLegacyReadOnlyPlanWithoutJournalLoads(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -338,6 +346,7 @@ func TestMutationJournalLegacyReadOnlyPlanWithoutJournalLoads(t *testing.T) {
 }
 
 func TestMutationJournalLoadBoundarySettlesPendingIntent(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -364,6 +373,7 @@ func TestMutationJournalLoadBoundarySettlesPendingIntent(t *testing.T) {
 }
 
 func TestMutationJournalConcurrentReadersRecoverEventExactlyOnce(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -428,6 +438,7 @@ func TestMutationJournalConcurrentReadersRecoverEventExactlyOnce(t *testing.T) {
 }
 
 func TestMutationJournalLoadBoundarySurfacesInvalidIntentWithoutChanges(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "plan-a")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)

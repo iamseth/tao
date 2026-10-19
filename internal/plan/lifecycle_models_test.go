@@ -11,6 +11,7 @@ import (
 )
 
 func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
+	t.Parallel()
 	// Keep this list intentional: Event readers tolerate historical and newer values,
 	// so not every accepted EventType constant represents a current producer.
 	currentEmittedEventTypes := []string{
@@ -83,6 +84,7 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 }
 
 func TestAbandonedStatusAndEventLegacyJSONParsing(t *testing.T) {
+	t.Parallel()
 	var state State
 	if err := json.Unmarshal([]byte(`{"status":"abandoned","plan":{"id":"legacy","completed_slices":[],"pending_slices":["001-a"],"timing":{}}}`), &state); err != nil {
 		t.Fatal(err)
@@ -100,6 +102,7 @@ func TestAbandonedStatusAndEventLegacyJSONParsing(t *testing.T) {
 }
 
 func TestProposalRepairCategoryWireValues(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		got  string
 		want string
@@ -125,6 +128,7 @@ func TestProposalRepairCategoryWireValues(t *testing.T) {
 }
 
 func TestFinalizationFailureValidation(t *testing.T) {
+	t.Parallel()
 	validProposal := FinalizationFailure{
 		Phase: FinalizationFailurePhaseProposalRepair, Category: "proposal_invalid", ReviewBase: "base123", ReviewHead: "head123",
 		FailedAt: time.Date(2026, 8, 29, 20, 0, 0, 0, time.UTC), RecoveryAction: "rerun_review",
@@ -157,6 +161,7 @@ func TestFinalizationFailureValidation(t *testing.T) {
 }
 
 func TestAutomaticReworkEvidenceValidation(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 18, 1, 0, 0, 0, time.UTC)
 	validStop := AutomaticReworkStop{Round: 1, Attempts: 1, Fingerprint: "fingerprint", Reason: "stopped", StoppedAt: now}
 	validRound := AutomaticReworkRound{Round: 2, Attempts: 1, MaxAttempts: 5, Fingerprint: "fingerprint", ReopenedAt: now}
@@ -185,6 +190,7 @@ func TestAutomaticReworkEvidenceValidation(t *testing.T) {
 }
 
 func TestFinalVerificationLegacyJSONLoadsWithoutFailureEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	legacy := `{"schema":"tao.plan.state.v1","status":"in_review","created_at":"2026-07-14T01:00:00Z","updated_at":"2026-07-14T01:00:00Z","repo":{"name":"tao","root":"/repo","branch":"main"},"plan":{"id":"legacy","title":"Legacy","completed_slices":[],"pending_slices":[],"timing":{},"final_verification":{"command":"make verify","cwd":"/repo","head_sha":"head-a","result":"failed","verified_at":"2026-07-14T01:00:00Z"}},"global_invariants":[],"open_questions":[]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(legacy), 0o600); err != nil {
@@ -208,6 +214,7 @@ func TestFinalVerificationLegacyJSONLoadsWithoutFailureEvidence(t *testing.T) {
 }
 
 func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
+	t.Parallel()
 	for _, event := range []Event{
 		{Type: EventTypeSliceBlocked, Reason: "legacy prose"},
 		{Type: EventTypeSliceBlocked, Command: "go test ./...", Paths: []string{"a.go", "b.go"}, BlockerClassification: BlockerClassificationPlanOwned, HeadSHA: "head", Fingerprint: "fingerprint"},
@@ -239,6 +246,7 @@ func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
 }
 
 func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	timestamp := time.Date(2026, 7, 14, 1, 30, 0, 0, time.UTC)
 	exitCode := 127
@@ -289,6 +297,7 @@ func TestEventFailureModeFieldsJSONLRoundTripAndOmitZero(t *testing.T) {
 }
 
 func TestSliceRequiredInputsJSONAndLegacyCompatibility(t *testing.T) {
+	t.Parallel()
 	slice := Slice{
 		ID: "001-a",
 		RequiredInputs: []RequiredInput{{
@@ -326,6 +335,7 @@ func TestSliceRequiredInputsJSONAndLegacyCompatibility(t *testing.T) {
 }
 
 func TestPlanChangeTypeJSONRoundTripAndLegacyCompatibility(t *testing.T) {
+	t.Parallel()
 	state := State{Plan: PlanState{ID: "typed", ChangeType: ChangeTypeFeat}}
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -368,6 +378,7 @@ func TestPlanChangeTypeJSONRoundTripAndLegacyCompatibility(t *testing.T) {
 }
 
 func TestChangeTypeValidationAndCategoryMapping(t *testing.T) {
+	t.Parallel()
 	for _, changeType := range SupportedChangeTypes() {
 		if err := ValidateChangeType(changeType); err != nil {
 			t.Errorf("ValidateChangeType(%q) = %v", changeType, err)
@@ -389,6 +400,7 @@ func TestChangeTypeValidationAndCategoryMapping(t *testing.T) {
 }
 
 func TestPlanDecisionAndSequenceJSONRoundTripAndLegacyCompatibility(t *testing.T) {
+	t.Parallel()
 	state := State{Plan: PlanState{
 		ID: "plan-a",
 		Decision: &Decision{
@@ -435,6 +447,7 @@ func TestPlanDecisionAndSequenceJSONRoundTripAndLegacyCompatibility(t *testing.T
 }
 
 func TestPlanDecisionCategoricalValues(t *testing.T) {
+	t.Parallel()
 	for _, readiness := range []DecisionReadiness{DecisionReadinessReady, DecisionReadinessNeedsRefinement, DecisionReadinessBlocked} {
 		if !validDecisionReadiness(readiness) {
 			t.Errorf("readiness %q should be valid", readiness)
@@ -471,6 +484,7 @@ func TestPlanDecisionCategoricalValues(t *testing.T) {
 }
 
 func TestReviewFindingCloneIsolation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"plan", "single merge", "replacement"} {
 		t.Run(mode, func(t *testing.T) {
 			original := []ReviewFinding{{File: "a.go", RequiredFiles: []string{"a_test.go"}}}
@@ -493,6 +507,7 @@ func TestReviewFindingCloneIsolation(t *testing.T) {
 }
 
 func TestPlanReviewFindingsJSON(t *testing.T) {
+	t.Parallel()
 	review := PlanReview{
 		Verdict:       ReviewVerdictChangesRequested,
 		Summary:       "Needs work.",
@@ -597,6 +612,7 @@ func containsAny(value string, candidates ...string) bool {
 }
 
 func TestPlanReviewIsApproved(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		review *PlanReview

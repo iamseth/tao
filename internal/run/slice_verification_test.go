@@ -17,6 +17,7 @@ import (
 )
 
 func TestSliceVerifierOrderAndEvidence(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	sub := filepath.Join(root, "pkg")
 	if err := os.Mkdir(sub, 0700); err != nil {
@@ -52,6 +53,7 @@ func TestSliceVerifierOrderAndEvidence(t *testing.T) {
 }
 
 func TestSliceVerifierRejectsDeclarations(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	if err := os.Mkdir(filepath.Join(root, "pkg"), 0700); err != nil {
 		t.Fatal(err)
@@ -87,6 +89,7 @@ func TestSliceVerifierRejectsDeclarations(t *testing.T) {
 }
 
 func TestSliceVerifierFailureKinds(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	for _, tc := range []struct {
 		command string
@@ -121,6 +124,7 @@ func TestSliceVerifierFailureKinds(t *testing.T) {
 }
 
 func TestSliceVerifierCorrection(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	sub := filepath.Join(root, "pkg")
 	if err := os.Mkdir(sub, 0700); err != nil {
@@ -174,6 +178,7 @@ func TestSliceVerifierCorrection(t *testing.T) {
 }
 
 func TestSliceVerifierTimeoutAndCancellation(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	for _, cancelParent := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -203,6 +208,7 @@ func TestSliceVerifierTimeoutAndCancellation(t *testing.T) {
 }
 
 func TestSliceVerifierUnknownErrorAndBoundedDiagnostics(t *testing.T) {
+	t.Parallel()
 	v := SliceVerifier{CommandRunner: func(_ context.Context, _, _ string, _ []string, stdout, stderr io.Writer) error {
 		_, _ = io.WriteString(stdout, strings.Repeat("x", 100000))
 		_, _ = stderr.Write([]byte{0xff, 0, 27})
@@ -215,6 +221,7 @@ func TestSliceVerifierUnknownErrorAndBoundedDiagnostics(t *testing.T) {
 }
 
 func TestSliceVerifierRechecksCWD(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	sub := filepath.Join(root, "pkg")
 	if err := os.Mkdir(sub, 0700); err != nil {
@@ -241,6 +248,7 @@ func TestSliceVerifierRechecksCWD(t *testing.T) {
 }
 
 func TestSliceVerifierLargeRealOutput(t *testing.T) {
+	t.Parallel()
 	runs, err := (SliceVerifier{}).Verify(context.Background(), SliceVerificationRequest{sliceVerifierRoot(t), plan.Verification{Commands: []string{`i=0; while [ "$i" -lt 10000 ]; do printf 'stdout chunk\n'; printf 'stderr chunk\n' >&2; i=$((i+1)); done; printf '\377\000\033'`}}})
 	if err != nil || len(runs) != 1 || !runs[0].OutputTruncated || runs[0].Result != "passed" {
 		t.Fatalf("runs=%+v err=%v", runs, err)
@@ -257,6 +265,7 @@ func TestSliceVerifierLargeRealOutput(t *testing.T) {
 }
 
 func TestSliceVerifierInheritedCancellation(t *testing.T) {
+	t.Parallel()
 	for _, deadline := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
 		if deadline {
@@ -283,6 +292,7 @@ func TestSliceVerifierInheritedCancellation(t *testing.T) {
 }
 
 func TestSliceVerifierMissingShellAndEmptyDeclaration(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	v := SliceVerifier{CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return exec.ErrNotFound }}
 	runs, err := v.Verify(context.Background(), SliceVerificationRequest{root, plan.Verification{Commands: []string{"gate"}}})
@@ -421,6 +431,7 @@ func TestSliceVerifierCacheMechanicalCorrection(t *testing.T) {
 }
 
 func TestSliceVerifierCacheSetupFailure(t *testing.T) {
+	t.Parallel()
 	root := sliceVerifierRoot(t)
 	if err := os.WriteFile(filepath.Join(root, ".tao"), []byte("not a directory"), 0600); err != nil {
 		t.Fatal(err)

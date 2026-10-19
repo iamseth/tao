@@ -19,6 +19,7 @@ import (
 // TestLifecycleReviewReworkRebase exercises rebase settlement and review
 // serialization against real Git and persisted plan artifacts.
 func TestLifecycleReviewReworkRebase(t *testing.T) {
+	t.Parallel()
 	fixture := newLifecycleGitFixture(t, "lifecycle-incident")
 	fixture.completeOriginalSlice(t)
 	oldFeatureHead := lifecycleGitOutput(t, fixture.worktree, "rev-parse", "HEAD")
@@ -65,6 +66,7 @@ func TestLifecycleReviewReworkRebase(t *testing.T) {
 }
 
 func TestLifecycleReviewReworkRebaseRecoveryVariants(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name        string
 		extraCommit bool

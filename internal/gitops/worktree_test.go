@@ -10,6 +10,7 @@ import (
 )
 
 func TestMainWorktreeRoot(t *testing.T) {
+	t.Parallel()
 	discovery := key("-C", "/launch", "worktree", "list", "--porcelain", "-z")
 	fallback := key("-C", "/launch", "rev-parse", "--show-toplevel")
 	failed := errors.New("git failed")
@@ -85,6 +86,7 @@ func TestMainWorktreeRootGitDirOverride(t *testing.T) {
 }
 
 func TestMainWorktreeRootCancellation(t *testing.T) {
+	t.Parallel()
 	for _, before := range []bool{true, false} {
 		ctx, cancel := context.WithCancel(context.Background())
 		calls := 0
@@ -105,6 +107,7 @@ func TestMainWorktreeRootCancellation(t *testing.T) {
 }
 
 func TestWorktreeCommandConstruction(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{}, stderr: map[string]string{}, failures: map[string]error{}}
 	client := NewClient("/repo", runner.run)
 	ctx := context.Background()
@@ -136,6 +139,7 @@ func TestWorktreeCommandConstruction(t *testing.T) {
 }
 
 func TestWorktreeStatusCommandConstructionAndDirtyParsing(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
 			key("-C", "/worktree", "branch", "--show-current"): "tao/plan-a\n",
@@ -168,6 +172,7 @@ func TestWorktreeStatusCommandConstructionAndDirtyParsing(t *testing.T) {
 }
 
 func TestWorktreePorcelainParsing(t *testing.T) {
+	t.Parallel()
 	input := "worktree /repo\nHEAD abc123\nbranch refs/heads/master\n\nworktree /repo/.tao/workspaces/plan-a\nHEAD def456\nbranch refs/heads/tao/plan-a\n"
 	want := []Worktree{
 		{Path: "/repo", HEAD: "abc123", Branch: "master"},
@@ -179,6 +184,7 @@ func TestWorktreePorcelainParsing(t *testing.T) {
 }
 
 func TestWorktreesUsesPorcelainList(t *testing.T) {
+	t.Parallel()
 	runner := &fakeRunner{
 		outputs:  map[string]string{key("-C", "/repo", "worktree", "list", "--porcelain"): "worktree /repo\nHEAD abc123\nbranch refs/heads/master\n"},
 		stderr:   map[string]string{},

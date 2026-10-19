@@ -6,6 +6,7 @@ import (
 )
 
 func TestLastLinesEdges(t *testing.T) {
+	t.Parallel()
 	if got := lastLines("", 2); got != "" {
 		t.Fatalf("empty lastLines = %q", got)
 	}

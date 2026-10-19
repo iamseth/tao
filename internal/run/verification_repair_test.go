@@ -18,6 +18,7 @@ import (
 )
 
 func TestAppendVerificationRepairRefusesNonCodeRecoveryBeforeGit(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		kind plan.FinalVerificationFailureKind
@@ -54,6 +55,7 @@ func TestAppendVerificationRepairRefusesNonCodeRecoveryBeforeGit(t *testing.T) {
 }
 
 func TestAppendVerificationRepairRefusesExactHeadDriftBeforeMutation(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace = &plan.Workspace{Branch: "feature", HeadSHA: "failed-head"}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure"}
@@ -89,6 +91,7 @@ func TestAppendVerificationRepairRefusesExactHeadDriftBeforeMutation(t *testing.
 }
 
 func TestAppendedVerificationRepairResumesAsOrdinaryRun(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace = &plan.Workspace{Branch: "feature", HeadSHA: "failed-head"}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure"}
@@ -110,6 +113,7 @@ func TestAppendedVerificationRepairResumesAsOrdinaryRun(t *testing.T) {
 }
 
 func TestRequireCurrentFailedFinalVerificationBoundaryRefusesStaleBranchOrHead(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		liveBranch string
@@ -147,6 +151,7 @@ func TestRequireCurrentFailedFinalVerificationBoundaryRefusesStaleBranchOrHead(t
 }
 
 func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		liveBranch string
@@ -210,6 +215,7 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 }
 
 func TestExecuteAutomaticVerificationRepair(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		failures     int
@@ -430,6 +436,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 }
 
 func TestRecoveryFinalVerificationDoesNotScheduleRepair(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"zero-slice PR recovery", "resume review"} {
 		t.Run(operation, func(t *testing.T) {
 			fixture := newPullRequestOrchestrationFixture(t)
@@ -539,6 +546,7 @@ func (r detachedRepairRecord) AppendVerificationRepair(request plan.Verification
 }
 
 func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
+	t.Parallel()
 	for _, failReload := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reload error=%t", failReload), func(t *testing.T) {
 			root := t.TempDir()
@@ -632,6 +640,7 @@ func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
 }
 
 func TestRequireNoCurrentFinalVerificationFailureAcceptsPassingEvidence(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Result: finalVerificationPassed}
 	if err := requireNoCurrentFinalVerificationFailure(context.Background(), detail, testRunExecution(ExecutionConfig{}, RunDependencies{})); err != nil {

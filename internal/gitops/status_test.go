@@ -6,6 +6,7 @@ import (
 )
 
 func TestStatusPorcelainPathParsing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		line      string
@@ -35,6 +36,7 @@ func TestStatusPorcelainPathParsing(t *testing.T) {
 }
 
 func TestStatusProtectedBranch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		branch string
 		want   bool
@@ -52,6 +54,7 @@ func TestStatusProtectedBranch(t *testing.T) {
 }
 
 func TestStatusPorcelainPaths(t *testing.T) {
+	t.Parallel()
 	status := "\n M internal/run/run_setup.go\n\t\n?? docs/usage.md\nR  old.go -> new.go\nC  copied.go -> clone.go\n"
 	paths, ambiguous := PorcelainPaths(status)
 	if want := []string{"internal/run/run_setup.go", "docs/usage.md"}; !slices.Equal(paths, want) {
@@ -63,6 +66,7 @@ func TestStatusPorcelainPaths(t *testing.T) {
 }
 
 func TestFingerprintPorcelainPathsPreserveRenameCopyAndQuotedPaths(t *testing.T) {
+	t.Parallel()
 	status := "R  old.go -> new.go\nC  source.go -> copied.go\n M \"path with spaces.go\"\nR  \"old name.go\" -> \"new name.go\"\r\n"
 	got := porcelainPaths(status)
 	want := []string{"new.go", "copied.go", "path with spaces.go", "new name.go"}
@@ -72,6 +76,7 @@ func TestFingerprintPorcelainPathsPreserveRenameCopyAndQuotedPaths(t *testing.T)
 }
 
 func TestStatusPorcelainIndexStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		line string
 		want bool

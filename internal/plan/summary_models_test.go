@@ -3,6 +3,7 @@ package plan
 import "testing"
 
 func TestDecisionOverviewClonePreservesUnrankedAndCopiesNestedValues(t *testing.T) {
+	t.Parallel()
 	legacy := cloneDecisionOverview(DecisionOverview{Source: DecisionOverviewSourcePlanningBrief, Problem: "Legacy goal"})
 	if legacy.Priority != nil || legacy.Sequence != nil || legacy.Disposition != "" {
 		t.Fatalf("legacy clone inferred rank: %+v", legacy)
@@ -23,6 +24,7 @@ func TestDecisionOverviewClonePreservesUnrankedAndCopiesNestedValues(t *testing.
 }
 
 func TestSummarizePlansMixedStatuses(t *testing.T) {
+	t.Parallel()
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusPlanned},
 		{Status: StatusInProgress},
@@ -46,6 +48,7 @@ func TestSummarizePlansMixedStatuses(t *testing.T) {
 }
 
 func TestSummarizePlansCountsAbandonedSeparately(t *testing.T) {
+	t.Parallel()
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusAbandoned, Complete: false},
 		{Status: StatusCompleted, Complete: true},
@@ -61,6 +64,7 @@ func TestSummarizePlansCountsAbandonedSeparately(t *testing.T) {
 }
 
 func TestSummarizePlansCountsVerificationFailedProjection(t *testing.T) {
+	t.Parallel()
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusVerificationFailed},
 		{Status: StatusInReview},
@@ -72,6 +76,7 @@ func TestSummarizePlansCountsVerificationFailedProjection(t *testing.T) {
 }
 
 func TestSummarizePlansReviewedVersusUnreviewedCompleted(t *testing.T) {
+	t.Parallel()
 	rollup := SummarizePlans([]PlanSummary{
 		{Status: StatusCompleted, Complete: true, Reviewed: true, ReviewVerdict: "approve"},
 		{Status: StatusCompleted, Complete: true},
@@ -97,6 +102,7 @@ func TestSummarizePlansReviewedVersusUnreviewedCompleted(t *testing.T) {
 }
 
 func TestSummarizePlansEmpty(t *testing.T) {
+	t.Parallel()
 	rollup := SummarizePlans(nil)
 
 	if rollup.Total != 0 || rollup.Completed != 0 || rollup.Reviewed != 0 {

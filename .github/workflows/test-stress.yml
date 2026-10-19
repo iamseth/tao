@@ -103,10 +103,16 @@ jobs:
       - name: Repeat all tests with the race detector
         run: |
           set -euo pipefail
+          parallel=()
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             export TAO_REQUIRE_CONFINEMENT_TESTS=1
+          else
+            # The darwin race runtime crashes or hangs forked children when one
+            # test binary starts processes concurrently; keep test functions
+            # within a package sequential there.
+            parallel=(-parallel 1)
           fi
-          go test -count=5 -race -timeout 20m ./... 2>&1 | tee -a "$RUNNER_TEMP/tao-stress-tests.log"
+          go test -count=5 -race "${parallel[@]}" -timeout 20m ./... 2>&1 | tee -a "$RUNNER_TEMP/tao-stress-tests.log"
 
       - name: Preserve failed test diagnostics
         if: failure()

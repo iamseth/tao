@@ -11,6 +11,7 @@ import (
 )
 
 func TestProveRebaseReplayDoesNotRequireGlobalGitIdentity(t *testing.T) {
+	t.Parallel()
 	root, oldBase, _, oldHead := commitSeriesRepository(t)
 	runGitCommand(t, root, "checkout", "main")
 	writeCommitSeriesFile(t, root, "base-advance.txt", "new base\n")
@@ -28,6 +29,7 @@ func TestProveRebaseReplayDoesNotRequireGlobalGitIdentity(t *testing.T) {
 }
 
 func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
+	t.Parallel()
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)
 	ctx := context.Background()
@@ -60,6 +62,7 @@ func TestCommitSeriesProofSurvivesConflictFreeRebase(t *testing.T) {
 }
 
 func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -99,6 +102,7 @@ func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T)
 }
 
 func TestCommitSeriesProofSurvivesConflictFreeLineShift(t *testing.T) {
+	t.Parallel()
 	assertCommitSeriesProofSurvivesRebase(t, rebaseProofFixture{
 		filename:    "lines.txt",
 		baseContent: "top\ntarget\nbottom\n",
@@ -108,6 +112,7 @@ func TestCommitSeriesProofSurvivesConflictFreeLineShift(t *testing.T) {
 }
 
 func TestCommitSeriesProofSurvivesDuplicatePrependedBeforeEditedOccurrence(t *testing.T) {
+	t.Parallel()
 	assertCommitSeriesProofSurvivesRebase(t, rebaseProofFixture{
 		filename:    "duplicate.txt",
 		baseContent: "same\nfirst context\nmiddle\nsame\ntarget context\n",
@@ -117,6 +122,7 @@ func TestCommitSeriesProofSurvivesDuplicatePrependedBeforeEditedOccurrence(t *te
 }
 
 func TestCommitSeriesProofSurvivesUniqueInsertionAmongDistantRepeats(t *testing.T) {
+	t.Parallel()
 	assertCommitSeriesProofSurvivesRebase(t, rebaseProofFixture{
 		filename:    "repeats.txt",
 		baseContent: "anchor\nrepeat\nrepeat\nrepeat\nrepeat\nrepeat\ntarget\ntail\n",
@@ -168,6 +174,7 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 }
 
 func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -200,6 +207,7 @@ func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 }
 
 func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -245,6 +253,7 @@ func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T
 }
 
 func TestCommitSeriesProofExpandsRepeatedAdjacentContext(t *testing.T) {
+	t.Parallel()
 	locator, err := canonicalEditLocator(
 		[]string{"header", "props", "", "", "function", "tail"},
 		canonicalEdit{oldPosition: 3},
@@ -258,6 +267,7 @@ func TestCommitSeriesProofExpandsRepeatedAdjacentContext(t *testing.T) {
 }
 
 func TestCommitSeriesProofRejectsAmbiguousEditContext(t *testing.T) {
+	t.Parallel()
 	_, err := canonicalEditLocator(
 		[]string{"same", "same", "same", "same"},
 		canonicalEdit{oldPosition: 1, deleted: []string{"same"}},
@@ -268,6 +278,7 @@ func TestCommitSeriesProofRejectsAmbiguousEditContext(t *testing.T) {
 }
 
 func TestCommitSeriesProofChangesForSeriesDrift(t *testing.T) {
+	t.Parallel()
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)
 	ctx := context.Background()
@@ -325,6 +336,7 @@ func TestCommitSeriesProofChangesForSeriesDrift(t *testing.T) {
 }
 
 func TestCommitSeriesProofCoversEmptyRangeAndRejectsUnsupportedHistory(t *testing.T) {
+	t.Parallel()
 	root, base, first, second := commitSeriesRepository(t)
 	client := NewClient(root, nil)
 	ctx := context.Background()
@@ -353,6 +365,7 @@ func TestCommitSeriesProofCoversEmptyRangeAndRejectsUnsupportedHistory(t *testin
 }
 
 func TestCommitSeriesTextV5Fingerprint(t *testing.T) {
+	t.Parallel()
 	root := newBinaryProofRepository(t)
 	writeCommitSeriesFile(t, root, "edit.txt", "top\nold\nbottom\n")
 	writeCommitSeriesFile(t, root, "delete.txt", "old\n")
@@ -373,10 +386,6 @@ func TestCommitSeriesTextV5Fingerprint(t *testing.T) {
 // must come from the content delta rather than incidental commit metadata.
 func newBinaryProofRepository(t *testing.T) string {
 	t.Helper()
-	t.Setenv("GIT_AUTHOR_NAME", "Tao Test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "tao@example.invalid")
-	t.Setenv("GIT_AUTHOR_DATE", "2026-08-06T00:00:00Z")
-	t.Setenv("GIT_COMMITTER_DATE", "2026-08-06T00:00:00Z")
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
@@ -396,6 +405,7 @@ func requireSeriesProof(t *testing.T, root, base, head string) CommitSeriesProof
 }
 
 func TestCommitSeriesBinaryReplay(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"add", "modify", "delete", "mixed", "mode-only", "rename", "attribute"} {
 		t.Run(kind, func(t *testing.T) {
 			root := newBinaryProofRepository(t)
@@ -471,6 +481,7 @@ func TestCommitSeriesBinaryReplay(t *testing.T) {
 }
 
 func TestCommitSeriesBinaryEvidenceIdentity(t *testing.T) {
+	t.Parallel()
 	root := newBinaryProofRepository(t)
 	for _, name := range []string{"left.bin", "right.bin"} {
 		writeCommitSeriesFile(t, root, name, "old\x00blob\n")
@@ -519,6 +530,7 @@ func TestCommitSeriesBinaryEvidenceIdentity(t *testing.T) {
 }
 
 func TestProveRebaseReplayBinaryRefusalLeavesSourceUnchanged(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"conflict", "proof-mismatch"} {
 		t.Run(kind, func(t *testing.T) {
 			root := newBinaryProofRepository(t)
@@ -576,6 +588,7 @@ func TestProveRebaseReplayBinaryRefusalLeavesSourceUnchanged(t *testing.T) {
 }
 
 func TestCanonicalCommitDeltaTextCompatibility(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ name, patch, want string }{
 		{"edit", "diff --git a/f b/f\nindex abc1234..def5678 100644\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n top\n-old\n+new\n bottom\n", "@@ tao-location context:sha256:9d8db77a8bd4bf092e2fe4c8baf4a49ecdb67375d95cda6418beba3f6bc5a9e0 @@\n-old\n+new\n\n"},
 		{"add", "diff --git a/f b/f\nnew file mode 100644\nindex 0000000..def5678\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+new\n", "new file mode 100644\n@@ tao-location context:sha256:6ba485d24229aa87f87910f9b409075cd40b1cfaa435ee40862f9c1eece9784c @@\n+new\n\n"},
@@ -595,6 +608,7 @@ func TestCanonicalCommitDeltaTextCompatibility(t *testing.T) {
 }
 
 func TestCanonicalCommitDeltaBinary(t *testing.T) {
+	t.Parallel()
 	for _, size := range []int{40, 64} {
 		old, next, zero := strings.Repeat("a", size), strings.Repeat("b", size), strings.Repeat("0", size)
 		for _, tt := range []struct{ name, mode, old, next string }{
@@ -627,6 +641,7 @@ func TestCanonicalCommitDeltaBinary(t *testing.T) {
 }
 
 func TestCanonicalCommitDeltaTextBinaryPhrases(t *testing.T) {
+	t.Parallel()
 	for _, phrase := range []string{"GIT binary patch", "Binary files a/f and b/f differ"} {
 		for _, patch := range []string{
 			"@@ -1 +1 @@\n-" + phrase + "\n+replacement\n",
@@ -642,6 +657,7 @@ func TestCanonicalCommitDeltaTextBinaryPhrases(t *testing.T) {
 }
 
 func TestCanonicalCommitDeltaRejectsMalformedBinary(t *testing.T) {
+	t.Parallel()
 	old, next := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	index := "index " + old + ".." + next + " 100644\n"
 	for name, evidence := range map[string]string{
@@ -677,6 +693,7 @@ func TestCanonicalCommitDeltaRejectsMalformedBinary(t *testing.T) {
 }
 
 func TestCanonicalCommitDeltaBinaryStructure(t *testing.T) {
+	t.Parallel()
 	index := "index " + strings.Repeat("a", 40) + ".." + strings.Repeat("b", 40) + " 100644\n"
 	prefix := "diff --git a/f b/f\n" + index
 	for name, patch := range map[string]string{

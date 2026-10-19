@@ -24,6 +24,7 @@ import (
 )
 
 func TestReviewBasePresentationParity(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name        string
 		ws          *plan.Workspace
@@ -54,6 +55,7 @@ func TestReviewBasePresentationParity(t *testing.T) {
 }
 
 func TestReviewRunBaseOverrideFallback(t *testing.T) {
+	t.Parallel()
 	state := plan.State{}
 	state.Repo.BaseCommit = "repo"
 	if got := reviewRunBase(context.Background(), &fakeReviewGit{}, ReviewRun{Base: " override "}, state); got != "override" {
@@ -72,6 +74,7 @@ func TestReviewRunBaseOverrideFallback(t *testing.T) {
 }
 
 func TestRequireNoCurrentFinalVerificationFailureUsesProjectedGuidance(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		kind       plan.FinalVerificationFailureKind
@@ -115,6 +118,7 @@ func TestRequireNoCurrentFinalVerificationFailureUsesProjectedGuidance(t *testin
 }
 
 func TestAppendImplementerRulingsContext(t *testing.T) {
+	t.Parallel()
 	detail := &plan.PlanDetail{}
 	detail.Slices.Slices = []plan.Slice{
 		{ID: "001-a", Status: plan.StatusCompleted, Notes: "Summary.\nRuling: Use the existing alias.\nRuling: Preserve the default."},
@@ -133,6 +137,7 @@ func TestAppendImplementerRulingsContext(t *testing.T) {
 }
 
 func TestAppendImplementerRulingsContextNoRulings(t *testing.T) {
+	t.Parallel()
 	for _, detail := range []*plan.PlanDetail{nil, {}} {
 		if detail != nil {
 			detail.Slices.Slices = []plan.Slice{
@@ -148,6 +153,7 @@ func TestAppendImplementerRulingsContextNoRulings(t *testing.T) {
 }
 
 func TestAppendImplementerRulingsContextBounds(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{maxReviewRulings, maxReviewRulings + 5} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			detail := &plan.PlanDetail{}
@@ -189,6 +195,7 @@ func TestAppendImplementerRulingsContextBounds(t *testing.T) {
 }
 
 func TestAppendOperatorAmendmentsContext(t *testing.T) {
+	t.Parallel()
 	detail := &plan.PlanDetail{}
 	detail.Slices.Slices = []plan.Slice{
 		{ID: "001-a", Status: plan.StatusCompleted, Amendments: []plan.SliceAmendment{
@@ -212,6 +219,7 @@ func TestAppendOperatorAmendmentsContext(t *testing.T) {
 }
 
 func TestAppendOperatorAmendmentsContextNoAmendments(t *testing.T) {
+	t.Parallel()
 	for _, detail := range []*plan.PlanDetail{nil, {}} {
 		if detail != nil {
 			detail.Slices.Slices = []plan.Slice{
@@ -227,6 +235,7 @@ func TestAppendOperatorAmendmentsContextNoAmendments(t *testing.T) {
 }
 
 func TestAppendOperatorAmendmentsContextBounds(t *testing.T) {
+	t.Parallel()
 	for _, count := range []int{maxReviewRulings, maxReviewRulings + 5} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			detail := &plan.PlanDetail{}
@@ -268,6 +277,7 @@ func TestAppendOperatorAmendmentsContextBounds(t *testing.T) {
 }
 
 func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
+	t.Parallel()
 	thresholds := plan.DefaultAgentBudget().Warn()
 	tests := []struct {
 		name       string
@@ -322,6 +332,7 @@ func TestAppendPriorReworkAndBudgetContext(t *testing.T) {
 }
 
 func TestAppendPriorReworkAndBudgetContextIncludesRecurringFindingHistory(t *testing.T) {
+	t.Parallel()
 	review := func(file string, line int, message string) plan.Event {
 		findings := []plan.ReviewFinding{{File: file, Line: line, Message: message}}
 		return plan.Event{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{
@@ -351,6 +362,7 @@ func TestAppendPriorReworkAndBudgetContextIncludesRecurringFindingHistory(t *tes
 }
 
 func TestAppendPriorReworkAndBudgetContextSelectsLargeHistoryBeforeWarnings(t *testing.T) {
+	t.Parallel()
 	thresholds := plan.DefaultAgentBudgetThresholds()
 	events := []plan.Event{{Type: plan.EventTypePlanReviewed, Review: &plan.PlanReview{Status: plan.ReviewStatusCompleted}}}
 	for round := 1; round <= 100; round++ {
@@ -394,6 +406,7 @@ func TestAppendPriorReworkAndBudgetContextSelectsLargeHistoryBeforeWarnings(t *t
 }
 
 func TestAppendPriorReworkAndBudgetContextCapsWarnings(t *testing.T) {
+	t.Parallel()
 	thresholds := plan.DefaultAgentBudgetThresholds()
 	events := make([]plan.Event, 100)
 	for i := range events {
@@ -425,6 +438,7 @@ func TestAppendPriorReworkAndBudgetContextCapsWarnings(t *testing.T) {
 }
 
 func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	reviewedAt := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
@@ -518,6 +532,7 @@ func TestCreateReviewWithAgentSessionPersistsParsedReview(t *testing.T) {
 }
 
 func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testing.T) {
+	t.Parallel()
 	const (
 		wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): correct typed proposal\",\"body\":\"What:\\nCorrect the typed proposal.\\n\\nWhy:\\nMatch the reviewed plan.\"}}\n```"
 		correction      = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): correct typed proposal\",\"body\":\"What:\\nCorrect the typed proposal.\\n\\nWhy:\\nMatch the reviewed plan.\"}}\n```"
@@ -574,6 +589,7 @@ func TestCreateReviewWithAgentSessionCorrectsTypedApprovalProposalOnce(t *testin
 }
 
 func TestHistoricalProposalTelemetryDoesNotAuthorizeAnotherSession(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
 		for _, valid := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/valid=%t", kind, valid), func(t *testing.T) {
@@ -629,6 +645,7 @@ func TestHistoricalProposalTelemetryDoesNotAuthorizeAnotherSession(t *testing.T)
 }
 
 func TestCreateReviewWithAgentSessionConsumesFreshCorrectionBeforeHardInterruption(t *testing.T) {
+	t.Parallel()
 	const wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): wrong typed proposal\",\"body\":\"What:\\nPropose a message.\\n\\nWhy:\\nExercise interruption recovery.\"}}\n```"
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -709,6 +726,7 @@ func TestCreateReviewWithAgentSessionConsumesFreshCorrectionBeforeHardInterrupti
 }
 
 func TestCreateReviewWithAgentSessionSkipsCorrectionForValidTypedApproval(t *testing.T) {
+	t.Parallel()
 	const output = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"fix(review): retain valid typed proposal\",\"body\":\"What:\\nRetain the valid proposal.\\n\\nWhy:\\nAvoid an unnecessary provider session.\"}}\n```"
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -734,6 +752,7 @@ func TestCreateReviewWithAgentSessionSkipsCorrectionForValidTypedApproval(t *tes
 }
 
 func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T) {
+	t.Parallel()
 	const initial = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":\"malformed\"}\n```"
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -788,6 +807,7 @@ func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T
 }
 
 func TestCreateReviewWithAgentSessionReinspectsFailedCorrectionBeforeClassifyingOutput(t *testing.T) {
+	t.Parallel()
 	const wrongTypeReview = "Review prose.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Exact review is approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"feat(review): wrong typed proposal\",\"body\":\"What:\\nPropose a message.\\n\\nWhy:\\nExercise correction boundary recovery.\"}}\n```"
 
 	tests := []struct {
@@ -866,6 +886,7 @@ func TestCreateReviewWithAgentSessionReinspectsFailedCorrectionBeforeClassifying
 }
 
 func TestCreateReviewWithAgentSessionUsesWorkspaceBaseSHA(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	reviewedAt := time.Date(2026, 6, 28, 12, 30, 0, 0, time.UTC)
@@ -904,6 +925,7 @@ func TestCreateReviewWithAgentSessionUsesWorkspaceBaseSHA(t *testing.T) {
 }
 
 func TestCreateReviewWithAgentSessionPrefersLiveMergeBaseAfterRebase(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	reviewedAt := time.Date(2026, 7, 2, 13, 0, 0, 0, time.UTC)
@@ -943,6 +965,7 @@ func TestCreateReviewWithAgentSessionPrefersLiveMergeBaseAfterRebase(t *testing.
 }
 
 func TestCreateReviewWithAgentSessionFallsBackToRecordedBaseWhenMergeBaseFails(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	reviewedAt := time.Date(2026, 7, 2, 13, 15, 0, 0, time.UTC)
@@ -966,6 +989,7 @@ func TestCreateReviewWithAgentSessionFallsBackToRecordedBaseWhenMergeBaseFails(t
 }
 
 func TestCreateReviewWithAgentSessionPreservesArtifactWhenRefreshedGateRefuses(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	reviewedAt := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
@@ -1043,6 +1067,7 @@ func persistReviewState(t *testing.T, planDir string, detail *plan.PlanDetail) {
 }
 
 func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing.T) {
+	t.Parallel()
 	newService := func(t *testing.T, runner CommandRunner, git reviewGit, creator ReviewCreator, out *bytes.Buffer) (Service, Request) {
 		t.Helper()
 		plansRoot := t.TempDir()
@@ -1215,6 +1240,7 @@ func TestServiceReviewPublishesWaitingPhaseBeforeContendedLock(t *testing.T) {
 }
 
 func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	stale := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
@@ -1251,6 +1277,7 @@ func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {
 }
 
 func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"review", "resume"} {
 		t.Run(operation, func(t *testing.T) {
 			detail := runPlanDetail(plan.StatusAbandoned, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
@@ -1294,6 +1321,7 @@ func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.
 }
 
 func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
+	t.Parallel()
 	current := "002-current"
 	tests := []struct {
 		name       string
@@ -1367,6 +1395,7 @@ func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
 }
 
 func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	detail.Dir = t.TempDir()
 	detail.State.Repo.Root = t.TempDir()
@@ -1490,6 +1519,7 @@ func (g *fakeReviewGit) MergeBase(_ context.Context, a, b string) (string, error
 // tolerates those paths while still rejecting other uncommitted run-produced
 // work.
 func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
+	t.Parallel()
 	t.Run("only starting-dirty remains", func(t *testing.T) {
 		git := &fakeReviewGit{status: " M README.md\n?? .env.local\n"}
 		detail := reviewGateDetail("README.md", ".env.local")
@@ -1519,6 +1549,7 @@ func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 // unless it was already dirty when the run started. A rename entirely inside
 // .tao is tolerated, while any other rename stays a hard stop.
 func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testing.T) {
+	t.Parallel()
 	t.Run("scratch file outside expected_files blocked", func(t *testing.T) {
 		git := &fakeReviewGit{status: "?? debug.sh\n"}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
@@ -1548,6 +1579,7 @@ func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testi
 // entries (commit.ClassifyStatus identifies staged metadata for unstaging), so .tao
 // dirt produced during the run must not read as unreviewed plan work.
 func TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths(t *testing.T) {
+	t.Parallel()
 	t.Run("only tao metadata remains", func(t *testing.T) {
 		git := &fakeReviewGit{status: "?? .tao/\n M .tao/state.json\nA  .tao/plans/plan-a/events.jsonl\n"}
 		if err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil); err != nil {
@@ -1579,6 +1611,7 @@ func TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths(t *testing.T) {
 // also means a rename entry, which the snapshot capture rejects as ambiguous,
 // cannot abort a CommitPolicyNone review that skips the gate entirely.
 func TestPrepareReviewExecutionCapturesNoStartingDirtyPaths(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	repo := plan.NewFileRepository(t.TempDir())
 	git := &fakeReviewGit{status: " M README.md\nR  old.go -> new.go\n"}
@@ -1611,6 +1644,7 @@ func TestPrepareReviewExecutionCapturesNoStartingDirtyPaths(t *testing.T) {
 }
 
 func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
@@ -1634,6 +1668,7 @@ func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T)
 }
 
 func TestReviewExecutionRootUsesRecordedWorkspacePathWithoutStrategy(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	worktreeRoot := filepath.Join(repoRoot, ".tao", "workspaces", "plan-a")
 	detail := &plan.PlanDetail{
@@ -1664,6 +1699,7 @@ func TestReviewExecutionRootUsesRecordedWorkspacePathWithoutStrategy(t *testing.
 // resolves to none (skip the gate; merge still enforces a clean tree) rather
 // than locking legacy none-policy plans out of review.
 func TestPrepareReviewExecutionUsesRecordedRunCommitPolicy(t *testing.T) {
+	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
 	s := Service{
 		dependencies: RunDependencies{
@@ -1741,6 +1777,7 @@ func TestPrepareReviewExecutionUsesRecordedRunCommitPolicy(t *testing.T) {
 }
 
 func TestCreateReviewWithAgentSessionFallsBackToBaseCommitWithoutWorkspace(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	reviewedAt := time.Date(2026, 6, 28, 12, 45, 0, 0, time.UTC)
@@ -1778,6 +1815,7 @@ func TestCreateReviewWithAgentSessionFallsBackToBaseCommitWithoutWorkspace(t *te
 }
 
 func TestExtractApprovedReviewRequiresValidCommitMessage(t *testing.T) {
+	t.Parallel()
 	output := "Looks good.\n```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Ready to merge.\",\"commit_message\":{\"subject\":\"feat(review): persist approved commit proposals\",\"body\":\"What:\\nPersist the review agent's proposal for the exact diff.\\n\\nWhy:\\nAllow normal merge to reuse reviewed message context.\"}}\n```"
 
 	got := extractReview(output)
@@ -1793,6 +1831,7 @@ func TestExtractApprovedReviewRequiresValidCommitMessage(t *testing.T) {
 }
 
 func TestExtractApprovedReviewInvalidCommitMessagePreservesRepairableApproval(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"missing":  "",
 		"invalid":  `,"commit_message":{"subject":"review work","body":"details"}`,
@@ -1810,6 +1849,7 @@ func TestExtractApprovedReviewInvalidCommitMessagePreservesRepairableApproval(t 
 }
 
 func TestExtractNonApprovedReviewClearsCommitMessage(t *testing.T) {
+	t.Parallel()
 	output := "Review.\n```tao-review-json\n{\"verdict\":\"changes_requested\",\"summary\":\"Fix this\",\"commit_message\":{\"subject\":\"feat(review): ignore stale commit proposal\",\"body\":\"What:\\nIgnore this message.\\n\\nWhy:\\nThe review is not approved.\"},\"findings\":[]}\n```"
 	got := extractReview(output)
 	if got.Verdict != plan.ReviewVerdictChangesRequested || got.CommitMessage != nil {
@@ -1818,6 +1858,7 @@ func TestExtractNonApprovedReviewClearsCommitMessage(t *testing.T) {
 }
 
 func TestExtractReviewMalformedOutputDegradesGracefully(t *testing.T) {
+	t.Parallel()
 	tests := []string{
 		"Plain human review without a structured block.",
 		"Review text.\n```tao-review-json\n{\"verdict\": \"approve\", \"findings\": \"not-an-array\"}\n```",
@@ -1833,6 +1874,7 @@ func TestExtractReviewMalformedOutputDegradesGracefully(t *testing.T) {
 }
 
 func TestResumeReviewReloadsAuthoritativeStateAndRejectsReopenedWork(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	stale := runPlanDetail(plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
@@ -1873,6 +1915,7 @@ func TestResumeReviewReloadsAuthoritativeStateAndRejectsReopenedWork(t *testing.
 }
 
 func TestResumeReviewHonorsExistingPlanOwnershipAndPreservesBestEffortReviewFailure(t *testing.T) {
+	t.Parallel()
 	plansRoot := t.TempDir()
 	planDir := filepath.Join(plansRoot, "plan-a")
 	if err := os.MkdirAll(planDir, 0o750); err != nil {
@@ -1930,6 +1973,7 @@ func TestResumeReviewHonorsExistingPlanOwnershipAndPreservesBestEffortReviewFail
 }
 
 func TestReviewCreatorDefaultsFromAgentCapabilities(t *testing.T) {
+	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: AgentClaude}}, RunDependencies{PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo})
 	resolveExecutorDefaults(&execution)
@@ -1940,6 +1984,7 @@ func TestReviewCreatorDefaultsFromAgentCapabilities(t *testing.T) {
 }
 
 func TestReviewRangePresenterResolvedRangeAndOrdering(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name, live, workspace, runBase, repoBase, explicitHead, want string
 		observe                                                      bool
@@ -2018,6 +2063,7 @@ func TestReviewRangePresenterResolvedRangeAndOrdering(t *testing.T) {
 }
 
 func TestAutomaticFinalizerDoesNotPresentReviewRange(t *testing.T) {
+	t.Parallel()
 	called := false
 	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	f := newFinalizer(io.Discard, runExecution{Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ReviewEnabled: true}}, Dependencies: RunDependencies{

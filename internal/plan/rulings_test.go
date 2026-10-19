@@ -11,6 +11,7 @@ import (
 )
 
 func TestSliceRulings(t *testing.T) {
+	t.Parallel()
 	var many []string
 	for i := range MaxSliceRulings + 3 {
 		many = append(many, fmt.Sprintf("Ruling: decision %d", i))
@@ -44,6 +45,7 @@ func TestSliceRulings(t *testing.T) {
 }
 
 func TestCompleteSlicePreservesRulings(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)

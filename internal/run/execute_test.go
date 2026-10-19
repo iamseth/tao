@@ -17,6 +17,7 @@ import (
 )
 
 func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
+	t.Parallel()
 	for _, completed := range []bool{true, false} {
 		t.Run(map[bool]string{true: "completed", false: "incomplete"}[completed], func(t *testing.T) {
 			root := t.TempDir()
@@ -87,6 +88,7 @@ func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
 }
 
 func TestExecuteRecordedReworkModel(t *testing.T) {
+	t.Parallel()
 	for _, selection := range []struct {
 		name   string
 		events []plan.Event

@@ -10,12 +10,14 @@ import (
 )
 
 func TestExecutionPreparerHelpers(t *testing.T) {
+	t.Parallel()
 	if (ExecutionPreparer{}).runner() == nil || (ExecutionPreparer{}).now().IsZero() {
 		t.Fatal("default preparer helpers returned invalid values")
 	}
 }
 
 func TestExecutionPreparerRejectsNonRuntimeModes(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []runtimeconfig.ExecutionMode{"shared", "worktree", " isolated "} {
 		t.Run(mode.String(), func(t *testing.T) {
 			preparer := ExecutionPreparer{PlanRecordFactory: func(*plan.PlanDetail) (PlanRecord, error) {

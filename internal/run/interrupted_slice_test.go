@@ -17,6 +17,7 @@ import (
 )
 
 func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*InterruptedSliceInput)
@@ -81,6 +82,7 @@ func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
 }
 
 func TestInterruptedSliceClassifiesNewAndTornStarts(t *testing.T) {
+	t.Parallel()
 	input := interruptedInput()
 	input.Detail.State.Plan.CurrentSlice = nil
 	input.Detail.Slices.Slices[0].Status = plan.StatusPending
@@ -101,6 +103,7 @@ func TestInterruptedSliceClassifiesNewAndTornStarts(t *testing.T) {
 }
 
 func TestInterruptedSliceClassifiesPolicyNoneWithoutExecutionStart(t *testing.T) {
+	t.Parallel()
 	manualInput := func() InterruptedSliceInput {
 		input := interruptedInput()
 		input.Detail.State.Plan.CurrentSlice = nil
@@ -151,6 +154,7 @@ func TestInterruptedSliceClassifiesPolicyNoneWithoutExecutionStart(t *testing.T)
 }
 
 func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithWorkspaceBranch(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	if err := os.MkdirAll(planDir, 0o750); err != nil {
@@ -199,6 +203,7 @@ func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithWorkspaceBranch
 }
 
 func TestInterruptedSliceClassifiesBlockedContinuation(t *testing.T) {
+	t.Parallel()
 	withBoundary := interruptedInput()
 	withBoundary.Detail.State.Status = plan.StatusBlocked
 	withBoundary.Detail.Slices.Slices[0].Status = plan.StatusBlocked
@@ -226,6 +231,7 @@ func TestInterruptedSliceClassifiesBlockedContinuation(t *testing.T) {
 }
 
 func TestInterruptedSliceClassifiesBlockedRestart(t *testing.T) {
+	t.Parallel()
 	for _, spelling := range []string{"worktree", "isolated"} {
 		t.Run(spelling, func(t *testing.T) { testInterruptedSliceBlockedRestart(t, spelling) })
 	}
@@ -281,6 +287,7 @@ func testInterruptedSliceBlockedRestart(t *testing.T, spelling string) {
 }
 
 func TestInterruptedSliceCanonicalBlockMatchesHandEditedState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*InterruptedSliceInput)
@@ -335,6 +342,7 @@ func TestInterruptedSliceCanonicalBlockMatchesHandEditedState(t *testing.T) {
 }
 
 func TestServiceExecuteRefusesClaimedWorktreeAtControlCheckout(t *testing.T) {
+	t.Parallel()
 	controlRoot := t.TempDir()
 	detail := interruptedServiceRunDetail(t, controlRoot)
 	detail.State.Repo.Root = controlRoot
@@ -362,6 +370,7 @@ func TestServiceExecuteRefusesClaimedWorktreeAtControlCheckout(t *testing.T) {
 }
 
 func TestServiceExecuteRefusesWorktreePathResolvingIntoControlCheckout(t *testing.T) {
+	t.Parallel()
 	controlRoot := t.TempDir()
 	runCommitTestGitCommand(t, controlRoot, "init")
 
@@ -421,6 +430,7 @@ func TestServiceExecuteRefusesWorktreePathResolvingIntoControlCheckout(t *testin
 }
 
 func TestServiceExecuteContinuesBlockedAutomaticSliceWithBoundary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.State.Status = plan.StatusBlocked
@@ -464,6 +474,7 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithBoundary(t *testing.T) 
 }
 
 func TestServiceExecuteContinuesBlockedAutomaticSliceWithoutBoundary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	detail.State.Status = plan.StatusBlocked
@@ -505,6 +516,7 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithoutBoundary(t *testing.
 }
 
 func TestServiceExecuteRepairsLaterStateAdvancedSliceStartAfterReload(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	workspaceRoot := t.TempDir()
@@ -591,6 +603,7 @@ func TestServiceExecuteRepairsLaterStateAdvancedSliceStartAfterReload(t *testing
 }
 
 func TestServiceExecuteRepairsSlicesAdvancedStartAndMissingEventAfterReload(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	workspaceRoot := t.TempDir()
@@ -658,6 +671,7 @@ func TestServiceExecuteRepairsSlicesAdvancedStartAndMissingEventAfterReload(t *t
 }
 
 func TestServiceExecuteResumesStartSettledFromJournalOnReload(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	workspaceRoot := t.TempDir()
@@ -793,6 +807,7 @@ func runRestartJSONPayload(t *testing.T, value any, indent bool) *runRestartPayl
 }
 
 func TestInterruptedSliceStrictlyInfersLegacyBoundary(t *testing.T) {
+	t.Parallel()
 	input := interruptedInput()
 	input.Detail.Slices.Slices[0].ExecutionStart.CommitPolicy = ""
 	input.Detail.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = ""

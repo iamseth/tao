@@ -13,6 +13,7 @@ import (
 )
 
 func TestRunPassesWorkspaceRootCwdToPi(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -78,6 +79,7 @@ func TestDefaultCommandRunnerKeepsGenericEnvUnchanged(t *testing.T) {
 }
 
 func TestSharedAgentOperationsSetTransportRequests(t *testing.T) {
+	t.Parallel()
 	executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "created https://github.com/iamseth/tao/pull/123"}}
 	options := agentOperationOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, StartingBranch: "feature", Now: func() time.Time {
 		return time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
@@ -110,6 +112,7 @@ func TestSharedAgentOperationsSetTransportRequests(t *testing.T) {
 }
 
 func TestSliceTelemetryRoleStableAcrossInitialAndResumeRequests(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		id   string
 		role plan.AgentRole
@@ -137,6 +140,7 @@ func TestSliceTelemetryRoleStableAcrossInitialAndResumeRequests(t *testing.T) {
 }
 
 func TestHelperProcessGenericEnv(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("TAO_HELPER_PROCESS") != "1" {
 		return
 	}

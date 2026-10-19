@@ -13,6 +13,7 @@ import (
 )
 
 func TestRunExecutionModeCurrentSkipsCheckoutAfterCompletion(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -35,6 +36,7 @@ func TestRunExecutionModeCurrentSkipsCheckoutAfterCompletion(t *testing.T) {
 }
 
 func TestRunWorktreeStrategySkipsFinalCheckoutAndMergeInstructions(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -64,6 +66,7 @@ func TestRunWorktreeStrategySkipsFinalCheckoutAndMergeInstructions(t *testing.T)
 }
 
 func TestRunWorkPromptExecutionModeText(t *testing.T) {
+	t.Parallel()
 	currentPrompt, err := renderWorkPrompt(workPromptData{PlanDir: "/plans/plan-a", ExecutionMode: ExecutionModeCurrent.String(), CommitPolicy: CommitPolicySlice.String()})
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +99,7 @@ func TestRunWorkPromptExecutionModeText(t *testing.T) {
 }
 
 func TestRunReturnsCheckoutFailureAfterSummary(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -115,6 +119,7 @@ func TestRunReturnsCheckoutFailureAfterSummary(t *testing.T) {
 }
 
 func TestRunReturnsDirtyWorktreeErrorBeforeCheckout(t *testing.T) {
+	t.Parallel()
 	started := time.Now().UTC().Add(-time.Minute)
 	completed := time.Now().UTC()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, &started, nil)
@@ -155,6 +160,7 @@ func TestRunReturnsDirtyWorktreeErrorBeforeCheckout(t *testing.T) {
 }
 
 func TestServiceExecuteUsesRequestCommitPolicy(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	completedDetail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, nil)
 	settleRunTestSlice(completedDetail)
@@ -173,6 +179,7 @@ func TestServiceExecuteUsesRequestCommitPolicy(t *testing.T) {
 }
 
 func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStart(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
@@ -225,6 +232,7 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 }
 
 func TestServiceExecuteExecutionModeCurrentFailsBeforeSliceStartWhenBranchEmpty(t *testing.T) {
+	t.Parallel()
 	planDir := t.TempDir()
 	repoRoot := t.TempDir()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)

@@ -19,6 +19,7 @@ func assertGitFixtureConfig(t *testing.T, root, maintenance, gc string) {
 }
 
 func TestGitFixtureExplicitDestinationConfig(t *testing.T) {
+	t.Parallel()
 	for _, bare := range []bool{false, true} {
 		name := "ordinary"
 		if bare {
@@ -49,6 +50,7 @@ func TestGitFixtureExplicitDestinationConfig(t *testing.T) {
 }
 
 func TestGitFixtureMaintenanceConfig(t *testing.T) {
+	t.Parallel()
 	root, _, _, _ := commitSeriesRepository(t)
 	assertGitFixtureConfig(t, root, "false", "0")
 	linked := filepath.Join(t.TempDir(), "linked")

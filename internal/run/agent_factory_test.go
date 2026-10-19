@@ -14,6 +14,7 @@ import (
 )
 
 func TestAgentFactorySelectsIndependentReviewer(t *testing.T) {
+	t.Parallel()
 	for _, implementation := range []AgentKind{AgentPi, AgentClaude} {
 		for _, selection := range []AgentKind{"", AgentPi, AgentClaude} {
 			t.Run(string(implementation)+"/"+string(selection), func(t *testing.T) {
@@ -31,6 +32,7 @@ func TestAgentFactorySelectsIndependentReviewer(t *testing.T) {
 }
 
 func TestAgentFactoryReviewLaunches(t *testing.T) {
+	t.Parallel()
 	const output = "```tao-review-json\n{\"verdict\":\"comment\",\"summary\":\"Reviewed.\",\"findings\":[]}\n```"
 	for _, implementation := range []AgentKind{AgentPi, AgentClaude} {
 		var inheritedArgs []string
@@ -77,6 +79,7 @@ func TestAgentFactoryReviewLaunches(t *testing.T) {
 }
 
 func TestAgentFactoryUnavailableReviewerDoesNotFallback(t *testing.T) {
+	t.Parallel()
 	for _, implementation := range []AgentKind{AgentPi, AgentClaude} {
 		reviewer := AgentClaude
 		if implementation == AgentClaude {
@@ -105,6 +108,7 @@ func TestAgentFactoryUnavailableReviewerDoesNotFallback(t *testing.T) {
 }
 
 func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
+	t.Parallel()
 	for _, reviewer := range []AgentKind{AgentPi, AgentClaude} {
 		for _, cancel := range []bool{false, true} {
 			root := t.TempDir()
@@ -147,6 +151,7 @@ func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
 }
 
 func TestAgentFactoryBuildsPiRunExecutors(t *testing.T) {
+	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
 	starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
 		return nil, nil
@@ -173,6 +178,7 @@ func TestAgentFactoryBuildsPiRunExecutors(t *testing.T) {
 }
 
 func TestAgentFactoryBuildsClaudeExecutorsAndAuxiliaryFallbacks(t *testing.T) {
+	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
 	starter := func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
 		return nil, nil

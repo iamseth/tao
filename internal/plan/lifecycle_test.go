@@ -21,6 +21,7 @@ func scopeGateDetail() *PlanDetail {
 }
 
 func TestReworkScopeGate(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name                    string
 		modify                  func(*PlanDetail)
@@ -66,6 +67,7 @@ func TestReworkScopeGate(t *testing.T) {
 }
 
 func TestReworkScopeGateSiblingAuthority(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{StatusPending, StatusSkipped, StatusCompleted} {
 		t.Run(status, func(t *testing.T) {
 			d := scopeGateDetail()
@@ -111,6 +113,7 @@ func TestReworkScopeGateSiblingAuthority(t *testing.T) {
 }
 
 func TestReworkScopeGateLegacyUnamendedSiblings(t *testing.T) {
+	t.Parallel()
 	d := scopeGateDetail()
 	d.Slices.Slices[0].ExpectedFiles = nil
 	d.Slices.Slices = append(d.Slices.Slices, Slice{ID: "r102-sibling", Status: StatusPending, ExpectedFiles: []string{"unrelated.go"}})
@@ -120,6 +123,7 @@ func TestReworkScopeGateLegacyUnamendedSiblings(t *testing.T) {
 }
 
 func TestSingleMergeEventRequiredFilesBounds(t *testing.T) {
+	t.Parallel()
 	paths := make([]string, 17)
 	for i := range paths {
 		paths[i] = strings.Repeat("界", 513)
@@ -148,6 +152,7 @@ func TestSingleMergeEventRequiredFilesBounds(t *testing.T) {
 }
 
 func TestAutomaticReworkRoundModel(t *testing.T) {
+	t.Parallel()
 	for _, model := range []string{"", "provider/strong"} {
 		t.Run(model, func(t *testing.T) {
 			event := automaticReworkRoundEvent("plan", AutomaticReworkRound{
@@ -180,6 +185,7 @@ func TestAutomaticReworkRoundModel(t *testing.T) {
 }
 
 func TestReworkRoundModel(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name   string
 		events []Event
@@ -209,6 +215,7 @@ func TestReworkRoundModel(t *testing.T) {
 }
 
 func TestMarkSliceBlockedEvidence(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name      string
 		evidence  *SliceBlockedEvidence
@@ -261,6 +268,7 @@ func TestMarkSliceBlockedEvidence(t *testing.T) {
 }
 
 func TestMarkSliceBlockedEvidencePathBound(t *testing.T) {
+	t.Parallel()
 	paths := []string{"", " ", "../outside.go", "/absolute.go", `C:\absolute.go`, "."}
 	for i := 69; i >= 0; i-- {
 		paths = append(paths, fmt.Sprintf(" ./dir\\%02d.go ", i), fmt.Sprintf("dir/%02d.go", i))
@@ -279,6 +287,7 @@ func TestMarkSliceBlockedEvidencePathBound(t *testing.T) {
 }
 
 func TestLifecycleSelectedSliceEdges(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		detail           *PlanDetail
@@ -356,6 +365,7 @@ func TestLifecycleSelectedSliceEdges(t *testing.T) {
 }
 
 func TestLegacyExecutionBoundaryEquivalenceDoesNotWeakenImmutability(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("")
 	legacy := SliceExecutionStart{Branch: "tao/plan", Head: "abc123", CommitPolicy: "slice", WorkspaceStrategy: "worktree"}
 	detail.Slices.Slices[0].ExecutionStart = &legacy
@@ -383,6 +393,7 @@ func TestLegacyExecutionBoundaryEquivalenceDoesNotWeakenImmutability(t *testing.
 }
 
 func TestMarkSliceExecutionStartIsIdempotentAndImmutable(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("")
 	boundary := SliceExecutionStart{Branch: "tao/plan", Head: "abc123", CommitPolicy: "slice", WorkspaceStrategy: WorkspaceStrategyWorktree}
 	if err := markSliceExecutionStart(detail, "001-a", boundary); err != nil {
@@ -408,6 +419,7 @@ func TestMarkSliceExecutionStartIsIdempotentAndImmutable(t *testing.T) {
 }
 
 func TestMarkSliceExecutionStartRefreshesWorkspaceBoundaryForLaterSlice(t *testing.T) {
+	t.Parallel()
 	detail := startSliceDetail("")
 	detail.State.Workspace = &Workspace{Strategy: WorkspaceStrategyWorktree, Branch: "tao/plan", HeadSHA: "base"}
 	detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: "002-b", Status: StatusPending})
@@ -422,6 +434,7 @@ func TestMarkSliceExecutionStartRefreshesWorkspaceBoundaryForLaterSlice(t *testi
 }
 
 func TestLifecycleBlocksUnsettledAutomaticSliceCompletion(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Status: StatusInProgress, Plan: PlanState{
 			ID: "plan", CompletedSlices: []string{"001-a"}, PendingSlices: []string{"002-b"},
@@ -449,6 +462,7 @@ func TestLifecycleBlocksUnsettledAutomaticSliceCompletion(t *testing.T) {
 }
 
 func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func() error
@@ -550,6 +564,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 }
 
 func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		setup  func(*PlanDetail)
@@ -625,6 +640,7 @@ func TestAbandonedLifecycleMutatorsPreserveStatusSlicesQueueAndEvents(t *testing
 }
 
 func TestLifecycleMutationEventIdempotencyDecisions(t *testing.T) {
+	t.Parallel()
 	first := editTime()
 	second := first.Add(2 * time.Minute)
 

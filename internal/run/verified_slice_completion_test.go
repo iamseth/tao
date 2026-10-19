@@ -88,6 +88,7 @@ func reloadVerifiedCompletion(t *testing.T, request SliceCompletionRequest) *pla
 }
 
 func TestCompletionTimingLoss(t *testing.T) {
+	t.Parallel()
 	for _, policy := range []CommitPolicy{CommitPolicySlice, CommitPolicyNone} {
 		for _, point := range []string{"before gates", "during gates", "after commit", "frozen intent", "existing outcome"} {
 			if policy == CommitPolicyNone && (point == "after commit" || point == "frozen intent") {
@@ -169,6 +170,7 @@ type timingErrorWriter struct{}
 func (timingErrorWriter) Write(p []byte) (int, error) { return 0, errors.New("output unavailable") }
 
 func TestCompletionTimingPostGateRefusal(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
 	service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 		if name == "sh" {
@@ -185,6 +187,7 @@ func TestCompletionTimingPostGateRefusal(t *testing.T) {
 }
 
 func TestCompletionTimingCancelled(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -198,6 +201,7 @@ func TestCompletionTimingCancelled(t *testing.T) {
 }
 
 func TestCompletionTimingPreflight(t *testing.T) {
+	t.Parallel()
 	for _, conflicting := range []bool{false, true} {
 		t.Run(fmt.Sprint(conflicting), func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
@@ -226,6 +230,7 @@ func TestCompletionTimingPreflight(t *testing.T) {
 }
 
 func TestHistoricalSettlementRefusesNewTransaction(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "exit 1")
 	if err := (SliceCompletionService{}).settleHistoricalCompletion(context.Background(), request); err == nil || !strings.Contains(err.Error(), "recorded historical intent") {
 		t.Fatalf("claim-only historical bypass: %v", err)
@@ -233,6 +238,7 @@ func TestHistoricalSettlementRefusesNewTransaction(t *testing.T) {
 }
 
 func TestCompleteRejectsClaimOnlySuccess(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "exit 1")
 	request.VerificationResults = []plan.VerificationRun{{Command: "exit 1", Result: "passed"}}
 	request.VerificationClaims = []VerificationClaim{{Command: "exit 1", CWD: ".", Result: "passed"}}
@@ -246,6 +252,7 @@ func TestCompleteRejectsClaimOnlySuccess(t *testing.T) {
 }
 
 func TestCompleteVerifiedRejectsProposalBeforeGates(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	request.CommitProposal.Summary = ""
 	calls := 0
@@ -268,6 +275,7 @@ func TestCompleteVerifiedRejectsProposalBeforeGates(t *testing.T) {
 }
 
 func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"exit", "unknown", "cache setup", "unsafe correction", "cancelled", "content drift", "binary drift", "index drift", "head drift", "declaration drift", "snapshot write"} {
 		t.Run(failure, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
@@ -496,6 +504,7 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 }
 
 func TestCompleteVerifiedNoneInterruptedBoundaryRecovery(t *testing.T) {
+	t.Parallel()
 	for _, drift := range []string{"unchanged", "branch", "head"} {
 		t.Run(drift, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
@@ -620,6 +629,7 @@ func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
 }
 
 func TestCompleteVerifiedRetryAndDiagnostics(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "first", "go test pkg/example_test.go", "last")
 	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
 	if err := os.Mkdir(filepath.Join(root, "pkg"), 0o700); err != nil {
@@ -703,6 +713,7 @@ func TestCompleteVerifiedRetryAndDiagnostics(t *testing.T) {
 }
 
 func TestCompleteVerifiedOptionalClaimsNeverAuthorizeOrLeak(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"absent", "matched", "mismatched", "unmatched"} {
 		t.Run(mode, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
@@ -758,6 +769,7 @@ func TestCompleteVerifiedOptionalClaimsNeverAuthorizeOrLeak(t *testing.T) {
 }
 
 func TestCompleteVerifiedReloadedAdmissionAndLock(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"approval", "dependency", "policy", "selected", "boundary", "branch", "lock"} {
 		t.Run(reason, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
@@ -931,6 +943,7 @@ func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 }
 
 func TestDescribeVerificationBoundaryDrift(t *testing.T) {
+	t.Parallel()
 	before := verifiedCompletionInspection{
 		verifiedCompletionBoundary: verifiedCompletionBoundary{fingerprint: "before", branch: "old"},
 		paths:                      make(map[string]string), untracked: make(map[string]bool),
@@ -977,6 +990,7 @@ func TestDescribeVerificationBoundaryDrift(t *testing.T) {
 }
 
 func TestCompleteVerifiedIgnoresBuildArtifacts(t *testing.T) {
+	t.Parallel()
 	request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
 	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("build-output\n"), 0o600); err != nil {

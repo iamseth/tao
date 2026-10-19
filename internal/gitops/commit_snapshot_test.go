@@ -10,6 +10,7 @@ import (
 )
 
 func TestCommitPathStatesOversizedBlobIsStreamedAndCancellable(t *testing.T) {
+	t.Parallel()
 	const (
 		chunkSize  = 32 * 1024
 		chunkCount = 2048 // 64 MiB of logical blob output without a 64 MiB fixture.

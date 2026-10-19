@@ -8,6 +8,7 @@ import (
 )
 
 func TestBaselineVerificationRecovery(t *testing.T) {
+	t.Parallel()
 	detail := completedReopenDetail()
 	detail.Dir = t.TempDir()
 	detail.State.Status = StatusInReview
@@ -34,6 +35,7 @@ func TestBaselineVerificationRecovery(t *testing.T) {
 }
 
 func TestAppendVerificationRepairIsBoundAndSingleUse(t *testing.T) {
+	t.Parallel()
 	detail := completedReopenDetail()
 	detail.Dir = t.TempDir()
 	detail.State.Status = StatusInReview
@@ -66,6 +68,7 @@ func TestAppendVerificationRepairIsBoundAndSingleUse(t *testing.T) {
 }
 
 func TestAppendVerificationRepairAllowsNewFailureAfterCompletedRepair(t *testing.T) {
+	t.Parallel()
 	detail := completedReopenDetail()
 	detail.Dir = t.TempDir()
 	detail.State.Status = StatusInReview
@@ -104,6 +107,7 @@ func TestAppendVerificationRepairAllowsNewFailureAfterCompletedRepair(t *testing
 }
 
 func TestAppendVerificationRepairRefusesEvidenceWithoutCodeAuthority(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		kind FinalVerificationFailureKind
@@ -135,6 +139,7 @@ func TestAppendVerificationRepairRefusesEvidenceWithoutCodeAuthority(t *testing.
 }
 
 func TestAppendVerificationRepairRefusesThirdLifetimeAttempt(t *testing.T) {
+	t.Parallel()
 	detail := completedReopenDetail()
 	detail.Dir = t.TempDir()
 	detail.State.Workspace = &Workspace{HeadSHA: "head-c"}
@@ -158,6 +163,7 @@ func TestAppendVerificationRepairRefusesThirdLifetimeAttempt(t *testing.T) {
 }
 
 func TestDeriveVerificationRecoveryWithoutCurrentFailure(t *testing.T) {
+	t.Parallel()
 	if decision := DeriveVerificationRecovery(nil); decision.Kind != PlanActionNone || decision.AttemptCapReached {
 		t.Fatalf("recovery without current failure = %+v", decision)
 	}
@@ -167,6 +173,7 @@ func TestDeriveVerificationRecoveryWithoutCurrentFailure(t *testing.T) {
 }
 
 func TestDeriveVerificationRecoveryRemainsCappedWithoutCurrentStopEvidence(t *testing.T) {
+	t.Parallel()
 	detail := completedReopenDetail()
 	detail.State.Workspace = &Workspace{HeadSHA: "head-c"}
 	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head-c", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Fingerprint: "failure-c"}
@@ -192,6 +199,7 @@ func TestDeriveVerificationRecoveryRemainsCappedWithoutCurrentStopEvidence(t *te
 }
 
 func TestDeriveNextActionPrefersCurrentVerificationRepair(t *testing.T) {
+	t.Parallel()
 	detail := completedReopenDetail()
 	detail.State.Status = StatusInReview
 	detail.State.Workspace = &Workspace{HeadSHA: "head-a"}

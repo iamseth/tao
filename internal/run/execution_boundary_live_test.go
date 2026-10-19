@@ -16,6 +16,7 @@ import (
 )
 
 func TestInspectSelectedTypedPlacement(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
@@ -48,6 +49,7 @@ func TestInspectSelectedTypedPlacement(t *testing.T) {
 }
 
 func TestInspectSelectedAuthorizesOnlyCleanDescendantBlockedRestart(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
@@ -121,6 +123,7 @@ func (r *workspaceBoundaryAdvanceRecord) AdvanceWorkspaceHead(expectedBranch, ex
 }
 
 func TestInspectRecordedWorkspaceAdvancesProvenStaleHeadWithCompareAndSet(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		currentBranch string
@@ -171,6 +174,7 @@ func TestInspectRecordedWorkspaceAdvancesProvenStaleHeadWithCompareAndSet(t *tes
 }
 
 func TestInspectRecordedWorkspaceDoesNotAdvanceUnsafeOrUnprovenBoundary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		branch  string
@@ -261,6 +265,7 @@ func (r *rebaseRecoveryRecord) SettleWorkspaceRebase(expected plan.WorkspaceReba
 }
 
 func TestInspectRecordedWorkspaceRecoversIntentPersistedBeforeGitMutation(t *testing.T) {
+	t.Parallel()
 	repo, oldBase, oldHead, newBase := newRebaseRecoveryRepo(t, false)
 	intent := rebaseRecoveryIntent(t, repo, oldBase, oldHead, newBase)
 	detail, record := rebaseRecoveryDetail(t, intent)
@@ -280,6 +285,7 @@ func TestInspectRecordedWorkspaceRecoversIntentPersistedBeforeGitMutation(t *tes
 }
 
 func TestInspectRecordedWorkspaceRecoversIntentAfterConflictAbort(t *testing.T) {
+	t.Parallel()
 	repo, oldBase, oldHead, newBase := newRebaseRecoveryRepo(t, true)
 	intent := rebaseRecoveryIntent(t, repo, oldBase, oldHead, newBase)
 	if err := runRebaseRecoveryGitError(repo, "rebase", "master"); err == nil {
@@ -347,8 +353,6 @@ func TestInspectRecordedWorkspaceRecoversRebaseIntentForNonePolicy(t *testing.T)
 
 func newRebaseRecoveryRepo(t *testing.T, conflict bool) (repo, oldBase, oldHead, newBase string) {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_TERMINAL_PROMPT", "0")
 	repo = t.TempDir()
 	runRebaseRecoveryGit(t, repo, "init", "-b", "master")
 	runRebaseRecoveryGit(t, repo, "config", "user.name", "Tao Test")

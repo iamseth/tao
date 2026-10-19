@@ -1,6 +1,7 @@
 package run
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,7 +49,9 @@ func acquireCompletionFileLock(planDir, name string) (func() error, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("slice completion ownership unavailable: %w", err)
 	}
-	// Close releases this open file description only; repeated release must not
-	// affect a subsequent owner of the same inode.
-	return sync.OnceValue(file.Close), nil
+	// Unlock before Close: a child forked concurrently by any goroutine shares
+	// this open file description until it execs, so Close alone can leave the
+	// lock held briefly and refuse the next owner. Release acts on this
+	// description only, once, so it never affects a subsequent owner.
+	return sync.OnceValue(func() error { return errors.Join(filelock.Unlock(file), file.Close()) }), nil
 }

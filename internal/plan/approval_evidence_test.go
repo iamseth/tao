@@ -7,6 +7,7 @@ import (
 )
 
 func TestCheckSliceApprovalEvidence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, text string
 		want       bool
@@ -55,6 +56,7 @@ func TestCheckSliceApprovalEvidence(t *testing.T) {
 }
 
 func TestCheckSliceApprovalEvidenceRoutes(t *testing.T) {
+	t.Parallel()
 	contract := "Approval must include factual observations."
 	for _, tt := range []struct {
 		name  string
@@ -89,6 +91,7 @@ func TestCheckSliceApprovalEvidenceRoutes(t *testing.T) {
 }
 
 func TestApprovalEvidenceRequirementSafeAndBounded(t *testing.T) {
+	t.Parallel()
 	s := &Slice{ID: "001-a", Approval: &Approval{Required: true}, Goal: "Approval must include factual observations \x1b[31m\x00\u202e" + strings.Repeat("界", 1000)}
 	got := CheckSliceApprovalEvidence(s)
 	if got == nil {

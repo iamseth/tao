@@ -14,6 +14,7 @@ import (
 )
 
 func TestDeltaDiffStreams(t *testing.T) {
+	t.Parallel()
 	payload := strings.Repeat("patch\n", 100)
 	for _, configured := range []bool{false, true} {
 		for _, chunk := range []int{1, 17, 600} {
@@ -72,6 +73,7 @@ func TestDeltaDiffStreams(t *testing.T) {
 }
 
 func TestDeltaDiffLinkedWorktreeReadOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 

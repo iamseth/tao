@@ -26,6 +26,7 @@ func newTestRequest(input string, overrides runtimeconfig.RunOptionsPatch) (Requ
 }
 
 func TestExecutionDefaultsCannotGrantRecovery(t *testing.T) {
+	t.Parallel()
 	for _, typ := range []reflect.Type{reflect.TypeFor[ExecutionConfig](), reflect.TypeFor[Options]()} {
 		for _, name := range []string{"RecoveryMode", "RestartBlocked", "RepairVerification", "Reverify"} {
 			if _, ok := typ.FieldByName(name); ok {
@@ -36,6 +37,7 @@ func TestExecutionDefaultsCannotGrantRecovery(t *testing.T) {
 }
 
 func TestSequentialRequestsKeepRecoveryInvocationLocal(t *testing.T) {
+	t.Parallel()
 	service := NewService(&memoryRunRepository{}, io.Discard, Options{ExecutionConfig: ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
 	}})
@@ -73,6 +75,7 @@ func TestSequentialRequestsKeepRecoveryInvocationLocal(t *testing.T) {
 }
 
 func TestPrepareRequestConfigPreservesReviewSelector(t *testing.T) {
+	t.Parallel()
 	for _, selected := range []AgentKind{"", AgentPi, AgentClaude} {
 		defaults := ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ReviewAgent: selected}}
 		request := Request{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentClaude}}
@@ -96,6 +99,7 @@ func TestPrepareRequestConfigPreservesReviewSelector(t *testing.T) {
 }
 
 func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
+	t.Parallel()
 	request := Request{
 		Input:        "plan-a",
 		RecoveryMode: RecoveryMode{RestartBlocked: true, RepairVerification: true, Reverify: true},
@@ -126,6 +130,7 @@ func TestRequestForNextRoundClearsSingleShotRecoveryModes(t *testing.T) {
 }
 
 func TestRunReturnsCapabilityDisabledReasonsBeforeExecutor(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		detail *plan.PlanDetail
@@ -184,6 +189,7 @@ func TestRunReturnsCapabilityDisabledReasonsBeforeExecutor(t *testing.T) {
 }
 
 func TestCheckRequestCanStartRejectsEveryAbandonedRunModeWithSafeReason(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusAbandoned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.Events = append(detail.Events, plan.Event{
 		Type: plan.EventTypePlanAbandoned, Reason: "superseded\nby safer work\x1b[31m",
@@ -211,6 +217,7 @@ func TestCheckRequestCanStartRejectsEveryAbandonedRunModeWithSafeReason(t *testi
 }
 
 func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
+	t.Parallel()
 	request, err := newTestRequest("plan-a", runtimeconfig.RunOptionsPatch{
 		MaxSlices:     new(1),
 		CommitPolicy:  CommitPolicySlice,
@@ -242,6 +249,7 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 }
 
 func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		kind plan.FinalVerificationFailureKind
@@ -267,6 +275,7 @@ func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
 }
 
 func TestCheckRequestCanStartBaselineRepair(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindBaseline, Fingerprint: "failure"}
@@ -283,6 +292,7 @@ func TestCheckRequestCanStartBaselineRepair(t *testing.T) {
 }
 
 func TestCheckRequestCanStartAdmitsFirstTwoRepairAttemptsAndRefusesThird(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	detail.State.Workspace = &plan.Workspace{HeadSHA: "failed-head"}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure"}
@@ -305,6 +315,7 @@ func TestCheckRequestCanStartAdmitsFirstTwoRepairAttemptsAndRefusesThird(t *test
 }
 
 func TestCheckRequestCanStartRefusesReverifyWithoutCurrentFailedEvidence(t *testing.T) {
+	t.Parallel()
 	detail := completedReviewPlanDetail(t.TempDir())
 	err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{Reverify: true}})
 	if err == nil || !strings.Contains(err.Error(), "--reverify requires current failed final-verification evidence") {
@@ -313,6 +324,7 @@ func TestCheckRequestCanStartRefusesReverifyWithoutCurrentFailedEvidence(t *test
 }
 
 func TestOptionsExecutionConfigPassesThroughExecutionMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		options Options
@@ -334,6 +346,7 @@ func TestOptionsExecutionConfigPassesThroughExecutionMode(t *testing.T) {
 }
 
 func TestPrepareRequestConfigDefaultsExecutionModeToIsolated(t *testing.T) {
+	t.Parallel()
 	request, err := newTestRequest("plan-a", runtimeconfig.RunOptionsPatch{})
 	if err != nil {
 		t.Fatal(err)

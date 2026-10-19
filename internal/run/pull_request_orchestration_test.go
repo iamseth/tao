@@ -18,6 +18,7 @@ import (
 )
 
 func TestPullRequestOrchestrationRepairsWrongTypeAndRecordsExactHead(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	dirtyPath := filepath.Join(fixture.worktreeRoot, "dirty-before-correction.txt")
 	if err := os.WriteFile(dirtyPath, []byte("dirty\n"), 0o600); err != nil {
@@ -176,6 +177,7 @@ func TestPullRequestOrchestrationRepairsWrongTypeAndRecordsExactHead(t *testing.
 }
 
 func TestFinalizerConsumesProposalCorrectionBeforeInterruptedSessionCanReturn(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -234,6 +236,7 @@ func TestFinalizerConsumesProposalCorrectionBeforeInterruptedSessionCanReturn(t 
 }
 
 func TestFinalizerErroringCorrectionDirtyWorktreeCannotStartSecondSession(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -288,6 +291,7 @@ func TestFinalizerErroringCorrectionDirtyWorktreeCannotStartSecondSession(t *tes
 }
 
 func TestPullRequestOrchestrationRejectsHeadAdvancedByInvalidProposalCorrection(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -359,6 +363,7 @@ func TestPullRequestOrchestrationRejectsHeadAdvancedByInvalidProposalCorrection(
 }
 
 func TestPullRequestFullRunRejectsHeadAdvancedByFreshReview(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -458,6 +463,7 @@ func TestPullRequestFullRunRejectsHeadAdvancedByFreshReview(t *testing.T) {
 }
 
 func TestPullRequestFullRunRejectsDirtyExactHeadAfterFreshReview(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	detail, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -528,6 +534,7 @@ func TestPullRequestFullRunRejectsDirtyExactHeadAfterFreshReview(t *testing.T) {
 }
 
 func TestPullRequestResumeRejectsDirtyExactHeadBeforeProposalRepair(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreeRoot, "unreviewed-resume-change.txt"), []byte("dirty\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -587,6 +594,7 @@ func TestPullRequestResumeRejectsDirtyExactHeadBeforeProposalRepair(t *testing.T
 }
 
 func TestPullRequestOrchestrationRecordsCorrectionExhaustionBeforeRemoteMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newPullRequestOrchestrationFixture(t)
 	repo := plan.NewFileRepository(fixture.plansRoot)
 	loaded, err := repo.ResolvePlan(context.Background(), fixture.planDir)
@@ -643,6 +651,7 @@ func TestPullRequestOrchestrationRecordsCorrectionExhaustionBeforeRemoteMutation
 }
 
 func TestPullRequestOrchestrationPersistsPartialIdentityBeforeForgeRepair(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Date(2026, 8, 14, 2, 10, 0, 0, time.UTC)
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	operationErr := errors.New("assignment failed")
@@ -685,6 +694,7 @@ func TestPullRequestOrchestrationPersistsPartialIdentityBeforeForgeRepair(t *tes
 }
 
 func TestPullRequestOrchestrationDoesNotClaimFailedCreateWithoutIdentity(t *testing.T) {
+	t.Parallel()
 	detail := approvedPullRequestDetail(plan.ChangeTypeFeat, "head123")
 	operationErr := errors.New("connection reset")
 	boundary := pullRequestsFake{
@@ -718,6 +728,7 @@ func TestPullRequestOrchestrationDoesNotClaimFailedCreateWithoutIdentity(t *test
 }
 
 func TestDefaultPullRequestCreatorWiresGitHubForge(t *testing.T) {
+	t.Parallel()
 	creator, ok := defaultPullRequestCreatorWithBody(testRunExecution(ExecutionConfig{}, RunDependencies{}), nil).(deterministicPullRequestCreator)
 	if !ok {
 		t.Fatalf("unexpected pull request creator type")

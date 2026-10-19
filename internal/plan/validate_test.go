@@ -11,6 +11,7 @@ import (
 )
 
 func TestValidatePlanVerificationSliceTiming(t *testing.T) {
+	t.Parallel()
 	for _, evidence := range []bool{false, true} {
 		t.Run(map[bool]string{false: "without evidence", true: "matching evidence"}[evidence], func(t *testing.T) {
 			current := "001-a"
@@ -70,6 +71,7 @@ func TestValidatePlanVerificationSliceTiming(t *testing.T) {
 }
 
 func TestValidatePlanVerificationApprovalContractBoundary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeEditPlan(t, root)
 	repo := NewFileRepository(root)
@@ -108,6 +110,7 @@ func TestValidatePlanVerificationApprovalContractBoundary(t *testing.T) {
 }
 
 func TestValidatePlanVerificationCheckoutConfinementBoundary(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeEditPlan(t, root)
 	repo := NewFileRepository(root)
@@ -133,6 +136,7 @@ func TestValidatePlanVerificationCheckoutConfinementBoundary(t *testing.T) {
 }
 
 func TestValidatePlanVerificationFindsEverySliceCommand(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	mkdir(t, filepath.Join(repo, "pkg"))
 	detail := &PlanDetail{
@@ -153,6 +157,7 @@ func TestValidatePlanVerificationFindsEverySliceCommand(t *testing.T) {
 }
 
 func TestValidatePlanVerificationKeepsMissingPathsAsWarnings(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Repo: Repo{Root: repo}},
@@ -169,6 +174,7 @@ func TestValidatePlanVerificationKeepsMissingPathsAsWarnings(t *testing.T) {
 }
 
 func TestValidateSelectedSliceVerificationAllowsSameSliceFutureFile(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State: State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -188,6 +194,7 @@ func TestValidateSelectedSliceVerificationAllowsSameSliceFutureFile(t *testing.T
 }
 
 func TestValidateSelectedSliceVerificationAllowsDependencyFutureFile(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State: State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{
@@ -209,6 +216,7 @@ func TestValidateSelectedSliceVerificationAllowsDependencyFutureFile(t *testing.
 }
 
 func TestValidateSelectedSliceVerificationLeavesExistingFutureFileUnchanged(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	writeFile(t, filepath.Join(repo, "pkg", "existing.test.ts"), "")
 	detail := &PlanDetail{
@@ -228,6 +236,7 @@ func TestValidateSelectedSliceVerificationLeavesExistingFutureFileUnchanged(t *t
 }
 
 func TestValidatePlanVerificationAllowsSerialEarlierFutureFile(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State: State{Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a", "002-b"}}},
@@ -245,6 +254,7 @@ func TestValidatePlanVerificationAllowsSerialEarlierFutureFile(t *testing.T) {
 }
 
 func TestValidateSelectedSliceVerificationRequiresExactFutureFile(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State: State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -270,6 +280,7 @@ func TestValidateSelectedSliceVerificationRequiresExactFutureFile(t *testing.T) 
 }
 
 func TestValidatePlanVerificationKeepsShellHazardsAsWarnings(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Repo: Repo{Root: repo}},
@@ -286,6 +297,7 @@ func TestValidatePlanVerificationKeepsShellHazardsAsWarnings(t *testing.T) {
 }
 
 func TestValidateSelectedSliceVerificationKeepsMissingCommandPathAdvisory(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -302,6 +314,7 @@ func TestValidateSelectedSliceVerificationKeepsMissingCommandPathAdvisory(t *tes
 }
 
 func TestValidateSelectedSliceVerificationAtRootUsesOverride(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	workspace := t.TempDir()
 	writeFile(t, filepath.Join(workspace, "generated_test.go"), "")
@@ -317,6 +330,7 @@ func TestValidateSelectedSliceVerificationAtRootUsesOverride(t *testing.T) {
 }
 
 func TestValidateSelectedSliceVerificationKeepsShellHazardsAdvisory(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -333,6 +347,7 @@ func TestValidateSelectedSliceVerificationKeepsShellHazardsAdvisory(t *testing.T
 }
 
 func TestValidateSelectedSliceVerificationSuggestsPackageRelativePath(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	serviceDir := filepath.Join(repo, "services", "api")
 	writeFile(t, filepath.Join(serviceDir, "package.json"), `{"name":"@repo/api"}`)
@@ -352,6 +367,7 @@ func TestValidateSelectedSliceVerificationSuggestsPackageRelativePath(t *testing
 }
 
 func TestValidateSelectedSliceVerificationReportsRunnableError(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Repo: Repo{Root: repo}, Plan: PlanState{ID: "plan", PendingSlices: []string{"002-b"}}},
@@ -368,6 +384,7 @@ func TestValidateSelectedSliceVerificationReportsRunnableError(t *testing.T) {
 }
 
 func TestValidatePlanVerificationWarnsForOversizedSliceGuardrails(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Repo: Repo{Root: t.TempDir()}},
 		Slices: SlicesFile{Slices: []Slice{{
@@ -390,6 +407,7 @@ func TestValidatePlanVerificationWarnsForOversizedSliceGuardrails(t *testing.T) 
 }
 
 func TestValidatePlanVerificationGateParity(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name        string
 		files       []string
@@ -460,6 +478,7 @@ func TestValidatePlanVerificationGateParity(t *testing.T) {
 }
 
 func TestValidatePlanVerificationGateParityOrder(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		pending []string
@@ -503,6 +522,7 @@ func TestValidatePlanVerificationGateParityOrder(t *testing.T) {
 }
 
 func TestValidatePlanVerificationWarnsForUnsafeExpectedFiles(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Repo: Repo{Root: t.TempDir()}},
 		Slices: SlicesFile{Slices: []Slice{{
@@ -522,6 +542,7 @@ func TestValidatePlanVerificationWarnsForUnsafeExpectedFiles(t *testing.T) {
 }
 
 func TestValidatePlanVerificationWarnsForMissingVerificationCommands(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Repo: Repo{Root: t.TempDir()}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a"}}},
@@ -537,6 +558,7 @@ func TestValidatePlanVerificationWarnsForMissingVerificationCommands(t *testing.
 }
 
 func TestValidateSelectedSliceVerificationWarnsForSelectedGuardrailsOnly(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Status: StatusPlanned, Repo: Repo{Root: t.TempDir()}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a", "002-b"}}},
 		Slices: SlicesFile{Slices: []Slice{
@@ -555,6 +577,7 @@ func TestValidateSelectedSliceVerificationWarnsForSelectedGuardrailsOnly(t *test
 }
 
 func TestValidateSelectedSliceVerificationBlocksMissingVerificationCommands(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusPlanned, Repo: Repo{Root: t.TempDir()}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
@@ -570,6 +593,7 @@ func TestValidateSelectedSliceVerificationBlocksMissingVerificationCommands(t *t
 }
 
 func TestValidateRequiredInputDeclarationsAndKinds(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	writeFile(t, filepath.Join(repo, "input.txt"), "input")
 	mkdir(t, filepath.Join(repo, "input-dir"))
@@ -626,6 +650,7 @@ func TestValidateRequiredInputDeclarationsAndKinds(t *testing.T) {
 }
 
 func TestValidatePlanRequiredInputAllowsOnlyExactDirectProducer(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	verification := Verification{Commands: []string{"go test ./internal/plan"}}
 	tests := []struct {
@@ -702,6 +727,7 @@ func TestValidatePlanRequiredInputAllowsOnlyExactDirectProducer(t *testing.T) {
 }
 
 func TestValidateSelectedRequiredInputUsesOverrideAndRequiresExistence(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	workspace := t.TempDir()
 	writeFile(t, filepath.Join(repo, "generated", "input.txt"), "control checkout only")
@@ -735,6 +761,7 @@ func TestValidateSelectedRequiredInputUsesOverrideAndRequiresExistence(t *testin
 }
 
 func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) {
+	t.Parallel()
 	for _, commands := range [][]string{nil, {}, {"", "  ", "\t"}} {
 		detail := &PlanDetail{
 			State:  State{Status: StatusPlanned, Repo: Repo{Root: t.TempDir()}, Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
@@ -748,6 +775,7 @@ func TestValidateSelectedSliceVerificationBlocksBlankCommandLists(t *testing.T) 
 }
 
 func TestValidateDetailAcceptsAbandonedOverrideWithUnfinishedSlices(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 9, 1, 16, 0, 0, 0, time.UTC)
 	detail := &PlanDetail{
 		State: State{Status: StatusAbandoned, Plan: PlanState{
@@ -768,6 +796,7 @@ func TestValidateDetailAcceptsAbandonedOverrideWithUnfinishedSlices(t *testing.T
 }
 
 func TestValidateDetailReportsInvalidAbandonmentEvidence(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:  State{Status: StatusAbandoned, Plan: PlanState{ID: "plan"}},
 		Slices: SlicesFile{PlanID: "plan"},
@@ -791,6 +820,7 @@ func TestValidateDetailReportsInvalidAbandonmentEvidence(t *testing.T) {
 }
 
 func TestValidateDetailBaselineEvidence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		baseline *FinalVerificationBaseline
@@ -812,6 +842,7 @@ func TestValidateDetailBaselineEvidence(t *testing.T) {
 }
 
 func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
+	t.Parallel()
 	validKinds := []FinalVerificationFailureKind{FinalVerificationFailureKindBaseline, "", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand}
 	for _, kind := range validKinds {
 		detail := &PlanDetail{
@@ -837,6 +868,7 @@ func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
 }
 
 func TestValidateDetailAllowsCanonicalCurrentSliceStatuses(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{StatusPending, StatusInProgress, StatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			current := "001-a"
@@ -854,6 +886,7 @@ func TestValidateDetailAllowsCanonicalCurrentSliceStatuses(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForBlockedCurrentSliceMissingFromPendingQueue(t *testing.T) {
+	t.Parallel()
 	current := "001-a"
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{"002-b"}}},
@@ -871,6 +904,7 @@ func TestValidateDetailWarnsForBlockedCurrentSliceMissingFromPendingQueue(t *tes
 }
 
 func TestValidateDetailWarnsForNonCurrentActivePendingEntries(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{StatusInProgress, StatusBlocked} {
 		t.Run(status, func(t *testing.T) {
 			current := "001-a"
@@ -893,6 +927,7 @@ func TestValidateDetailWarnsForNonCurrentActivePendingEntries(t *testing.T) {
 }
 
 func TestValidateDetailStillWarnsForMalformedQueueWithCurrentBlockedSlice(t *testing.T) {
+	t.Parallel()
 	current := "001-a"
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{current, "002-b", "002-b"}}},
@@ -915,6 +950,7 @@ func TestValidateDetailStillWarnsForMalformedQueueWithCurrentBlockedSlice(t *tes
 }
 
 func TestValidateDetailWarnsForStaleCompletedCurrentSliceRecovery(t *testing.T) {
+	t.Parallel()
 	current := "001-a"
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{ID: "plan", CurrentSlice: &current, PendingSlices: []string{"002-b"}, CompletedSlices: []string{"001-a"}}},
@@ -932,6 +968,7 @@ func TestValidateDetailWarnsForStaleCompletedCurrentSliceRecovery(t *testing.T) 
 }
 
 func TestValidateDetailWarnsForActiveEmptyPendingPlan(t *testing.T) {
+	t.Parallel()
 	current := "001-a"
 	detail := &PlanDetail{
 		State:         State{Status: StatusInProgress, Plan: PlanState{ID: "plan", CurrentSlice: &current}},
@@ -946,6 +983,7 @@ func TestValidateDetailWarnsForActiveEmptyPendingPlan(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForEditedQueueInconsistencies(t *testing.T) {
+	t.Parallel()
 	current := "003-c"
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{
@@ -976,6 +1014,7 @@ func TestValidateDetailWarnsForEditedQueueInconsistencies(t *testing.T) {
 }
 
 func TestSliceTagsRemainOptionalForExistingPlans(t *testing.T) {
+	t.Parallel()
 	var slices SlicesFile
 	if err := json.Unmarshal([]byte(`{"schema":"tao.plan.slices.v1","plan_id":"plan","execution":{"mode":"serial","parallel_safe":false},"slices":[{"id":"001-a","title":"A","status":"pending","depends_on":[],"timing":{"created_at":"2026-05-03T23:00:00Z","started_at":null,"completed_at":null,"updated_at":"2026-05-03T23:00:00Z","last_activity_at":null,"duration_seconds":null},"goal":"","context":"","tasks":[],"expected_files":[],"verification":{"commands":[],"manual_checks":[]}}]}`), &slices); err != nil {
 		t.Fatal(err)
@@ -995,6 +1034,7 @@ func TestSliceTagsRemainOptionalForExistingPlans(t *testing.T) {
 }
 
 func TestValidateDetailAllowsValidDecisionAndSequenceMetadata(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{
 			ID: "plan", PendingSlices: []string{"001-a"},
@@ -1016,6 +1056,7 @@ func TestValidateDetailAllowsValidDecisionAndSequenceMetadata(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForMalformedPresentDecisionAndSequence(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{
 			ID: "plan", PendingSlices: []string{"001-a"},
@@ -1061,6 +1102,7 @@ func TestValidateDetailWarnsForMalformedPresentDecisionAndSequence(t *testing.T)
 }
 
 func TestValidateDetailWarnsForNonPositiveSequenceBounds(t *testing.T) {
+	t.Parallel()
 	warnings := validateSequence("plan", &Sequence{})
 	for _, want := range []string{"position must be at least 1", "total must be at least 1"} {
 		if !containsWarning(warnings, want) {
@@ -1070,6 +1112,7 @@ func TestValidateDetailWarnsForNonPositiveSequenceBounds(t *testing.T) {
 }
 
 func TestValidateRuntimePrerequisites(t *testing.T) {
+	t.Parallel()
 	valid := []RuntimePrerequisite{{PlanID: "other-plan", Reason: "Its merged schema is required."}}
 	if warnings := validateRuntimePrerequisites("plan", valid); len(warnings) != 0 {
 		t.Fatalf("valid prerequisites produced warnings: %v", warnings)
@@ -1090,6 +1133,7 @@ func TestValidateRuntimePrerequisites(t *testing.T) {
 }
 
 func TestValidateRuntimePrerequisiteCycleFollowsOnlyResolvablePlans(t *testing.T) {
+	t.Parallel()
 	plans := map[string][]RuntimePrerequisite{
 		"plan-b": {{PlanID: "plan-c", Reason: "C first"}},
 		"plan-c": {{PlanID: "plan-a", Reason: "A first"}},
@@ -1108,6 +1152,7 @@ func TestValidateRuntimePrerequisiteCycleFollowsOnlyResolvablePlans(t *testing.T
 }
 
 func TestValidateDetailAllowsSupportedAndLegacyPlanChangeTypes(t *testing.T) {
+	t.Parallel()
 	changeTypes := append(SupportedChangeTypes(), "")
 	for _, changeType := range changeTypes {
 		t.Run(string(changeType), func(t *testing.T) {
@@ -1124,6 +1169,7 @@ func TestValidateDetailAllowsSupportedAndLegacyPlanChangeTypes(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForInvalidPlanChangeType(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:         State{Plan: PlanState{ID: "plan", ChangeType: "feature", PendingSlices: []string{"001-a"}}},
 		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
@@ -1137,6 +1183,7 @@ func TestValidateDetailWarnsForInvalidPlanChangeType(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForTypedApprovedProposalMismatch(t *testing.T) {
+	t.Parallel()
 	base := PlanDetail{
 		State: State{Plan: PlanState{
 			ID: "plan", ChangeType: ChangeTypeFix, PendingSlices: []string{"001-a"},
@@ -1166,6 +1213,7 @@ func TestValidateDetailWarnsForTypedApprovedProposalMismatch(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForMalformedHistoricalFinalizationFailure(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{Plan: PlanState{
 			ID: "plan", PendingSlices: []string{"001-a"},
@@ -1181,6 +1229,7 @@ func TestValidateDetailWarnsForMalformedHistoricalFinalizationFailure(t *testing
 }
 
 func TestValidateDetailAllowsMissingWorkspaceMetadata(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State:         State{Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}}},
 		Slices:        SlicesFile{PlanID: "plan", Slices: []Slice{{ID: "001-a", Status: StatusPending}}},
@@ -1194,6 +1243,7 @@ func TestValidateDetailAllowsMissingWorkspaceMetadata(t *testing.T) {
 }
 
 func TestValidateDetailWarnsForInvalidWorkspaceMetadata(t *testing.T) {
+	t.Parallel()
 	detail := &PlanDetail{
 		State: State{
 			Plan: PlanState{ID: "plan", PendingSlices: []string{"001-a"}},

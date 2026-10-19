@@ -17,6 +17,7 @@ type retryableTransportTestError struct{ error }
 func (retryableTransportTestError) RetryableTransportFailure() {}
 
 func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	transportErr := retryableTransportTestError{error: errors.New("transport dropped")}
@@ -86,6 +87,7 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 }
 
 func TestServiceExecuteTransportRetryEventuallySucceedsOnThirdSession(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	completed := cloneRunRestartDetail(t, detail)
@@ -135,6 +137,7 @@ func TestServiceExecuteTransportRetryEventuallySucceedsOnThirdSession(t *testing
 }
 
 func TestServiceExecuteTransportRetryAcceptsLateDurableCompletionWithoutRetryHandoff(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	completed := cloneRunRestartDetail(t, detail)
@@ -181,6 +184,7 @@ func TestServiceExecuteTransportRetryAcceptsLateDurableCompletionWithoutRetryHan
 }
 
 func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testing.T) {
+	t.Parallel()
 	t.Run("cancellation", func(t *testing.T) {
 		root := t.TempDir()
 		detail := interruptedServiceRunDetail(t, root)
@@ -238,6 +242,7 @@ func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testin
 }
 
 func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		mutate     func(*plan.PlanDetail, string)

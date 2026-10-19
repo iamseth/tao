@@ -20,7 +20,6 @@ type testRepo struct {
 
 func newTestRepo(t *testing.T) testRepo {
 	t.Helper()
-	configureHermeticGit(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "master")
 	runGit(t, dir, "config", "user.name", "Tao Test")
@@ -33,13 +32,6 @@ func newTestRepo(t *testing.T) testRepo {
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
 	return testRepo{path: dir}
-}
-
-func configureHermeticGit(t *testing.T) {
-	t.Helper()
-	t.Setenv("GIT_TERMINAL_PROMPT", "0")
-	t.Setenv("GIT_EDITOR", "true")
-	t.Setenv("GIT_SEQUENCE_EDITOR", "true")
 }
 
 func runGit(t *testing.T, cwd string, args ...string) string {
@@ -57,6 +49,7 @@ func runGit(t *testing.T, cwd string, args ...string) string {
 }
 
 func TestManagerUsesCommandRunnerSeam(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		key := workspaceGitKey(args)
@@ -89,6 +82,7 @@ func TestManagerUsesCommandRunnerSeam(t *testing.T) {
 }
 
 func TestPrepareDetectsStaleRecordedBaseWithFakeGitOutput(t *testing.T) {
+	t.Parallel()
 	var calls []string
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		key := workspaceGitKey(args)
@@ -124,6 +118,7 @@ func TestPrepareDetectsStaleRecordedBaseWithFakeGitOutput(t *testing.T) {
 }
 
 func TestPrepareCurrentStrategyFallbackRecordsGitMetadata(t *testing.T) {
+	t.Parallel()
 	runner := func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		switch workspaceGitKey(args) {
 		case "branch --show-current":

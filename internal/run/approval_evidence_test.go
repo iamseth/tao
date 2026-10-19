@@ -29,6 +29,7 @@ func assertApprovalEvidenceRefusal(t *testing.T, err error) {
 }
 
 func TestApprovalEvidenceRefusesBeforeStart(t *testing.T) {
+	t.Parallel()
 	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	detail.State.Repo.Root = t.TempDir()
 	requireApprovalFacts(&detail.Slices.Slices[0])
@@ -55,6 +56,7 @@ func assertNoApprovalAdmissionEvents(t *testing.T, events []plan.Event) {
 }
 
 func TestApprovalEvidenceContinueAndResume(t *testing.T) {
+	t.Parallel()
 	for _, blocked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resume", true: "continue"}[blocked], func(t *testing.T) {
 			root := t.TempDir()
@@ -125,6 +127,7 @@ func TestApprovalEvidenceContinueAndResume(t *testing.T) {
 // Keep this symptom regression compatible with the pre-guard API so it can
 // reproduce provider admission and blocked-state mutation on the parent commit.
 func TestApprovalEvidenceAdmissionBaselineRegression(t *testing.T) {
+	t.Parallel()
 	for _, blocked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resume", true: "continue"}[blocked], func(t *testing.T) {
 			root := t.TempDir()
@@ -170,6 +173,7 @@ func TestApprovalEvidenceAdmissionBaselineRegression(t *testing.T) {
 }
 
 func TestApprovalEvidenceTransportReload(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	initial := interruptedServiceRunDetail(t, root)
 	reloaded := cloneRunRestartDetail(t, initial)
@@ -192,6 +196,7 @@ func TestApprovalEvidenceTransportReload(t *testing.T) {
 }
 
 func TestApprovalEvidenceSelectedSliceIsolation(t *testing.T) {
+	t.Parallel()
 	for _, maxSlices := range []int{0, 1} {
 		t.Run(strconv.Itoa(maxSlices), func(t *testing.T) {
 			root := t.TempDir()
@@ -227,6 +232,7 @@ func TestApprovalEvidenceSelectedSliceIsolation(t *testing.T) {
 }
 
 func TestApprovalEvidenceRequiredInputExecutionRoot(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"missing", "directory", "invalid declaration", "file"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
@@ -271,6 +277,7 @@ func TestApprovalEvidenceRequiredInputExecutionRoot(t *testing.T) {
 }
 
 func TestApprovalEvidencePreservesPostIntentRoute(t *testing.T) {
+	t.Parallel()
 	detail := interruptedServiceRunDetail(t, t.TempDir())
 	requireApprovalFacts(&detail.Slices.Slices[0])
 	detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Hash: "intent", Policy: "slice"}
@@ -289,6 +296,7 @@ func TestApprovalEvidencePreservesPostIntentRoute(t *testing.T) {
 }
 
 func TestApprovalEvidenceRefusesBeforeBlockedRestart(t *testing.T) {
+	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
 	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
@@ -338,6 +346,7 @@ func TestApprovalEvidenceRefusesBeforeBlockedRestart(t *testing.T) {
 }
 
 func TestApprovalEvidenceDoesNotGateExactIntentRecovery(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
 	requireApprovalFacts(&detail.Slices.Slices[0])

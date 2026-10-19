@@ -11,6 +11,7 @@ import (
 )
 
 func TestFileRepositoryArtifactAndEditMethods(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeEditPlan(t, root)
 	planDir := filepath.Join(root, "edit")
@@ -100,6 +101,7 @@ func TestFileRepositoryArtifactAndEditMethods(t *testing.T) {
 }
 
 func TestFileRepositoryRejectsInvalidRemoveSliceWithoutPersisting(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeEditPlan(t, root)
 	repo := NewFileRepository(root)

@@ -14,6 +14,7 @@ func (f eventAppenderFunc) AppendEvent(planDir string, event plan.Event) error {
 }
 
 func TestCheckRequestCanStartHonorsRunAndContinueCapabilities(t *testing.T) {
+	t.Parallel()
 	runnable := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 	if err := CheckRequestCanStart(runnable, Request{}); err != nil {
 		t.Fatalf("expected runnable plan to start: %v", err)

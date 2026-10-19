@@ -3,6 +3,7 @@ package plan
 import "testing"
 
 func TestNormalizeReviewFindingPath(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ input, want string }{
 		{`./internal\\rework\\generate.go`, "internal/rework/generate.go"},
 		{" ././internal//plan/ ", "internal/plan"},
@@ -23,6 +24,7 @@ func TestNormalizeReviewFindingPath(t *testing.T) {
 }
 
 func TestPathsOverlap(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		file, expected string
 		want           bool

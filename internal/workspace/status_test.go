@@ -3,6 +3,7 @@ package workspace
 import "testing"
 
 func TestSetBaseRefreshStatus(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name        string
 		baseSHA     string

@@ -35,6 +35,7 @@ func TestRunGitFixturesDisableAutomaticMaintenance(t *testing.T) {
 }
 
 func TestSliceRepoTemplateCopies(t *testing.T) {
+	t.Parallel()
 	first, second := initSliceCompletionRepo(t), initSliceCompletionRepo(t)
 	for _, root := range []string{first, second} {
 		for _, check := range []struct {
@@ -95,9 +96,16 @@ func TestSliceRepoTemplateCopies(t *testing.T) {
 	if err := os.RemoveAll(first); err != nil {
 		t.Fatal(err)
 	}
-	for _, root := range []string{second, initSliceCompletionRepo(t)} {
-		if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); got != head {
-			t.Fatal("shared ref mutation")
+	templated := canCopySliceRepo()
+	for i, root := range []string{second, initSliceCompletionRepo(t)} {
+		// Without the template a new repository has its own timestamped commit,
+		// so only copies are expected to share the original HEAD.
+		if i == 0 || templated {
+			if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")); got != head {
+				t.Fatal("shared ref mutation")
+			}
+		} else if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-list", "--count", "HEAD")); got != "1" {
+			t.Fatalf("new repository history = %s commits, want 1", got)
 		}
 		if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "config", "user.name")); got != "Tao Test" {
 			t.Fatal("shared config mutation")
@@ -106,6 +114,7 @@ func TestSliceRepoTemplateCopies(t *testing.T) {
 }
 
 func TestSliceRepoTemplateConcurrentAndFailure(t *testing.T) {
+	t.Parallel()
 	var cache sliceRepoTemplate
 	t.Cleanup(func() {
 		if err := cache.cleanup(); err != nil {

@@ -56,6 +56,7 @@ func (s *sliceCompletionStore) AppendEvent(_ string, event plan.Event) error {
 }
 
 func TestExpectedPlanCommitPathsIncludesOnlyCompletedAndSelectedSlices(t *testing.T) {
+	t.Parallel()
 	detail := &plan.PlanDetail{
 		State: plan.State{Plan: plan.PlanState{CompletedSlices: []string{"completed"}}},
 		Slices: plan.SlicesFile{Slices: []plan.Slice{
@@ -88,6 +89,7 @@ func TestExpectedPlanCommitPathsIncludesOnlyCompletedAndSelectedSlices(t *testin
 }
 
 func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{}
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -133,6 +135,7 @@ func TestSliceCompletionRejectsAbandonedBeforeGitOrArtifactMutation(t *testing.T
 }
 
 func TestSliceCompletionRejectsAbandonmentSettledBeforeRefreshedMutation(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		policy CommitPolicy
@@ -205,6 +208,7 @@ func TestSliceCompletionRejectsAbandonmentSettledBeforeRefreshedMutation(t *test
 }
 
 func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOriginalParent(t *testing.T) {
+	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
 	root := record.Detail().Slices.Slices[0].ExecutionRoot
@@ -259,6 +263,7 @@ func TestSliceCompletionCommitsInterruptedTrackedStagedAndUntrackedWorkAtOrigina
 }
 
 func TestInterruptedSliceCompletionReloadBeforeParentExitIsRecoverable(t *testing.T) {
+	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
 	detail := record.Detail()
@@ -312,6 +317,7 @@ func countPlanEvents(events []plan.Event, eventType string) int {
 }
 
 func TestHistoricalSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{failState: true})
 	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\n"), 0o600); err != nil {
@@ -351,6 +357,7 @@ func TestHistoricalSliceCompletionCommitsAndRecoversInterruptedMetadata(t *testi
 }
 
 func TestHistoricalSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failSlicesAt: 2}
 	_, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -390,6 +397,7 @@ func TestHistoricalSliceCompletionRecoversCommitAfterStateOnlyCompletionWrite(t 
 }
 
 func TestHistoricalSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failEvent: true}
 	_, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -431,6 +439,7 @@ func TestHistoricalSliceCompletionRecoversMissingCompletionEvent(t *testing.T) {
 }
 
 func TestSliceCompletionRetryConsumesSettledJournalState(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -505,6 +514,7 @@ func TestSliceCompletionRetryConsumesSettledJournalState(t *testing.T) {
 }
 
 func TestReviewStateReadSettlesPendingJournal(t *testing.T) {
+	t.Parallel()
 	plansDir := t.TempDir()
 	planDir := filepath.Join(plansDir, "plan-a")
 	if err := os.Mkdir(planDir, 0o700); err != nil {
@@ -541,6 +551,7 @@ func TestReviewStateReadSettlesPendingJournal(t *testing.T) {
 }
 
 func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
+	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
 	detail := record.Detail()
@@ -578,6 +589,7 @@ func TestSliceCompletionCommitsUndeclaredSafePathsWithWarning(t *testing.T) {
 }
 
 func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
+	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
 	detail := record.Detail()
@@ -602,6 +614,7 @@ func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
 }
 
 func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		path          string
@@ -665,6 +678,7 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 }
 
 func TestSliceCompletionRejectsThenAcceptsProposalBeforeIntent(t *testing.T) {
+	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
 	detail := record.Detail()
@@ -700,6 +714,7 @@ func TestSliceCompletionRejectsThenAcceptsProposalBeforeIntent(t *testing.T) {
 }
 
 func TestSliceCompletionRejectsReservedTrailerBeforeIntent(t *testing.T) {
+	t.Parallel()
 	fixture := verifiedCompletionFixture(t, CommitPolicySlice, "true")
 	record := fixture.Record
 	detail := record.Detail()
@@ -717,6 +732,7 @@ func TestSliceCompletionRejectsReservedTrailerBeforeIntent(t *testing.T) {
 }
 
 func TestHistoricalSliceCompletionConflictingProposalCannotReuseIntent(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	store := &sliceCompletionStore{failState: true}
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, store)
@@ -745,6 +761,7 @@ func TestHistoricalSliceCompletionConflictingProposalCannotReuseIntent(t *testin
 }
 
 func TestHistoricalSliceCompletionRecoversLegacyIntentWithoutMessageValidation(t *testing.T) {
+	t.Parallel()
 	root := initSliceCompletionRepo(t)
 	detail, record := sliceCompletionRecord(t, root, CommitPolicySlice, &sliceCompletionStore{})
 	parent := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
@@ -850,9 +867,12 @@ func sliceCompletionRecord(t *testing.T, root string, policy CommitPolicy, store
 
 // isolateSliceStagingGitConfig keeps the developer's global ignore and system
 // configuration from masking the porcelain states these tests construct.
+// TestMain's SetupGit provides the isolation; this only guards that it holds.
 func isolateSliceStagingGitConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	if os.Getenv("GIT_CONFIG_NOSYSTEM") != "1" || os.Getenv("GIT_CONFIG_GLOBAL") == "" {
+		t.Fatal("slice staging tests require the SetupGit isolated Git configuration")
+	}
 }
 
 func writeSliceStagingFile(t *testing.T, root string, name string, content string) {
@@ -924,6 +944,7 @@ func assertSliceStagingCommitted(t *testing.T, fixture SliceCompletionRequest, r
 }
 
 func TestSliceCompletionCommitsGitRmDeletionWithTrackedModification(t *testing.T) {
+	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/removed.go": "package pkg\n"})
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
 	runCommitTestGitCommand(t, root, "rm", "--quiet", "--", "pkg/removed.go")
@@ -948,6 +969,7 @@ func TestSliceCompletionCommitsGitRmDeletionWithTrackedModification(t *testing.T
 }
 
 func TestSliceCompletionStagesTrackedChangesUnderNewlyIgnoredDirectory(t *testing.T) {
+	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{
 		".gitignore":          "binary.dat\n",
 		"pkg/cache/kept.go":   "package cache\n",
@@ -981,6 +1003,7 @@ func TestSliceCompletionStagesTrackedChangesUnderNewlyIgnoredDirectory(t *testin
 }
 
 func TestSliceCompletionReplaysPartiallyStagedFailedAttemptAtSameIntent(t *testing.T) {
+	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n"})
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
 	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // modified\n")
@@ -1027,6 +1050,7 @@ func TestSliceCompletionReplaysPartiallyStagedFailedAttemptAtSameIntent(t *testi
 }
 
 func TestSliceCompletionStagesCollapsedUntrackedDirectory(t *testing.T) {
+	t.Parallel()
 	fixture, root := sliceStagingFixture(t, nil)
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
 	writeSliceStagingFile(t, root, "pkg/cache/a.go", "package cache\n")
@@ -1042,6 +1066,7 @@ func TestSliceCompletionStagesCollapsedUntrackedDirectory(t *testing.T) {
 }
 
 func TestSliceCompletionReaddsWorktreeCopyOfStagedDeletion(t *testing.T) {
+	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n", "pkg/cache/other.go": "package cache\n"})
 	originalHead := fixture.Record.Detail().Slices.Slices[0].ExecutionStart.Head
 	runCommitTestGitCommand(t, root, "rm", "--quiet", "--", "pkg/cache/kept.go")
@@ -1066,6 +1091,7 @@ func TestSliceCompletionReaddsWorktreeCopyOfStagedDeletion(t *testing.T) {
 }
 
 func TestSliceCompletionStagingFailureNamesExecutionRootAndMustChangeGuidance(t *testing.T) {
+	t.Parallel()
 	fixture, root := sliceStagingFixture(t, map[string]string{"pkg/cache/kept.go": "package cache\n"})
 	writeSliceStagingFile(t, root, "pkg/cache/kept.go", "package cache // modified\n")
 	headBefore := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))

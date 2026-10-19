@@ -12,6 +12,7 @@ import (
 )
 
 func TestSingleMergeReviewRequiredFilesValidation(t *testing.T) {
+	t.Parallel()
 	paths := make([]string, 17)
 	for i := range paths {
 		paths[i] = "a.go"
@@ -45,6 +46,7 @@ func TestSingleMergeReviewRequiredFilesValidation(t *testing.T) {
 }
 
 func TestPlanRecordClearSingleMergeIntentReplaysInterruptedJournalIdempotently(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"state", "remove"} {
 		t.Run(operation, func(t *testing.T) {
 			root := t.TempDir()
@@ -112,6 +114,7 @@ func TestPlanRecordClearSingleMergeIntentReplaysInterruptedJournalIdempotently(t
 }
 
 func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -158,6 +161,7 @@ func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testin
 }
 
 func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -203,6 +207,7 @@ func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
 }
 
 func TestRecordWorkspacePreparationTransitionsPreserveAndClearDependencyEvidence(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	intent := WorkspaceRebaseIntent{
@@ -280,6 +285,7 @@ func TestRecordWorkspacePreparationTransitionsPreserveAndClearDependencyEvidence
 }
 
 func TestRecordWorkspacePreparingRefreshesStaleDisjointWriter(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initial := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, initial)
@@ -313,6 +319,7 @@ func TestRecordWorkspacePreparingRefreshesStaleDisjointWriter(t *testing.T) {
 }
 
 func TestRecordWorkspaceReadyRetryRecoversJournalWithoutPublishingFailedPostimage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Workspace = &Workspace{
@@ -358,6 +365,7 @@ func TestRecordWorkspaceReadyRetryRecoversJournalWithoutPublishingFailedPostimag
 }
 
 func TestAdvanceWorkspaceHeadAdvancesExactBoundaryAndPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head", BaseSHA: "base-head"}
@@ -415,6 +423,7 @@ func TestAdvanceWorkspaceHeadAdvancesExactBoundaryAndPreservesUnknownFields(t *t
 }
 
 func TestAdvanceWorkspaceHeadRejectsInvalidBoundary(t *testing.T) {
+	t.Parallel()
 	t.Run("missing expected branch", func(t *testing.T) {
 		dir := t.TempDir()
 		detail := startSliceDetail(dir)
@@ -465,6 +474,7 @@ func TestAdvanceWorkspaceHeadRejectsInvalidBoundary(t *testing.T) {
 }
 
 func TestAdvanceWorkspaceHeadUsesExactBoundedValues(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Workspace = &Workspace{Branch: " feature/plan-a ", HeadSHA: " old head "}
@@ -489,6 +499,7 @@ func TestAdvanceWorkspaceHeadUsesExactBoundedValues(t *testing.T) {
 }
 
 func TestAdvanceWorkspaceHeadRejectsStaleConcurrentBoundaryChange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	initial := startSliceDetail(dir)
 	initial.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head"}
@@ -516,6 +527,7 @@ func TestAdvanceWorkspaceHeadRejectsStaleConcurrentBoundaryChange(t *testing.T) 
 }
 
 func TestAdvanceWorkspaceHeadRetryRecoversJournalWithoutPublishingFailedPostimage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	detail.State.Workspace = &Workspace{Branch: "feature/plan-a", HeadSHA: "old-head"}
@@ -561,6 +573,7 @@ func TestAdvanceWorkspaceHeadRetryRecoversJournalWithoutPublishingFailedPostimag
 }
 
 func TestRecordPRFeedbackTriageWritesStateAndEvent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -590,6 +603,7 @@ func TestRecordPRFeedbackTriageWritesStateAndEvent(t *testing.T) {
 }
 
 func TestRecordPRFeedbackTriageIsIdempotentForUnchangedThreadSet(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -616,6 +630,7 @@ func TestRecordPRFeedbackTriageIsIdempotentForUnchangedThreadSet(t *testing.T) {
 }
 
 func TestRecordPRFeedbackTriageSupersedesChangedThreadSet(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
@@ -647,6 +662,7 @@ func TestRecordPRFeedbackTriageSupersedesChangedThreadSet(t *testing.T) {
 }
 
 func TestReopenFromPullRequestConsumesThreadAcrossCompletedPRCycle(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
 	detail.State.Plan.PullRequest = &PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17", CreatedAt: detail.State.UpdatedAt, Branch: "feature", HeadSHA: "old-head"}
@@ -736,6 +752,7 @@ func TestReopenFromPullRequestConsumesThreadAcrossCompletedPRCycle(t *testing.T)
 }
 
 func TestReopenFromPullRequestRejectsUntriagedThreadWithoutMutation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
 	detail.State.Plan.PRFeedbackTriage = PRFeedbackTriageResult{
@@ -778,6 +795,7 @@ func TestReopenFromPullRequestRejectsUntriagedThreadWithoutMutation(t *testing.T
 }
 
 func TestLegacyPlanStateOmitsAbsentPRFeedbackTriage(t *testing.T) {
+	t.Parallel()
 	var state State
 	if err := json.Unmarshal([]byte(`{"schema":"tao.plan.state.v1","plan":{"id":"legacy"}}`), &state); err != nil {
 		t.Fatal(err)
@@ -821,6 +839,7 @@ func requireRecordTestTriageEvents(t *testing.T, events []Event, want int) []Eve
 }
 
 func TestRecordReviewRejectsUnsettledWorkWithoutMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		apply func(*PlanRecord, PlanReview) error
@@ -888,6 +907,7 @@ func TestRecordReviewRejectsUnsettledWorkWithoutMutation(t *testing.T) {
 }
 
 func TestReopenFromPullRequestRecordsTheRoundItCreated(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
 	detail.State.Plan.PullRequest = &PullRequest{Number: 21, URL: "https://github.com/owner/repo/pull/21", CreatedAt: detail.State.UpdatedAt, Branch: "feature", HeadSHA: "old-head"}
@@ -937,6 +957,7 @@ func TestReopenFromPullRequestRecordsTheRoundItCreated(t *testing.T) {
 }
 
 func TestReopenFromPullRequestOmitsRoundEventForUnencodedSlices(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	detail := completedReopenDetail()
 	detail.State.Plan.PullRequest = &PullRequest{Number: 22, URL: "https://github.com/owner/repo/pull/22", CreatedAt: detail.State.UpdatedAt, Branch: "feature", HeadSHA: "old-head"}
