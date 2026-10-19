@@ -111,9 +111,23 @@ func TestUICommandRegistrationAndHelp(t *testing.T) {
 	if err := renderCommandHelp(&out, metadata); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"keyboard-driven dashboard", "History, Backlog (notes), and WIP (plans) tabs", "WIP is the initial tab", "Settings and Debug remain developer previews", "On WIP, c opens the selected plan's Changes tab", "Tab or the right arrow", "Shift+Tab or the left arrow", "gg jumps to the top of the visible list", "G jumps to the bottom", "On WIP, History, and Backlog, f opens the filter menu", "Space or Enter toggles a selection", "t enables or disables the filter without losing it", "c clears it", "Esc closes it", "filter persists across sessions", "combines with / search, which is session-only", "WIP groups unfinished plans under NOW and NEXT", "immediate operational actions such as MONITOR, APPROVE, or MERGE", "Operational urgency always takes precedence", "disposition, valid sequence relationships, categorical priority, and recent activity", "missing, duplicate, or cyclic relationships only warn", "legacy plans remain visible as unranked", "RUN AGE is elapsed time for an observed invocation", "NEXT is a derived advisory label", "Press Enter to inspect the selected plan's full decision and lifecycle context", "Page Up and Page Down move by a viewport", "Tab or Shift+Tab to switch Overview, Slices, Activity, and Changes", "left and right open the previous or next visible plan", "Press r or R on any detail tab to run the displayed plan without leaving the page", "launch feedback appears below its header", "e expands or collapses its scope file list", "History loads all completed plans by default", "independent status selections", "m confirms a selected reviewed-plan merge", "M confirms a repository-scoped merge --all", "press Enter for the full read-only slice page", "Changes is a read-only, advisory viewer", "worktree scope when available and branch scope otherwise", "review base", "h returns to FILES; l or Enter focuses DIFF", "n/p selects the next/previous file", "[/] jumps between hunks", "w toggles worktree/branch scope", "z toggles wide-layout diff zoom", "u forces a refresh", "Changes refreshes while visible", "both scopes are read-only", "Esc returns from DIFF to FILES before closing detail", "repository-owned open notes", "grouped by ascending tier", "every non-tier tag", "separate created and updated ages", "n creates a note", "otherwise choose explicitly", "blank body cancels", "Ctrl+G edits the selected note's text and tags in $EDITOR", "falling back to nvim", "Press p on the Backlog list or detail", "TAO_AGENT (Pi by default, or claude)", "Ctrl+C belongs to the agent", "exiting returns to the dashboard", "normal later /tao-slice", "Unlike detached plan actions", "c key copies its note ID to the system clipboard", "Keys 0 through 3 replace its tier tag", "Lowercase d asks before deleting", "uppercase D deletes it immediately", "full detail", "per-repository pull-request defaults", "explicit true, explicit false, and inherited", "doctor problems", "resolved runtime defaults from tao status", "Plan-list actions do not act on History, Backlog, Settings, or Debug", "q and Ctrl-C quit globally", "Esc twice within one second", "--interval", "--completed-window", "tao monitor --once", "Usage:\n  tao ui"} {
+	for _, want := range []string{
+		"keyboard-driven dashboard", "across registered repositories",
+		"Press ?", "keyboard shortcuts", "docs/usage-guide.md", "workflow guidance",
+		"tao ui requires a terminal", "tao monitor --once", "non-interactive",
+		"--interval", "(default 2s)", "--completed-window", "(default all)",
+		"Usage:\n  tao ui [--interval DURATION] [--completed-window DURATION|all]",
+		"Examples:\n  tao ui\n", "tao ui --interval 5s",
+		"tao ui --completed-window 24h", "tao ui --completed-window 0",
+	} {
 		if !strings.Contains(out.String(), want) {
-			t.Fatalf("ui help missing %q in %q", want, out.String())
+			t.Errorf("ui help missing %q", want)
+		}
+	}
+	// NEXT remains a valid action column; reject obsolete section claims only.
+	for _, stale := range []string{"under NOW and NEXT", "under DONE", "Within NEXT", "NOW remains ahead"} {
+		if strings.Contains(out.String(), stale) {
+			t.Errorf("ui help retains obsolete section claim %q", stale)
 		}
 	}
 	if strings.Contains(out.String(), "queued work") {

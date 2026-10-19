@@ -245,7 +245,8 @@ the last day, while `--completed-window 0` omits them. Skipped
 slices do not move their parent plan to History.
 The plan list's `I/R/E` column shows impact/risk (L/M/H) and
 effort (S/M/L), with `-` when unset; it hides before SLICES on narrow terminals.
-The separate **NEXT** action label recommends what to do, not permission to do it.
+The separate **NEXT** action column recommends what to do, not permission to do it.
+It is not a section: WIP has no NOW/NEXT groups, and History has no DONE group.
 Filters and their enabled state persist in `<DataHome>/ui-filters.json` and
 combine with session-only search. Repository criteria are shared; WIP and History
 have independent status selections limited to their respective states. Turning
@@ -272,8 +273,8 @@ Check durable state: ordering, heartbeats, and `stalled?`/`crashed?` labels are
 advice or liveness hints, never approval, failure, or merge evidence.
 
 The [README command index](../README.md#command-reference) links the underlying
-non-interactive commands. Run `tao ui --help` for exact keys, tabs, actions,
-confirmation behavior, note editing, repository selection, and display options.
+non-interactive commands. Press `?` in the dashboard for the in-app keyboard
+shortcut overlay. Run `tao ui --help` for invocation options and examples.
 
 ---
 
