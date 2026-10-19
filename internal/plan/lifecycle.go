@@ -510,7 +510,8 @@ func missingDependencies(slice *Slice, index detailIndex) []string {
 }
 
 // markSliceStarted and the following mark* helpers mutate only the in-memory plan
-// detail, applying deterministic metadata and returning events for artifact_io.go to persist.
+// detail, applying deterministic metadata and returning events for artifact_mutation.go
+// to persist, with clear-or-replace intent tracked by artifact_changeset.go.
 func markSliceExecutionRoot(detail *PlanDetail, sliceID string, executionRoot string) error {
 	if detail == nil {
 		return fmt.Errorf("plan detail is nil")

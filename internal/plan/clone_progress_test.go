@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -122,6 +123,51 @@ func TestCloneSliceVerificationEvidence(t *testing.T) {
 	}
 	if cloneSliceVerificationSnapshot(nil) != nil || cloneSliceCommitIntent(nil) != nil {
 		t.Fatal("nil legacy fields must remain nil")
+	}
+}
+
+func TestCloneSnapshotAliasRegressions(t *testing.T) {
+	threshold, observed, exit := 3.5, 4.5, 1
+	detail := &PlanDetail{
+		Events: []Event{{Paths: []string{"path"}, AmendedFields: []string{"tasks"}, Threshold: &threshold, Observed: &observed, ExitCode: &exit, Baseline: &FinalVerificationBaseline{Signatures: []string{"event"}}}},
+		State:  State{Plan: PlanState{FinalVerification: &FinalVerification{Baseline: &FinalVerificationBaseline{Signatures: []string{"state"}}}}},
+	}
+	clone := clonePlanDetail(detail)
+	clone.Events[0].Paths[0] = "changed"
+	clone.Events[0].AmendedFields[0] = "changed"
+	*clone.Events[0].Threshold = 9
+	*clone.Events[0].Observed = 9
+	*clone.Events[0].ExitCode = 9
+	clone.Events[0].Baseline.Signatures[0] = "changed"
+	clone.State.Plan.FinalVerification.Baseline.Signatures[0] = "changed"
+	for name, ok := range map[string]bool{
+		"Paths":                                 detail.Events[0].Paths[0] == "path",
+		"AmendedFields":                         detail.Events[0].AmendedFields[0] == "tasks",
+		"Threshold":                             threshold == 3.5,
+		"Observed":                              observed == 4.5,
+		"ExitCode control":                      exit == 1,
+		"Event.Baseline.Signatures":             detail.Events[0].Baseline.Signatures[0] == "event",
+		"FinalVerification.Baseline.Signatures": detail.State.Plan.FinalVerification.Baseline.Signatures[0] == "state",
+	} {
+		if !ok {
+			t.Errorf("%s aliases original", name)
+		}
+	}
+}
+
+func TestCloneNestedExtra(t *testing.T) {
+	original := Slice{Extra: map[string]any{"nested": []any{map[string]any{"value": "original"}, nil, true, 2.5, "text", []any{"leaf"}}}}
+	clone := cloneSlice(original)
+	if !reflect.DeepEqual(original.Extra, clone.Extra) {
+		t.Fatal("values changed")
+	}
+	items := clone.Extra["nested"].([]any)
+	items[0].(map[string]any)["value"] = "changed"
+	items[5].([]any)[0] = "changed"
+	items[1] = "changed"
+	source := original.Extra["nested"].([]any)
+	if source[0].(map[string]any)["value"] != "original" || source[1] != nil || source[5].([]any)[0] != "leaf" {
+		t.Fatal("nested Extra aliases original")
 	}
 }
 

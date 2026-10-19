@@ -12,9 +12,10 @@
 //   - Mutable lifecycle State (lifecycle_models.go): the State the queue advances
 //     through, plus the status constants and lifecycle metadata that gate
 //     transitions.
-//   - Persistence coordination (artifact_io.go and mutation_journal.go): refreshes
-//     settled artifacts, prepares exact target payloads, and installs or rolls
-//     forward recoverable mutations.
+//   - Persistence coordination: artifact_files.go loads settled artifacts;
+//     artifact_mutation.go coordinates mutations; artifact_changeset.go binds
+//     typed clear-or-replace intent to payload preparation; mutation_journal.go
+//     installs or rolls forward recoverable mutations.
 //   - Derived read-side (derive.go): read-only DerivedPlan values (counts,
 //     progress, elapsed) computed from the durable artifacts for callers that only
 //     read.
@@ -31,8 +32,9 @@
 //   - models.go points to model groupings; artifact_models.go,
 //     lifecycle_models.go, and summary_models.go define artifact schemas,
 //     lifecycle metadata, and list-view summaries.
-//   - repository.go, record.go, artifact_operations.go, artifact_io.go,
-//     resolve.go, and log.go load, resolve, bind mutable records, mutate,
+//   - repository.go, record.go, artifact_operations.go, artifact_files.go,
+//     artifact_mutation.go, artifact_changeset.go, resolve.go, and log.go
+//     load, resolve, bind mutable records, mutate,
 //     delete, and stream plan-directory artifacts. PlanRecord owns complete
 //     durable mutation operations and their persistence ordering, including
 //     typed workspace milestones and compare-and-set boundary stamps; workspace

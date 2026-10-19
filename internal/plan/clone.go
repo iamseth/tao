@@ -1,15 +1,23 @@
 package plan
 
-import (
-	"maps"
-	"time"
-)
+import "time"
 
 func clonePlanDetail(detail *PlanDetail) *PlanDetail {
 	if detail == nil {
 		return nil
 	}
 	clone := *detail
+	if detail.SingleMergeIntentRecovery != nil {
+		recovery := *detail.SingleMergeIntentRecovery
+		clone.SingleMergeIntentRecovery = &recovery
+	}
+	if detail.PlanningSession.Stats != nil {
+		stats := *detail.PlanningSession.Stats
+		stats.PlanningStartedAt = cloneTimePtr(stats.PlanningStartedAt)
+		stats.TimeCreated = cloneTimePtr(stats.TimeCreated)
+		stats.TimeUpdated = cloneTimePtr(stats.TimeUpdated)
+		clone.PlanningSession.Stats = &stats
+	}
 	clone.State = cloneState(detail.State)
 	clone.Slices = cloneSlicesFile(detail.Slices)
 	clone.Events = cloneEvents(detail.Events)
@@ -31,6 +39,7 @@ func cloneState(state State) State {
 	clone.Workspace = cloneWorkspace(state.Workspace)
 	clone.GlobalInvariants = cloneStringSlice(state.GlobalInvariants)
 	clone.OpenQuestions = cloneStringSlice(state.OpenQuestions)
+	clone.Extra = cloneJSONValue(state.Extra)
 	return clone
 }
 
@@ -175,6 +184,16 @@ func cloneFinalVerification(verification *FinalVerification) *FinalVerification 
 	}
 	clone := *verification
 	clone.ExitCode = cloneIntPtr(verification.ExitCode)
+	clone.Baseline = cloneFinalVerificationBaseline(verification.Baseline)
+	return &clone
+}
+
+func cloneFinalVerificationBaseline(baseline *FinalVerificationBaseline) *FinalVerificationBaseline {
+	if baseline == nil {
+		return nil
+	}
+	clone := *baseline
+	clone.Signatures = cloneStringSlice(baseline.Signatures)
 	return &clone
 }
 
@@ -253,6 +272,14 @@ func cloneSlice(slice Slice) Slice {
 	clone.VerificationResults = cloneVerificationRuns(slice.VerificationResults)
 	clone.VerificationAttempt = cloneSliceVerificationSnapshot(slice.VerificationAttempt)
 	clone.CommitIntent = cloneSliceCommitIntent(slice.CommitIntent)
+	if slice.ExecutionStart != nil {
+		start := *slice.ExecutionStart
+		clone.ExecutionStart = &start
+	}
+	if slice.Completion != nil {
+		completion := *slice.Completion
+		clone.Completion = &completion
+	}
 	clone.Extra = cloneMap(slice.Extra)
 	return clone
 }
@@ -349,6 +376,11 @@ func cloneEvents(events []Event) []Event {
 
 func cloneEvent(event Event) Event {
 	clone := event
+	clone.Paths = cloneStringSlice(event.Paths)
+	clone.AmendedFields = cloneStringSlice(event.AmendedFields)
+	clone.Threshold = cloneFloat64Ptr(event.Threshold)
+	clone.Observed = cloneFloat64Ptr(event.Observed)
+	clone.Baseline = cloneFinalVerificationBaseline(event.Baseline)
 	clone.DurationSeconds = cloneInt64Ptr(event.DurationSeconds)
 	clone.ExitCode = cloneIntPtr(event.ExitCode)
 	if event.Metrics != nil {
@@ -408,11 +440,40 @@ func cloneInt64Ptr(value *int64) *int64 {
 	return &clone
 }
 
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+// cloneJSONValue copies JSON-shaped extras, not arbitrary objects or cycles.
+func cloneJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneMap(value)
+	case []any:
+		if value == nil {
+			return []any(nil)
+		}
+		clone := make([]any, len(value))
+		for i := range value {
+			clone[i] = cloneJSONValue(value[i])
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
 func cloneMap(values map[string]any) map[string]any {
 	if values == nil {
 		return nil
 	}
 	clone := make(map[string]any, len(values))
-	maps.Copy(clone, values)
+	for key, value := range values {
+		clone[key] = cloneJSONValue(value)
+	}
 	return clone
 }
