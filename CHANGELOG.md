@@ -9,6 +9,11 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-10-05
+
+#### Documentation
+- Slice plans that add, remove, or reorder Git or subprocess calls now check verified packages for affected process fakes, including argument-keyed doubles, and explicitly assign any needed updates.
+
 ### Week of 2026-09-28
 
 #### Added
