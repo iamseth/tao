@@ -235,7 +235,7 @@ func interruptedApprovalEvidenceApp(t *testing.T, calls *int, liveHead func() st
 	if err := os.MkdirAll(gitDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	app.CommandRunner = func(_ context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
+	app.CommandRunner = testenv.SplitBatchedRevParse(func(_ context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s", name)
 		}
@@ -258,7 +258,7 @@ func interruptedApprovalEvidenceApp(t *testing.T, calls *int, liveHead func() st
 			t.Fatalf("unexpected git command %q", key)
 		}
 		return nil
-	}
+	})
 	return app
 }
 

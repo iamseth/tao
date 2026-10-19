@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -174,8 +175,8 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return structuralWorktreeIdentityErrorf("interrupted automatic slice worktree physically resolves to the repository checkout")
 	}
 
-	worktreeGit := gitops.NewClient(sliceRoot, runner)
-	worktreeTop, err := worktreeGit.TopLevel(ctx)
+	worktreeGit := revParseResolver(ctx, gitops.NewClient(sliceRoot, runner), "--show-toplevel", "--git-common-dir", "--git-dir")
+	worktreeTop, err := worktreeGit("--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("resolve interrupted worktree Git top-level: %w", err)
 	}
@@ -187,8 +188,8 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return structuralWorktreeIdentityErrorf("interrupted automatic slice Git top-level does not match the recorded execution root")
 	}
 
-	repoGit := gitops.NewClient(detail.State.Repo.Root, runner)
-	repoTop, err := repoGit.TopLevel(ctx)
+	repoGit := revParseResolver(ctx, gitops.NewClient(detail.State.Repo.Root, runner), "--show-toplevel", "--git-common-dir")
+	repoTop, err := repoGit("--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("resolve recorded repository Git top-level: %w", err)
 	}
@@ -200,18 +201,18 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 		return structuralWorktreeIdentityErrorf("recorded repository root is not its Git top-level")
 	}
 
-	worktreeCommon, err := physicalGitMetadataPath(ctx, worktreeGit, sliceRoot, "--git-common-dir")
+	worktreeCommon, err := physicalGitMetadataPath(worktreeGit, sliceRoot, "--git-common-dir")
 	if err != nil {
 		return fmt.Errorf("resolve interrupted worktree common Git directory: %w", err)
 	}
-	repoCommon, err := physicalGitMetadataPath(ctx, repoGit, detail.State.Repo.Root, "--git-common-dir")
+	repoCommon, err := physicalGitMetadataPath(repoGit, detail.State.Repo.Root, "--git-common-dir")
 	if err != nil {
 		return fmt.Errorf("resolve recorded repository common Git directory: %w", err)
 	}
 	if worktreeCommon != repoCommon {
 		return structuralWorktreeIdentityErrorf("interrupted automatic slice is not a worktree of the recorded repository")
 	}
-	worktreeGitDir, err := physicalGitMetadataPath(ctx, worktreeGit, sliceRoot, "--git-dir")
+	worktreeGitDir, err := physicalGitMetadataPath(worktreeGit, sliceRoot, "--git-dir")
 	if err != nil {
 		return fmt.Errorf("resolve interrupted worktree Git directory: %w", err)
 	}
@@ -225,8 +226,27 @@ func inspectLinkedWorktreeIdentity(ctx context.Context, detail *plan.PlanDetail,
 	return nil
 }
 
-func physicalGitMetadataPath(ctx context.Context, git gitops.Client, root string, revParseArg string) (string, error) {
-	path, err := git.RevParse(ctx, revParseArg)
+// revParseResolver answers the listed rev-parse queries from one Git process.
+// If that process fails, every listed query fails with its error rather than
+// being retried, so the identity check still fails closed. A query outside
+// the batch runs on its own.
+func revParseResolver(ctx context.Context, git gitops.Client, queries ...string) func(string) (string, error) {
+	values, err := git.RevParseAll(ctx, queries...)
+	return func(query string) (string, error) {
+		i := slices.Index(queries, query)
+		switch {
+		case i < 0:
+			return git.RevParse(ctx, query)
+		case err != nil:
+			return "", err
+		default:
+			return values[i], nil
+		}
+	}
+}
+
+func physicalGitMetadataPath(revParse func(string) (string, error), root string, revParseArg string) (string, error) {
+	path, err := revParse(revParseArg)
 	if err != nil {
 		return "", err
 	}

@@ -297,7 +297,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			}, RunDependencies{
 				EventAppender: repo,
 				RootResolver:  ExecutionRootResolverFunc(func(context.Context, *plan.PlanDetail) (string, error) { return root, nil }),
-				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				CommandRunner: testenv.SplitBatchedRevParse(func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 					if name != "sh" {
 						if test.resume && name == "git" {
 							switch runGitKey(args) {
@@ -325,7 +325,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 						return runErr
 					}
 					return nil
-				},
+				}),
 				SliceExecutor: sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
 					loaded, err := repo.ResolvePlan(ctx, run.PlanDir)
 					if err != nil {

@@ -77,6 +77,24 @@ func (c Client) RevParse(ctx context.Context, rev string) (string, error) {
 	return c.output(ctx, "rev-parse", rev)
 }
 
+// RevParseAll resolves several revisions with one Git process, in order. Any
+// unresolvable revision fails the whole call; callers that need per-revision
+// errors fall back to RevParse.
+func (c Client) RevParseAll(ctx context.Context, revs ...string) ([]string, error) {
+	if len(revs) == 0 {
+		return nil, nil
+	}
+	out, err := c.output(ctx, append([]string{"rev-parse"}, revs...)...)
+	if err != nil {
+		return nil, err
+	}
+	values := strings.Split(out, "\n")
+	if len(values) != len(revs) {
+		return nil, fmt.Errorf("git rev-parse returned %d values for %d revisions", len(values), len(revs))
+	}
+	return values, nil
+}
+
 // UpdateRefCAS updates ref only when it still has oldSHA. An all-zero oldSHA
 // requires the ref to be absent.
 func (c Client) UpdateRefCAS(ctx context.Context, ref, newSHA, oldSHA string) error {

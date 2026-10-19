@@ -818,13 +818,9 @@ func snapshotGitSessionBoundary(ctx context.Context, root string) (snapshot gitS
 	if err != nil {
 		return snapshot, fmt.Errorf("resolve worktree root: %w", err)
 	}
-	gitDir, err := gitBoundaryPath(ctx, root, "--absolute-git-dir")
+	gitDir, commonDir, err := gitBoundaryDirs(ctx, root)
 	if err != nil {
-		return snapshot, fmt.Errorf("resolve active gitdir: %w", err)
-	}
-	commonDir, err := gitBoundaryPath(ctx, root, "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return snapshot, fmt.Errorf("resolve common gitdir: %w", err)
+		return snapshot, err
 	}
 	scopes := []gitMetadataScope{
 		{path: filepath.Join(root, ".git")},
@@ -1130,6 +1126,28 @@ func gitBoundaryPath(ctx context.Context, root string, args ...string) (string, 
 		path = filepath.Join(root, path)
 	}
 	return filepath.Clean(path), nil
+}
+
+// gitBoundaryDirs resolves the active and common Git directories with one Git
+// process, applying gitBoundaryPath's absolute-path handling to each.
+func gitBoundaryDirs(ctx context.Context, root string) (gitDir, commonDir string, err error) {
+	output, err := runGitBoundaryCommand(ctx, root, "rev-parse", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", "", fmt.Errorf("resolve gitdirs: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 2 {
+		return "", "", fmt.Errorf("resolve gitdirs: git returned %d paths, want 2", len(lines))
+	}
+	dirs := make([]string, 2)
+	for i, line := range lines {
+		path := strings.TrimSpace(line)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		dirs[i] = filepath.Clean(path)
+	}
+	return dirs[0], dirs[1], nil
 }
 
 func runGitBoundaryCommand(ctx context.Context, root string, args ...string) (string, error) {

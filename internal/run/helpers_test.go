@@ -12,6 +12,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 // testOptions uses the common manual-commit configuration without defaulting
@@ -406,7 +407,7 @@ func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, sta
 	if err := os.MkdirAll(gitDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	return func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	return testenv.SplitBatchedRevParse(func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -449,7 +450,7 @@ func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, sta
 			t.Fatalf("unexpected git command %q", key)
 		}
 		return nil
-	}
+	})
 }
 
 func runClock(times ...time.Time) func() time.Time {

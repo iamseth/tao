@@ -611,7 +611,7 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 	gitCalls := []string{}
 	liveHead := "head123"
 	defaultHead := "base123"
-	runner := func(ctx context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
+	runner := testenv.SplitBatchedRevParse(func(ctx context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -649,7 +649,7 @@ func TestRunRecoversPersistedPullRequestIntentAfterDefaultBranchAdvancesWithoutR
 			_, _ = io.WriteString(stdout, "origin/main\n")
 		}
 		return nil
-	}
+	})
 
 	firstDetail, err := repo.ResolvePlan(context.Background(), planDir)
 	if err != nil {

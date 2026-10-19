@@ -678,13 +678,36 @@ func (s Service) recordIntegratedMerge(ctx context.Context, git GitClient, detai
 	return true, nil
 }
 
+// revParseAll resolves revs with one Git process when the client supports it.
+// A failed batch fails every revision (never retried, so callers still fail
+// closed); clients that cannot batch resolve each revision on its own.
+func revParseAll(ctx context.Context, git GitClient, revs ...string) ([]string, []error) {
+	values, errs := make([]string, len(revs)), make([]error, len(revs))
+	if batch, ok := git.(interface {
+		RevParseAll(context.Context, ...string) ([]string, error)
+	}); ok {
+		batched, err := batch.RevParseAll(ctx, revs...)
+		if err != nil {
+			for i, rev := range revs {
+				errs[i] = fmt.Errorf("resolve %s: %w", rev, err)
+			}
+			return values, errs
+		}
+		return batched, errs
+	}
+	for i, rev := range revs {
+		values[i], errs[i] = git.RevParse(ctx, rev)
+	}
+	return values, errs
+}
+
 func classifySingleResolutionState(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, sourceBranch string) error {
 	if err := intent.Validate(); err != nil {
 		return fmt.Errorf("classify single-plan resolution evidence: %w", err)
 	}
-	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+strings.TrimSpace(sourceBranch))
-	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
-	head, headErr := git.RevParse(ctx, "HEAD")
+	refs, refErrs := revParseAll(ctx, git, "refs/heads/"+strings.TrimSpace(sourceBranch), "refs/heads/"+intent.DefaultBranch, "HEAD")
+	liveSource, liveDefault, head := refs[0], refs[1], refs[2]
+	sourceErr, defaultErr, headErr := refErrs[0], refErrs[1], refErrs[2]
 	branch, branchErr := git.CurrentBranch(ctx)
 	if sourceErr != nil || defaultErr != nil || headErr != nil || branchErr != nil {
 		return fmt.Errorf("classify single-plan resolution refs: %w", errors.Join(sourceErr, defaultErr, headErr, branchErr))
@@ -749,8 +772,9 @@ func rollbackSingleResolutionCommit(ctx context.Context, git GitClient, intent p
 	if intent.Resolution == nil || strings.TrimSpace(intent.Resolution.IntegrationHead) == "" {
 		return false, errors.Join(cause, errors.New("automatic rollback refused: committed resolution evidence is incomplete"))
 	}
-	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+strings.TrimSpace(sourceBranch))
-	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
+	refs, refErrs := revParseAll(ctx, git, "refs/heads/"+strings.TrimSpace(sourceBranch), "refs/heads/"+intent.DefaultBranch)
+	liveSource, liveDefault := refs[0], refs[1]
+	sourceErr, defaultErr := refErrs[0], refErrs[1]
 	status, statusErr := git.StatusPorcelain(ctx)
 	branch, branchErr := git.CurrentBranch(ctx)
 	if sourceErr != nil || defaultErr != nil || statusErr != nil || branchErr != nil || strings.TrimSpace(liveSource) != intent.SourceHead || (strings.TrimSpace(liveDefault) != intent.Resolution.IntegrationHead && strings.TrimSpace(liveDefault) != intent.DefaultParent) || strings.TrimSpace(status) != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
@@ -796,9 +820,9 @@ func (s Service) rollbackAndSettleSingleResolution(ctx context.Context, git GitC
 }
 
 func inspectSingleResolutionRollbackBoundary(ctx context.Context, git GitClient, intent plan.SingleMergeCommitIntent, sourceBranch string) error {
-	liveSource, sourceErr := git.RevParse(ctx, "refs/heads/"+strings.TrimSpace(sourceBranch))
-	liveDefault, defaultErr := git.RevParse(ctx, "refs/heads/"+intent.DefaultBranch)
-	head, headErr := git.RevParse(ctx, "HEAD")
+	refs, refErrs := revParseAll(ctx, git, "refs/heads/"+strings.TrimSpace(sourceBranch), "refs/heads/"+intent.DefaultBranch, "HEAD")
+	liveSource, liveDefault, head := refs[0], refs[1], refs[2]
+	sourceErr, defaultErr, headErr := refErrs[0], refErrs[1], refErrs[2]
 	status, statusErr := git.StatusPorcelain(ctx)
 	branch, branchErr := git.CurrentBranch(ctx)
 	if sourceErr != nil || defaultErr != nil || headErr != nil || statusErr != nil || branchErr != nil {
