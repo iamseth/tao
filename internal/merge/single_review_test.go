@@ -124,14 +124,7 @@ func TestSingleIntegrationReviewerPersistsDistinctStructuredNonApprovals(t *test
 		{name: "changes requested", output: reviewJSON("changes_requested", "fix interaction", "README behavior regressed"), wantOutcome: SingleReviewOutcomeChangesRequested, wantVerdict: plan.ReviewVerdictChangesRequested},
 		{name: "malformed", output: "not structured", wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
 		{name: "oversized", output: oversized, wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval missing summary and findings", output: singleReviewJSON(`{"verdict":"approve"}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval empty summary", output: singleReviewJSON(`{"verdict":"approve","summary":"  ","findings":[]}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval missing findings", output: singleReviewJSON(`{"verdict":"approve","summary":"safe"}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval null findings", output: singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":null}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval wrong summary type", output: singleReviewJSON(`{"verdict":"approve","summary":[],"findings":[]}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval wrong findings type", output: singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":{}}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
 		{name: "approval null finding", output: singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":[null]}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
-		{name: "approval unknown field", output: singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":[],"extra":true}`), wantOutcome: SingleReviewOutcomeMalformed, wantVerdict: plan.ReviewVerdictComment},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,6 +147,28 @@ func TestSingleIntegrationReviewerPersistsDistinctStructuredNonApprovals(t *test
 				t.Fatalf("malformed output persisted unsafe evidence = %#v", review)
 			}
 		})
+	}
+}
+
+// Decoding is pure, so malformed approval shapes are covered here; the
+// end-to-end reviewer matrix keeps one case per persisted outcome.
+func TestSingleReviewOutputMalformedApprovals(t *testing.T) {
+	for _, tc := range []struct{ name, output string }{
+		{"approval missing summary and findings", singleReviewJSON(`{"verdict":"approve"}`)},
+		{"approval empty summary", singleReviewJSON(`{"verdict":"approve","summary":"  ","findings":[]}`)},
+		{"approval missing findings", singleReviewJSON(`{"verdict":"approve","summary":"safe"}`)},
+		{"approval null findings", singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":null}`)},
+		{"approval wrong summary type", singleReviewJSON(`{"verdict":"approve","summary":[],"findings":[]}`)},
+		{"approval wrong findings type", singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":{}}`)},
+		{"approval unknown field", singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":[],"extra":true}`)},
+		{"approval null finding", singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":[null]}`)},
+	} {
+		if !singleReviewOutputMalformed(decodeSingleIntegrationReview(tc.output)) {
+			t.Errorf("%s: accepted as well-formed", tc.name)
+		}
+	}
+	if singleReviewOutputMalformed(decodeSingleIntegrationReview(singleReviewJSON(`{"verdict":"approve","summary":"safe","findings":[]}`))) {
+		t.Error("well-formed approval rejected")
 	}
 }
 

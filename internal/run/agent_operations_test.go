@@ -452,158 +452,162 @@ func TestReviewAndPullRequestTelemetry(t *testing.T) {
 	const approval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[],\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
 	const incompleteApproval = "```tao-review-json\n{\"verdict\":\"approve\",\"summary\":\"Approved.\",\"findings\":[]}\n```"
 	const correction = "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(review): preserve exact approval\",\"body\":\"What:\\nPreserve the exact approval.\\n\\nWhy:\\nAvoid unnecessary sessions.\"}}\n```"
+	// Metric availability only interacts with the provider's output format, so
+	// it rotates across operation and outcome instead of multiplying them: each
+	// provider still sees every availability for every operation with a
+	// recorded (non-append-failure) outcome.
+	measurements := []plan.AgentMetricsAvailability{plan.AgentMetricsReported, plan.AgentMetricsPartial, plan.AgentMetricsUnavailable}
 	for _, kind := range []AgentKind{AgentPi, AgentClaude} {
-		for _, operation := range []string{"review", "correction", "pr", "body"} {
-			for _, measurement := range []plan.AgentMetricsAvailability{plan.AgentMetricsReported, plan.AgentMetricsPartial, plan.AgentMetricsUnavailable} {
-				for _, outcome := range []string{"success", "failed", "timeout", "append failure"} {
-					t.Run(fmt.Sprintf("%s/%s/%s/%s", kind, operation, measurement, outcome), func(t *testing.T) {
-						kind := kind
-						t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
-						t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "1")
-						repoRoot := t.TempDir()
-						detail := runPathSessionDetail(t, repoRoot, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
-						detail.State.Plan.ChangeType = plan.ChangeTypeFix
-						detail.State.Repo.BaseCommit = "base123"
-						persistReviewState(t, detail.Dir, detail)
-						if err := os.WriteFile(filepath.Join(detail.Dir, "events.jsonl"), nil, 0o600); err != nil {
-							t.Fatal(err)
-						}
-						repository := unscopedFileRepository(t)
-						var sessionErr error
-						switch outcome {
-						case "failed":
-							sessionErr = errors.New("private provider failure")
-						case "timeout":
-							sessionErr = &agent.SessionTimeoutError{Timeout: time.Minute}
-						}
-						calls := 0
-						implementation := AgentPi
-						if kind == AgentPi {
-							implementation = AgentClaude
-						}
-						capabilities := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: kind}}, RunDependencies{})).runCapabilities()
-						executor := capabilities.reviewCreator.(agentExecutor)
-						if operation == "pr" || operation == "body" {
-							executor = capabilities.pullRequestBodyGenerator.(agentExecutor)
-							kind = implementation
-						}
-						descriptor := executor.descriptor
-						providerFactory := descriptor.NewRuntime
-						descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
-							return agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
-								calls++
-								if !session.CollectMetrics {
-									t.Fatal("operation did not request metrics")
-								}
-								if operation == "body" {
-									deadline, ok := ctx.Deadline()
-									if !ok || time.Until(deadline) > pullRequestBodyAgentTimeout {
-										t.Fatal("PR body lost its bounded timeout")
-									}
-								}
-								output := "created https://github.com/iamseth/tao/pull/123"
-								switch operation {
-								case "review":
-									output = approval
-								case "correction":
-									output = correction
-									if calls == 1 {
-										output = incompleteApproval
-									}
-								}
-								starter := phaseTelemetryStarter(t, kind, output, measurement)
-								result, err := providerFactory(agent.RuntimeDeps{ProcessStarter: starter}).RunSession(ctx, session)
-								if err != nil {
-									t.Fatalf("provider fixture: %v", err)
-								}
-								if operation == "correction" && calls == 1 {
-									return result, nil
-								}
-								return result, sessionErr
-							})
-						}
-						appendCalls := 0
-						timeouts := 0
-						appender := eventAppenderFunc(func(dir string, event plan.Event) error {
-							if event.Type == plan.EventTypeSessionTimeout {
-								timeouts++
-								if event.Agent != string(kind) || event.PlanID != detail.State.Plan.ID {
-									t.Fatalf("timeout attribution: %+v", event)
+		for operationIndex, operation := range []string{"review", "correction", "pr", "body"} {
+			for outcomeIndex, outcome := range []string{"success", "failed", "timeout", "append failure"} {
+				measurement := measurements[(operationIndex+outcomeIndex)%len(measurements)]
+				t.Run(fmt.Sprintf("%s/%s/%s/%s", kind, operation, measurement, outcome), func(t *testing.T) {
+					kind := kind
+					t.Setenv(runtimeconfig.EnvMaxSliceOutputTokensDeprecated, "1")
+					t.Setenv(runtimeconfig.EnvMaxSliceCostDeprecated, "1")
+					repoRoot := t.TempDir()
+					detail := runPathSessionDetail(t, repoRoot, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
+					detail.State.Plan.ChangeType = plan.ChangeTypeFix
+					detail.State.Repo.BaseCommit = "base123"
+					persistReviewState(t, detail.Dir, detail)
+					if err := os.WriteFile(filepath.Join(detail.Dir, "events.jsonl"), nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					repository := unscopedFileRepository(t)
+					var sessionErr error
+					switch outcome {
+					case "failed":
+						sessionErr = errors.New("private provider failure")
+					case "timeout":
+						sessionErr = &agent.SessionTimeoutError{Timeout: time.Minute}
+					}
+					calls := 0
+					implementation := AgentPi
+					if kind == AgentPi {
+						implementation = AgentClaude
+					}
+					capabilities := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: kind}}, RunDependencies{})).runCapabilities()
+					executor := capabilities.reviewCreator.(agentExecutor)
+					if operation == "pr" || operation == "body" {
+						executor = capabilities.pullRequestBodyGenerator.(agentExecutor)
+						kind = implementation
+					}
+					descriptor := executor.descriptor
+					providerFactory := descriptor.NewRuntime
+					descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
+						return agentRuntimeFunc(func(ctx context.Context, session agent.Session) (agent.SessionResult, error) {
+							calls++
+							if !session.CollectMetrics {
+								t.Fatal("operation did not request metrics")
+							}
+							if operation == "body" {
+								deadline, ok := ctx.Deadline()
+								if !ok || time.Until(deadline) > pullRequestBodyAgentTimeout {
+									t.Fatal("PR body lost its bounded timeout")
 								}
 							}
-							if event.Type == plan.EventTypeAgentMetrics {
-								appendCalls++
-								if outcome == "append failure" {
-									return errors.New("metrics storage unavailable")
+							output := "created https://github.com/iamseth/tao/pull/123"
+							switch operation {
+							case "review":
+								output = approval
+							case "correction":
+								output = correction
+								if calls == 1 {
+									output = incompleteApproval
 								}
 							}
-							return repository.AppendEvent(dir, event)
+							starter := phaseTelemetryStarter(t, kind, output, measurement)
+							result, err := providerFactory(agent.RuntimeDeps{ProcessStarter: starter}).RunSession(ctx, session)
+							if err != nil {
+								t.Fatalf("provider fixture: %v", err)
+							}
+							if operation == "correction" && calls == 1 {
+								return result, nil
+							}
+							return result, sessionErr
 						})
-						runner := newAgentSessionRunner(agentSessionRunnerConfig{descriptor: descriptor, logAppender: repository, eventAppender: appender})
-						role := plan.AgentRolePullRequest
-						var err error
-						switch operation {
-						case "review", "correction":
-							role = plan.AgentRoleReview
-							var review plan.PlanReview
-							review, err = createReviewWithAgentSession(context.Background(), runner, agentOperationOptions{Agent: string(kind), reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"})}, ReviewRun{PlanDir: detail.Dir, Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repository))
-							if sessionErr == nil && (review.Agent != string(kind) || review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil) {
-								t.Fatalf("telemetry changed approval: %+v", review)
-							}
-							if operation == "correction" && sessionErr != nil && (detail.State.Plan.Review.Verdict != plan.ReviewVerdictComment || detail.State.Plan.Review.CommitMessage != nil) {
-								t.Fatalf("failed correction retained approval: %+v", detail.State.Plan.Review)
-							}
-						case "pr":
-							var pr plan.PullRequest
-							pr, err = createPullRequestWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
-							if sessionErr == nil && pr.Number != 123 {
-								t.Fatalf("PR changed: %+v", pr)
-							}
-						case "body":
-							var body string
-							body, err = generatePullRequestBodyWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestBodyRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
-							if sessionErr == nil && body != "created https://github.com/iamseth/tao/pull/123" {
-								t.Fatalf("body changed: %q", body)
+					}
+					appendCalls := 0
+					timeouts := 0
+					appender := eventAppenderFunc(func(dir string, event plan.Event) error {
+						if event.Type == plan.EventTypeSessionTimeout {
+							timeouts++
+							if event.Agent != string(kind) || event.PlanID != detail.State.Plan.ID {
+								t.Fatalf("timeout attribution: %+v", event)
 							}
 						}
-						if !errors.Is(err, sessionErr) {
-							t.Fatalf("error = %v, want %v", err, sessionErr)
-						}
-						if (timeouts == 1) != (outcome == "timeout") {
-							t.Fatalf("timeout events = %d, outcome = %s", timeouts, outcome)
-						}
-						wantCalls := 1
-						if operation == "correction" {
-							wantCalls = 2
-						}
-						if calls != wantCalls || appendCalls != wantCalls {
-							t.Fatalf("provider/metrics calls = %d/%d, want %d", calls, appendCalls, wantCalls)
-						}
-						events := readAgentMetricEvents(t, detail.Dir)
-						if outcome == "append failure" {
-							wantCalls = 0
-						}
-						if len(events) != wantCalls {
-							t.Fatalf("metrics events = %d, want %d", len(events), wantCalls)
-						}
-						failed := 0
-						for _, event := range events {
-							m := event.Metrics
-							if event.PlanID != detail.State.Plan.ID || event.SliceID != "" || m.Role != role || m.Agent != string(kind) || m.Availability != measurement {
-								t.Fatalf("event = %+v; metrics = %+v", event, m)
-							}
-							if m.OutputTokensPresent != (measurement != plan.AgentMetricsUnavailable) || m.CostPresent != (measurement == plan.AgentMetricsReported) || m.Cost != 0 {
-								t.Fatalf("measurement presence changed: %+v", m)
-							}
-							if m.Status == "failed" && m.Result == "failed" {
-								failed++
+						if event.Type == plan.EventTypeAgentMetrics {
+							appendCalls++
+							if outcome == "append failure" {
+								return errors.New("metrics storage unavailable")
 							}
 						}
-						if (failed == 1) != (sessionErr != nil) {
-							t.Fatalf("failed metrics events = %d; session error = %v", failed, sessionErr)
-						}
+						return repository.AppendEvent(dir, event)
 					})
-				}
+					runner := newAgentSessionRunner(agentSessionRunnerConfig{descriptor: descriptor, logAppender: repository, eventAppender: appender})
+					role := plan.AgentRolePullRequest
+					var err error
+					switch operation {
+					case "review", "correction":
+						role = plan.AgentRoleReview
+						var review plan.PlanReview
+						review, err = createReviewWithAgentSession(context.Background(), runner, agentOperationOptions{Agent: string(kind), reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123", currentBranch: "feature"})}, ReviewRun{PlanDir: detail.Dir, Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repository))
+						if sessionErr == nil && (review.Agent != string(kind) || review.Verdict != plan.ReviewVerdictApprove || review.CommitMessage == nil) {
+							t.Fatalf("telemetry changed approval: %+v", review)
+						}
+						if operation == "correction" && sessionErr != nil && (detail.State.Plan.Review.Verdict != plan.ReviewVerdictComment || detail.State.Plan.Review.CommitMessage != nil) {
+							t.Fatalf("failed correction retained approval: %+v", detail.State.Plan.Review)
+						}
+					case "pr":
+						var pr plan.PullRequest
+						pr, err = createPullRequestWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
+						if sessionErr == nil && pr.Number != 123 {
+							t.Fatalf("PR changed: %+v", pr)
+						}
+					case "body":
+						var body string
+						body, err = generatePullRequestBodyWithAgentSession(context.Background(), runner, agentOperationOptions{}, PullRequestBodyRun{PlanDir: detail.Dir, PlanID: "plan-a", RepoRoot: repoRoot})
+						if sessionErr == nil && body != "created https://github.com/iamseth/tao/pull/123" {
+							t.Fatalf("body changed: %q", body)
+						}
+					}
+					if !errors.Is(err, sessionErr) {
+						t.Fatalf("error = %v, want %v", err, sessionErr)
+					}
+					if (timeouts == 1) != (outcome == "timeout") {
+						t.Fatalf("timeout events = %d, outcome = %s", timeouts, outcome)
+					}
+					wantCalls := 1
+					if operation == "correction" {
+						wantCalls = 2
+					}
+					if calls != wantCalls || appendCalls != wantCalls {
+						t.Fatalf("provider/metrics calls = %d/%d, want %d", calls, appendCalls, wantCalls)
+					}
+					events := readAgentMetricEvents(t, detail.Dir)
+					if outcome == "append failure" {
+						wantCalls = 0
+					}
+					if len(events) != wantCalls {
+						t.Fatalf("metrics events = %d, want %d", len(events), wantCalls)
+					}
+					failed := 0
+					for _, event := range events {
+						m := event.Metrics
+						if event.PlanID != detail.State.Plan.ID || event.SliceID != "" || m.Role != role || m.Agent != string(kind) || m.Availability != measurement {
+							t.Fatalf("event = %+v; metrics = %+v", event, m)
+						}
+						if m.OutputTokensPresent != (measurement != plan.AgentMetricsUnavailable) || m.CostPresent != (measurement == plan.AgentMetricsReported) || m.Cost != 0 {
+							t.Fatalf("measurement presence changed: %+v", m)
+						}
+						if m.Status == "failed" && m.Result == "failed" {
+							failed++
+						}
+					}
+					if (failed == 1) != (sessionErr != nil) {
+						t.Fatalf("failed metrics events = %d; session error = %v", failed, sessionErr)
+					}
+				})
 			}
 		}
 	}

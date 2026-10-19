@@ -180,7 +180,7 @@ func (r GuardedSingleIntegrationReviewer) ReviewResolvedIntegration(ctx context.
 	}
 
 	parsed, parseErr := decodeSingleIntegrationReview(result.Provider.Output)
-	if parseErr != nil || (parsed.Verdict == plan.ReviewVerdictApprove && len(parsed.Findings) != 0) {
+	if singleReviewOutputMalformed(parsed, parseErr) {
 		return r.persistNonApproval(result, request.Intent, SingleReviewOutcomeMalformed, "Independent integration reviewer returned malformed or oversized structured output and did not authorize this transaction; manual intervention is required before another review.", parseErr)
 	}
 	result.Outcome = SingleReviewOutcome(parsed.Verdict)
@@ -212,6 +212,12 @@ type singleIntegrationReview struct {
 // decodeSingleIntegrationReview deliberately enforces a stricter contract than
 // ordinary and legacy plan review parsing. This one-shot result can authorize a
 // merge, so every required field must be present with its declared JSON type.
+// singleReviewOutputMalformed reports output the reviewer must treat as
+// malformed: undecodable, or an approval that still lists findings.
+func singleReviewOutputMalformed(parsed singleIntegrationReview, err error) bool {
+	return err != nil || (parsed.Verdict == plan.ReviewVerdictApprove && len(parsed.Findings) != 0)
+}
+
 func decodeSingleIntegrationReview(output string) (singleIntegrationReview, error) {
 	block, err := singleIntegrationReviewJSONBlock(output)
 	if err != nil {
