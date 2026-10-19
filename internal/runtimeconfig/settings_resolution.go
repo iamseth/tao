@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/iamseth/tao/internal/configtypes"
@@ -39,7 +38,7 @@ func ResolveSettings(global, repository configtypes.SettingsValues, environment 
 		if d.EnvKey != "" {
 			status.Value = s.rows[indices[d.EnvKey]].Value
 		} else {
-			status.Value = "0"
+			status.Value = nonEnvSettings[d.Key].defaultValue
 		}
 		statuses[d.Key] = status
 	}
@@ -87,9 +86,8 @@ func ResolveSettings(global, repository configtypes.SettingsValues, environment 
 					s.failures[admission] = errors.Join(s.failures[admission], errors.New(warning))
 				}
 			} else {
-				if key == "max_slices" {
-					n, _ := strconv.Atoi(text)
-					s.defaults.MaxSlices = &n
+				if setting, ok := nonEnvSettings[key]; ok {
+					text, _ = setting.apply(&s.defaults, text)
 				} else {
 					input := text
 					if text == "null" && strings.HasSuffix(key, ".stop") {

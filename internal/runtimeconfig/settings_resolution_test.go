@@ -200,6 +200,35 @@ func TestResolveSettingsAdmissionAndBudgets(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSetupResolution(t *testing.T) {
+	for _, tc := range []struct{ raw, want, source string }{
+		{"", "", "default"},
+		{`"  echo ready  "`, "echo ready", "repository"},
+		{`" "`, "", "invalid"},
+		{`"a\u0000b"`, "", "invalid"},
+	} {
+		var repository configtypes.SettingsValues
+		if tc.raw != "" {
+			repository = settingLayer("workspace.setup", tc.raw)
+		}
+		s := ResolveSettings(nil, repository, EnvSnapshot{})
+		row := settingStatus(t, s, "workspace.setup")
+		if s.Defaults().WorkspaceSetup != tc.want || row.Value != tc.want || row.Source != tc.source {
+			t.Fatalf("defaults=%+v status=%+v", s.Defaults(), row)
+		}
+		if tc.source == "invalid" {
+			if row.Warning == "" || s.Require("workspace.setup") == nil {
+				t.Fatal("invalid setting admitted", row)
+			}
+		} else if err := s.Require("workspace.setup"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateSettings(settingLayer("workspace.setup", `"echo ready"`), "global"); err == nil {
+		t.Fatal("global setup accepted")
+	}
+}
+
 func TestResolveSettingsGlobalOnlyAndZero(t *testing.T) {
 	for _, tc := range []struct{ key, saved, env string }{
 		{"theme", `"default"`, "default"}, {"update", `"off"`, "warn"},

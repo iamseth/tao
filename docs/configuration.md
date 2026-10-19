@@ -74,6 +74,7 @@ runtime parsers below, then save native scalars.
 | Global and repository | `models.model`, `models.run_model`, `models.review_model`, `models.merge_review_model`, `models.resolver_model`, `models.rework_escalation_model`; `models.effort`, `models.run_effort`, `models.review_effort`, `models.merge_review_effort`, `models.resolver_effort` | Non-empty model string; non-empty effort level string |
 | Global and repository | `budget.<slice\|plan>.<metric>.warn` | Non-negative count integer or cost number |
 | Global and repository | `budget.slice.output_tokens.stop`, `budget.slice.cost.stop` | Non-negative integer/number or `null` |
+| Repository only | `workspace.setup` | String; workspace setup command (empty by default) |
 | Global only | `theme`, `update` | String; choices below |
 | Environment/flags only (not persisted) | `merge_verify_command`, `aggregate_review_convergence_window`, `approved_by`, `planner_routing`, `planner_routing_arms`, `planner_routing_floor` | Existing process/merge/planner controls; see below and command help |
 
@@ -84,6 +85,25 @@ environment aliases appear below (`review_enabled` maps to `TAO_REVIEW`). The
 deprecated `TAO_AUTO_REWORK` alias is environment-only; save `max_rework_attempts`
 instead.
 Bootstrap paths and recovery actions are never persisted settings.
+
+### Workspace setup
+
+`workspace.setup` is an opt-in, repository-only command with no environment
+alias. It runs via `sh -c` in the worktree after dependency preparation on every
+isolated workspace preparation for `tao run`, including reuse. It does not run
+for `tao workspace prepare`, merge integration, or current mode. Empty or
+whitespace-only commands do nothing.
+
+The command receives `TAO_PLAN_ID`, `TAO_WORKSPACE_PATH` (the worktree), and
+`TAO_REPO_ROOT` (the plan-recorded repository root). It must be safe to rerun;
+there is no setup fingerprint. A failure stops the run before any agent session
+and records bounded failure output in workspace dependency diagnostics.
+
+For example, invoke a local-only script by absolute path:
+
+```sh
+tao config set workspace.setup '/Users/seth/dev/rollcall/.tao/seed-dists.sh --missing-only "$TAO_PLAN_ID"' --repo rollcall
+```
 
 ### Migration: environment now wins
 

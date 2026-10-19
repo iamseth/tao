@@ -41,6 +41,7 @@ type executionWorkspaceManagerFactory func(Options) (executionWorkspaceManager, 
 
 // ExecutionPreparer prepares the workspace root used for one plan execution.
 type ExecutionPreparer struct {
+	SetupCommand      string
 	Runner            CommandRunner
 	PlanRecordFactory PlanRecordFactory
 	Now               func() time.Time
@@ -151,9 +152,22 @@ func (p ExecutionPreparer) Prepare(ctx context.Context, detail *plan.PlanDetail,
 			return "", err
 		}
 	}
+	hasSetup := strings.TrimSpace(p.SetupCommand) != ""
+	if hasSetup {
+		setup, setupErr := runWorkspaceSetup(ctx, metadata.Path, detail.State.Plan.ID, detail.State.Repo.Root, p.SetupCommand, p.runner(), p.now)
+		if setupErr != nil {
+			if writeErr := recordWorkspaceDependencyFailure(record, workspaceDependencyFailureRequest(setup)); writeErr != nil {
+				return "", fmt.Errorf("%w; record dependency failure: %w", setupErr, writeErr)
+			}
+			return "", setupErr
+		}
+	}
 	ready := workspaceReadyRequest(dependency, p.now())
-	if dependencyErr == nil && dependency.Status == plan.DependencyPreparationStatusReady {
+	if dependencyErr == nil && (hasSetup || dependency.Status == plan.DependencyPreparationStatusReady) {
 		ready.ClearDependencyFailure = true
+		if hasSetup {
+			ready.DependencyFailure = ""
+		}
 	}
 	if jsSucceeded {
 		if fingerprint == "" {

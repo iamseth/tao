@@ -10,10 +10,20 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func nonEnvSettingCount() int {
+	count := 0
+	for _, definition := range runtimeconfig.SettingDefinitions() {
+		if definition.EnvKey == "" {
+			count++
+		}
+	}
+	return count
+}
+
 func TestUIDebugInvalidProviderKeepsRuntimeRowsAndDoctorFailure(t *testing.T) {
 	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid", runtimeconfig.EnvUpdate: "invalid"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
 	snapshot, err := (uiDebugCollector{app: app}).Collect(context.Background())
-	if err != nil || len(snapshot.RuntimeDefaults) != len(app.envSnapshot().Status())+1 {
+	if err != nil || len(snapshot.RuntimeDefaults) != len(app.envSnapshot().Status())+nonEnvSettingCount() {
 		t.Fatalf("invalid provider discarded runtime diagnostics: %+v, %v", snapshot, err)
 	}
 	if snapshot.SelectedAgent != "" {

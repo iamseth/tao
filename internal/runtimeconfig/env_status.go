@@ -86,6 +86,7 @@ const (
 // commands. Optional defaults preserve explicit false semantics from
 // environment variables.
 type EnvDefaults struct {
+	WorkspaceSetup string
 	RunOptionsPatch
 	SessionWarnPercent          int
 	AutoRework                  *bool

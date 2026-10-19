@@ -75,6 +75,9 @@ func prepareExecutionWorkspace(ctx context.Context, detail *plan.PlanDetail, inp
 		Now:               input.Now,
 		Config:            workspace.DefaultConfig(),
 	}
+	if input.Config.RuntimeEnv != nil {
+		preparer.SetupCommand = input.Config.RuntimeEnv.Defaults().WorkspaceSetup
+	}
 	return preparer.Prepare(ctx, detail, workspace.ExecutionPrepareOptions{
 		ExecutionMode: input.Config.ExecutionMode,
 	})

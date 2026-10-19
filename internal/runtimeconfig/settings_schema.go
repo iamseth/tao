@@ -34,10 +34,47 @@ func budgetSetting(name, kind string) SettingDefinition {
 	return scopedSetting(key, kind)
 }
 
+// Settings without environment aliases share parsing and application metadata.
+var nonEnvSettings = map[string]struct {
+	definition   SettingDefinition
+	defaultValue string
+	apply        func(*EnvDefaults, string) (string, error)
+}{
+	"max_slices": {
+		definition:   scopedSetting("max_slices", "integer"),
+		defaultValue: "0",
+		apply: func(d *EnvDefaults, value string) (string, error) {
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || n < 0 {
+				return "", fmt.Errorf("must be a non-negative integer")
+			}
+			d.MaxSlices = &n
+			return strconv.Itoa(n), nil
+		},
+	},
+	"workspace.setup": {
+		definition: SettingDefinition{Key: "workspace.setup", Kind: "string", Scopes: []string{"repo"}},
+		apply: func(d *EnvDefaults, value string) (string, error) {
+			value = strings.TrimSpace(value)
+			if value == "" || strings.ContainsRune(value, '\x00') || len(value) > 4096 {
+				return "", fmt.Errorf("must be non-empty, contain no NUL bytes, and be at most 4096 bytes")
+			}
+			d.WorkspaceSetup = value
+			return value, nil
+		},
+	},
+}
+
 // SettingDefinitions returns sorted, defensive metadata copies from the runtime
-// table, plus max_slices, which deliberately has no environment alias.
+// table and the settings without environment aliases.
 func SettingDefinitions() []SettingDefinition {
-	defs := []SettingDefinition{scopedSetting("max_slices", "integer")}
+	var defs []SettingDefinition
+	for _, setting := range nonEnvSettings {
+		d := setting.definition
+		d.Scopes = slices.Clone(d.Scopes)
+		d.Choices = slices.Clone(d.Choices)
+		defs = append(defs, d)
+	}
 	for _, row := range runtimeEnvVars {
 		if row.aliasOf != "" {
 			continue
@@ -75,12 +112,8 @@ func ParseSetting(key, value string) (json.RawMessage, error) {
 		return json.RawMessage("null"), nil
 	}
 	var canonical string
-	if key == "max_slices" {
-		n, e := strconv.Atoi(strings.TrimSpace(value))
-		if e != nil || n < 0 {
-			return nil, fmt.Errorf("%s: must be a non-negative integer", key)
-		}
-		canonical = strconv.Itoa(n)
+	if setting, ok := nonEnvSettings[key]; ok {
+		canonical, err = setting.apply(&EnvDefaults{}, value)
 	} else {
 		for _, row := range runtimeEnvVars {
 			if row.name == d.EnvKey {
@@ -88,9 +121,9 @@ func ParseSetting(key, value string) (json.RawMessage, error) {
 				break
 			}
 		}
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", key, err)
-		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", key, err)
 	}
 	if strings.HasSuffix(key, ".stop") && canonical == "disabled" {
 		return json.RawMessage("null"), nil

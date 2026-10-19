@@ -312,7 +312,7 @@ func settingsValueGroup(key string) string {
 	if strings.HasPrefix(key, "budget.") {
 		return "BUDGET"
 	}
-	if key == "max_slices" {
+	if key == "max_slices" || key == "workspace.setup" {
 		return "Execution"
 	}
 	name := "TAO_" + strings.ToUpper(strings.TrimPrefix(key, "models."))

@@ -153,7 +153,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 			t.Fatalf("settings lost typed baseline: %+v, %v", s, err)
 		}
 		d, err := debug.Collect(context.Background())
-		if err != nil || len(s.RuntimeDefaults) != len(before) || len(d.RuntimeDefaults) != len(before)+1 {
+		if err != nil || len(s.RuntimeDefaults) != len(before) || len(d.RuntimeDefaults) != len(before)+nonEnvSettingCount() {
 			t.Fatalf("incomplete diagnostics: settings=%d debug=%d error=%v", len(s.RuntimeDefaults), len(d.RuntimeDefaults), err)
 		}
 		for i, row := range before {

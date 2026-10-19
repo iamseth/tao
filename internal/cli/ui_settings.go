@@ -112,10 +112,12 @@ func uiSettingsValues(env runtimeconfig.EnvSnapshot, repository, editable bool) 
 	for _, row := range env.SettingsStatus() {
 		d := defs[row.Key]
 		stored := row.GlobalValue
+		scope := "global"
 		if repository {
 			stored = row.RepositoryValue
+			scope = "repo"
 		}
-		values = append(values, tui.SettingsValue{Key: row.Key, Value: row.Value, Stored: stored, Source: row.Source, Warning: row.Warning, Kind: d.Kind, Choices: slices.Clone(d.Choices), Editable: editable && slices.Contains(d.Scopes, "repo")})
+		values = append(values, tui.SettingsValue{Key: row.Key, Value: row.Value, Stored: stored, Source: row.Source, Warning: row.Warning, Kind: d.Kind, Choices: slices.Clone(d.Choices), Editable: editable && slices.Contains(d.Scopes, scope)})
 	}
 	return values
 }

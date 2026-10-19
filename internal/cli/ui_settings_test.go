@@ -62,6 +62,26 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 	}
 }
 
+func TestUISettingsWorkspaceSetupScope(t *testing.T) {
+	env := runtimeconfig.ResolveSettings(nil, nil, runtimeconfig.LoadEnv(nil))
+	for _, repository := range []bool{false, true} {
+		for _, editable := range []bool{false, true} {
+			found := false
+			for _, row := range uiSettingsValues(env, repository, editable) {
+				if row.Key == "workspace.setup" {
+					found = true
+					if row.Editable != (repository && editable) {
+						t.Fatalf("repo=%v editable=%v row=%+v", repository, editable, row)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing workspace.setup")
+			}
+		}
+	}
+}
+
 func TestUISettingsReviewAgentProjection(t *testing.T) {
 	for _, value := range []string{"", "pi", "claude", "invalid"} {
 		service := uiSettingsService{app: App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: value})}, registry: &fakeNoteRegistry{}}

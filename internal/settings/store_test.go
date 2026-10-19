@@ -101,6 +101,38 @@ func TestNativeRoundTripsAndScopes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSetupRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	put(t, filepath.Join(home, "repos", "repo-123", "repo.json"), `{"schema":"tao.repo.v1","id":"repo-123","name":"repo","root":"/missing/checkout"}`)
+	s := NewService(home, runtimeconfig.LoadEnv(nil))
+	ctx := context.Background()
+	target := Target{RepositoryID: "repo-123"}
+	changes := map[string]*string{"workspace.setup": text("  echo ready  ")}
+	if err := s.Update(ctx, Target{Global: true}, changes); err == nil {
+		t.Fatal("global setup accepted")
+	}
+	if err := s.Update(ctx, target, changes); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Read(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(v.Stored["workspace.setup"]) != `"echo ready"` {
+		t.Fatal(v.Stored)
+	}
+	if err := s.Update(ctx, target, map[string]*string{"workspace.setup": nil}); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Read(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.Stored["workspace.setup"]; ok {
+		t.Fatal("unset retained")
+	}
+}
+
 func TestRepositoryIdentityLegacyAndMetadata(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "repos", "repo-123", "repo.json")
