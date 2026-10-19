@@ -9,6 +9,20 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-10-12
+
+#### Added
+- Sort WIP, History, and Backlog by column with `s`; each page remembers its sort, and the status bar indicates non-default sorting.
+
+#### Changed
+- WIP, History, and Backlog now use flat tables instead of grouped sections. The Settings shortcut is now `S`.
+- Fix planning now distinguishes verified causes from hypotheses and carries reproduction steps into first-slice regression tests.
+
+#### Reliability
+- Lint checks are less likely to reuse stale results after Go or golangci-lint upgrades; when tool versions can’t be identified, Tao uses a fresh private cache.
+- Git change checks now recognize nested untracked files consistently across Git display settings, reducing false unattributed-change errors.
+- Batch cleanup no longer mistakes standalone scratch repositories for submodules. If cleanup of a landed batch fails, the error includes the batch and commit details with safe retry guidance.
+
 ### Week of 2026-10-05
 
 #### Documentation
