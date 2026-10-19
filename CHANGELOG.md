@@ -11,8 +11,35 @@ stable release.
 
 ### Week of 2026-09-28
 
+#### Added
+- Amend pending or blocked slice contracts with `tao edit amend`; changes are validated and recorded, and their provenance appears in plan details and review context.
+- Inspect a plan’s committed and in-progress changes in the read-only Changes tab, with file diffs and refresh; browse completed and abandoned plans in the separate History tab.
+- Edit shared settings in the Settings screen and configure global or repository preferences with invocation overrides. Choose independent Pi or Claude plan-review runtimes, per-role reasoning effort, and numeric rework-attempt policies.
+- Inspect locally saved rendered session prompts without treating them as lifecycle evidence.
+
+#### Changed
+- Keep review verdicts aligned with finding severity: minor findings can remain advisory, while blocking findings still require action.
+- See Tao run declared verification gates before recording slice completion intent, with bounded evidence of the results. Approval authorizes work but does not supply missing facts; unresolved approval-as-evidence contracts are rejected before agent launch.
+- Correct unsatisfiable rework scope through an owner-approved amendment, and avoid automatic repair when failures are already present at baseline.
+- Prepare pinned recursive submodules before dependent work begins, so missing or divergent prerequisites stop execution before consumers run.
+- Configure agent budgets with `TAO_BUDGET_<SCOPE>_<METRIC>_WARN` and `_STOP`; existing deprecated aliases remain supported during the deprecation window.
+- Navigate between adjacent plan details, open plan details from Overview, and run the displayed plan from its detail tabs.
+- Find earlier non-approving reviews of the same committed range called out before an explicit review, while retaining the option to retry.
+
+#### Fixed
+- Avoid stranded completion when staging tracked deletions or tracked changes in newly ignored directories; staging now distinguishes tracked changes from untracked files.
+- Rebase stale workspaces containing binary changes onto unrelated upstream updates without losing exact commit-series checks.
+- Use the existing registered repository identity from a linked worktree without redirecting execution or creating a duplicate identity.
+- Complete approved no-changes plans without a synthetic commit, while requiring approval of the current live head; empty squashes now receive distinct recovery guidance.
+- See actionable reasons when detached dashboard actions or final verification fail, including a safe first-failing-test or package hint.
+
+#### Reliability
+- Keep verification lint caches isolated by execution worktree to reduce stale findings between workspaces.
+- Receive advisory session-wrap warnings and private resume notes for explicit continuation, without extending deadlines or weakening approval checks.
+- Recover missing slice timing only from validated journal evidence, protecting completion and recovery if a planner rewrites an artifact late.
+
 #### Documentation
-- Condense the README, add a complete `docs/configuration.md` reference with a coverage test, correct `tao ui` help, deduplicate the usage guide, and trim the plan-format reference to its artifact contract.
+- Find setup and workflow guidance more easily: the README is shorter, `docs/configuration.md` is a complete settings reference, `tao ui` help is corrected, and the usage guide and plan-format reference are consolidated.
 
 ### Week of 2026-09-21
 
