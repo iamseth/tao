@@ -229,6 +229,9 @@ func TestRunAbortEnrichmentBounded(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				t.Fatal("run diagnostic driver did not finish")
 			}
+			// Negative observation window: observe absence of late diagnostic writes,
+			// rather than synchronize driver completion.
+			time.Sleep(100 * time.Millisecond)
 			after, err := os.ReadFile(plan.LogPath(dir))
 			if err != nil {
 				t.Fatal(err)
