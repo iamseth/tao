@@ -1720,8 +1720,6 @@ func TestGitSessionBoundaryDetectsAndPreservesNestedGitControlDrift(t *testing.T
 		t.Fatal(err)
 	}
 	runRealGit(t, embeddedRoot, "init", "-b", "main")
-	runRealGit(t, embeddedRoot, "config", "user.name", "Tao Test")
-	runRealGit(t, embeddedRoot, "config", "user.email", "tao@example.invalid")
 	if err := os.WriteFile(filepath.Join(embeddedRoot, "tracked.txt"), []byte("embedded contents\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1773,8 +1771,6 @@ func TestGuardedSingleConflictResolverRejectsAndPreservesConcurrentNestedSubmodu
 					t.Fatal(err)
 				}
 				runRealGit(t, origin, "init", "-b", "main")
-				runRealGit(t, origin, "config", "user.name", "Tao Test")
-				runRealGit(t, origin, "config", "user.email", "tao@example.invalid")
 				if err := os.WriteFile(filepath.Join(origin, "child.txt"), []byte("submodule contents\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}

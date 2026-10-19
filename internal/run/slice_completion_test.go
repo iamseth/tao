@@ -849,8 +849,6 @@ func initSliceCompletionRepo(t *testing.T) string {
 		return root
 	}
 	runCommitTestGitCommand(t, root, "init")
-	runCommitTestGitCommand(t, root, "config", "user.email", "tao@example.com")
-	runCommitTestGitCommand(t, root, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

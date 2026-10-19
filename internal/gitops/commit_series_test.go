@@ -71,8 +71,6 @@ func TestCommitSeriesRebaseProofSurvivesConflictFreeUpstreamRename(t *testing.T)
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "original.txt", "top\ntarget\nbottom\n")
 	commitAll(t, root, "base")
 	oldBase := gitOutput(t, root, "rev-parse", "HEAD")
@@ -151,8 +149,6 @@ func assertCommitSeriesProofSurvivesRebase(t *testing.T, fixture rebaseProofFixt
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, fixture.filename, fixture.baseContent)
 	commitAll(t, root, "base")
 	base := gitOutput(t, root, "rev-parse", "HEAD")
@@ -187,8 +183,6 @@ func TestCommitSeriesProofRetainsFileIdentity(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "left.txt", "top\ntarget\nbottom\n")
 	writeCommitSeriesFile(t, root, "right.txt", "top\ntarget\nbottom\n")
 	commitAll(t, root, "base")
@@ -221,8 +215,6 @@ func TestCommitSeriesProofDistinguishesDuplicateOccurrenceLocations(t *testing.T
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "duplicate.txt", "same\nbetween\nsame\n")
 	commitAll(t, root, "base")
 	base := gitOutput(t, root, "rev-parse", "HEAD")
@@ -402,8 +394,6 @@ func newBinaryProofRepository(t *testing.T) string {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	runGitCommand(t, root, "config", "core.filemode", "true")
 	return root
 }
@@ -754,8 +744,6 @@ func commitSeriesRepository(t *testing.T) (root, base, first, second string) {
 	root = t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeCommitSeriesFile(t, root, "base.txt", "base\n")
 	commitAll(t, root, "base")
 	base = gitOutput(t, root, "rev-parse", "HEAD")

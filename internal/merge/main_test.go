@@ -14,7 +14,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	realGitTemplate = testenv.NewRepoTemplate(buildRealGitRepo)
 	code := m.Run()
+	if err := realGitTemplate.Cleanup(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = 1
+	}
 	if err := cleanup(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if code == 0 {

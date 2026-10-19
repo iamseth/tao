@@ -60,8 +60,6 @@ func TestAgentSessionControlCheckoutAttribution(t *testing.T) {
 			control, execution := t.TempDir(), t.TempDir()
 			for _, root := range []string{control, execution} {
 				lifecycleGitRun(t, root, "init")
-				lifecycleGitRun(t, root, "config", "user.email", "test@example.com")
-				lifecycleGitRun(t, root, "config", "user.name", "Test")
 				lifecycleGitRun(t, root, "commit", "--allow-empty", "-m", "base")
 			}
 			changedPath := tc.changedPath

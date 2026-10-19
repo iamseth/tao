@@ -796,8 +796,6 @@ func newPullRequestOrchestrationFixture(t *testing.T) pullRequestOrchestrationFi
 		}
 	}
 	runCommitTestGitCommand(t, repoRoot, "init")
-	runCommitTestGitCommand(t, repoRoot, "config", "user.email", "tao@example.com")
-	runCommitTestGitCommand(t, repoRoot, "config", "user.name", "Tao Test")
 	runCommitTestGitCommand(t, repoRoot, "checkout", "-b", "main")
 	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -810,8 +808,6 @@ func newPullRequestOrchestrationFixture(t *testing.T) pullRequestOrchestrationFi
 	runCommitTestGitCommand(t, repoRoot, "push", "--set-upstream", "origin", "main")
 	const branch = "fix/pr-finalization-recovery"
 	runCommitTestGitCommand(t, repoRoot, "worktree", "add", "-b", branch, worktreeRoot, "main")
-	runCommitTestGitCommand(t, worktreeRoot, "config", "user.email", "tao@example.com")
-	runCommitTestGitCommand(t, worktreeRoot, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(worktreeRoot, "change.txt"), []byte("recover\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

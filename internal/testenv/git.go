@@ -12,8 +12,10 @@ import (
 )
 
 // SetupGit isolates home and Git configuration for a test process. Call before
-// m.Run, never concurrently with tests; call cleanup before os.Exit. Fixtures
-// must supply their own identities. Explicit per-test overrides remain possible.
+// m.Run, never concurrently with tests; call cleanup before os.Exit. The global
+// config supplies a default identity (Tao Test <tao@example.invalid>) so fixtures
+// need not spend Git processes configuring one; fixtures that assert a
+// distinct identity set it locally. Explicit per-test overrides remain possible.
 func SetupGit() (cleanup func() error, err error) {
 	return setupGit(os.Setenv)
 }
@@ -53,7 +55,7 @@ func setupGit(setenv func(string, string) error) (func() error, error) {
 			return fail(err)
 		}
 	}
-	const defaults = "[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n"
+	const defaults = "[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n[user]\n\tname = Tao Test\n\temail = tao@example.invalid\n"
 	if err := os.WriteFile(config, []byte(defaults), 0600); err != nil {
 		return fail(err)
 	}

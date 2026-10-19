@@ -2,6 +2,7 @@ package merge
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,20 +30,39 @@ func newRealGitWorktree(t *testing.T) realGitWorktree {
 	defaultBranch := "main"
 	planBranch := "tao/plan-a"
 
-	if err := os.MkdirAll(repoRoot, 0o700); err != nil {
+	copied, err := realGitTemplate.CopyTo(repoRoot)
+	if err != nil {
 		t.Fatal(err)
 	}
-	runRealGit(t, repoRoot, "init", "-b", defaultBranch)
-	runRealGit(t, repoRoot, "config", "user.name", "Tao Test")
-	runRealGit(t, repoRoot, "config", "user.email", "tao@example.invalid")
-	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("initial\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if !copied {
+		if err := os.MkdirAll(repoRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := buildRealGitRepo(repoRoot); err != nil {
+			t.Fatal(err)
+		}
 	}
-	runRealGit(t, repoRoot, "add", "README.md")
-	runRealGit(t, repoRoot, "commit", "-m", "initial")
 	runRealGit(t, repoRoot, "worktree", "add", "-b", planBranch, worktreePath, defaultBranch)
 
 	return realGitWorktree{repoRoot: repoRoot, worktreePath: worktreePath, defaultBranch: defaultBranch, planBranch: planBranch}
+}
+
+// realGitTemplate holds the committed main-branch repository every
+// newRealGitWorktree fixture starts from; see TestMain.
+var realGitTemplate *testenv.RepoTemplate
+
+func buildRealGitRepo(dir string) error {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("initial\n"), 0o600); err != nil {
+		return err
+	}
+	for _, args := range [][]string{{"init", "-b", "main"}, {"add", "README.md"}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", args...) //nolint:gosec // G204: fixed fixture Git commands.
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return nil
 }
 
 func runRealGit(t *testing.T, dir string, args ...string) {

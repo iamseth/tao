@@ -21,8 +21,6 @@ func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Test")
-	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	runGitCommand(t, root, "config", "core.quotePath", "true")
 	writeRepoFile(t, root, "old café.go", "package cafe\n")
 	runGitCommand(t, root, "add", ".")
@@ -57,8 +55,6 @@ func TestWorktreeFingerprintParts(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Test")
-	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	writeRepoFile(t, root, "tracked", "original\n")
 	writeRepoFile(t, root, "?? source", "rename me\n")
 	runGitCommand(t, root, "add", ".")
@@ -527,8 +523,6 @@ func TestCommitPathsCommitsOnlyGivenPaths(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "a.txt", "before\n")
 	writeRepoFile(t, root, "b.txt", "before\n")
 	runGitCommand(t, root, "add", "a.txt", "b.txt")
@@ -949,8 +943,6 @@ func TestMergedIntoMechanismDistinguishesAncestryAndSquash(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "initial.txt", "initial\n")
 	runGitCommand(t, root, "add", ".")
 	runGitCommand(t, root, "commit", "-m", "initial")
@@ -1003,8 +995,6 @@ func TestAddTrackedStagesIndexKnownPathsUnderNewlyIgnoredDirectory(t *testing.T)
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Test")
-	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	if err := os.MkdirAll(filepath.Join(root, "pkg", "cache"), 0o750); err != nil {
 		t.Fatal(err)
 	}

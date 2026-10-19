@@ -29,8 +29,6 @@ func TestSliceBlockedGateEvidence(t *testing.T) {
 	for _, mode := range []string{"owned", "outside path", "empty root", "missing root", "file root", "empty base", "bad base", "not git", "fingerprint error", "both groups"} {
 		t.Run(mode, func(t *testing.T) {
 			root := initTestGitRepo(t)
-			runCLICommitGit(t, root, "config", "user.name", "Test")
-			runCLICommitGit(t, root, "config", "user.email", "test@example.com")
 			runCLICommitGit(t, root, "commit", "--allow-empty", "-m", "base")
 			base := runCLICommitGit(t, root, "rev-parse", "HEAD")
 			if err := os.WriteFile(filepath.Join(root, "owned.go"), []byte("owned\n"), 0o600); err != nil {
@@ -119,8 +117,6 @@ func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
 	clearTaoEnv(t)
 	ctx := context.Background()
 	root := initTestGitRepo(t)
-	runCLICommitGit(t, root, "config", "user.name", "Test")
-	runCLICommitGit(t, root, "config", "user.email", "test@example.com")
 	runCLICommitGit(t, root, "config", "core.quotePath", "true")
 	runCLICommitGit(t, root, "commit", "--allow-empty", "-m", "base")
 	base := strings.TrimSpace(runCLICommitGit(t, root, "rev-parse", "HEAD"))

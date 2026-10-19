@@ -22,8 +22,6 @@ import (
 func TestRunnerDetectsControlCheckoutLeak(t *testing.T) {
 	controlRoot := t.TempDir()
 	runGit(t, controlRoot, "init")
-	runGit(t, controlRoot, "config", "user.email", "test@example.com")
-	runGit(t, controlRoot, "config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(controlRoot, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +102,6 @@ func TestControlCheckoutChangeEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			runGit(t, root, "init")
-			runGit(t, root, "config", "user.name", "Test")
-			runGit(t, root, "config", "user.email", "test@example.invalid")
 			writeLeakFile(t, root, "tracked.txt", "base\n")
 			runGit(t, root, "add", ".")
 			runGit(t, root, "commit", "-m", "base")

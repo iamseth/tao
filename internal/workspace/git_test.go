@@ -22,8 +22,6 @@ func newTestRepo(t *testing.T) testRepo {
 	t.Helper()
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "master")
-	runGit(t, dir, "config", "user.name", "Tao Test")
-	runGit(t, dir, "config", "user.email", "tao@example.com")
 	runGit(t, dir, "config", "commit.gpgSign", "false")
 	runGit(t, dir, "config", "tag.gpgSign", "false")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644); err != nil { //nolint:gosec // G306: test fixture file

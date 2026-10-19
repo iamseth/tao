@@ -90,8 +90,6 @@ func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
-	runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
-	runRebaseRecoveryGit(t, root, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, root, "config", "core.quotePath", "true")
 	runRebaseRecoveryGit(t, root, "commit", "--allow-empty", "-m", "base")
 	execution := testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: defaultCommandRunner})
@@ -2079,8 +2077,6 @@ func TestContinuePlanOwnedBlocker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			runRebaseRecoveryGit(t, root, "init", "-b", "feature/test")
-			runRebaseRecoveryGit(t, root, "config", "user.email", "tao@example.com")
-			runRebaseRecoveryGit(t, root, "config", "user.name", "Tao Test")
 			writeFile := func(name, text string) {
 				t.Helper()
 				if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0o600); err != nil {
@@ -2293,8 +2289,6 @@ func TestServiceExecuteRestartRetriesAfterDurableRestartBeforeWorkspacePreparati
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
-	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
-	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	if err := os.WriteFile(filepath.Join(repoRoot, "base.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

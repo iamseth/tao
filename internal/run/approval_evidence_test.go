@@ -302,8 +302,6 @@ func TestApprovalEvidenceRefusesBeforeBlockedRestart(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
-	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
-	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "base")
 	oldHead := rebaseRecoveryGitOutput(t, repoRoot, "rev-parse", "HEAD")
 	root := filepath.Join(t.TempDir(), "worktree")

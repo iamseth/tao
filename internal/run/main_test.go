@@ -3,7 +3,6 @@ package run
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,7 +87,7 @@ func canCopySliceRepo() bool {
 	cmd := exec.Command("git", "config", "--list")
 	cmd.Dir = os.Getenv("HOME")
 	out, err := cmd.Output()
-	return err == nil && string(out) == "gc.auto=0\nmaintenance.auto=false\ncommit.gpgsign=false\ninit.defaultbranch=main\n"
+	return err == nil && string(out) == "gc.auto=0\nmaintenance.auto=false\ncommit.gpgsign=false\ninit.defaultbranch=main\nuser.name=Tao Test\nuser.email=tao@example.invalid\n"
 }
 
 type sliceRepoTemplate struct {
@@ -157,36 +156,5 @@ func sliceTemplateGit(root string, args ...string) error {
 // Copy ordinary files, not clones, hardlinks, alternates, or worktree records.
 // The source is private and never handed to a fixture consumer.
 func copySliceRepo(source, dest string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dest, rel)
-		if entry.IsDir() {
-			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
-				return err
-			}
-			return os.Chmod(target, info.Mode().Perm())
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported template entry %s", rel)
-		}
-		data, err := os.ReadFile(path) // #nosec G304 G122 -- private immutable template; no concurrent mutation, and symlinks are rejected above.
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(target, data, info.Mode().Perm()); err != nil { // #nosec G703 -- relative WalkDir entry from private template into a fresh test directory.
-
-			return err
-		}
-		return os.Chmod(target, info.Mode().Perm())
-	})
+	return testenv.CopyTree(source, dest)
 }

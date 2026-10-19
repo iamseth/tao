@@ -15,8 +15,6 @@ func TestWithDetachedCheckout(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init")
-	runGitCommand(t, root, "config", "user.name", "Test")
-	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	path := filepath.Join(root, "tree")
 	if err := os.WriteFile(path, []byte("base"), 0o600); err != nil {
 		t.Fatal(err)

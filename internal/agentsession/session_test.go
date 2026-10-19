@@ -28,8 +28,6 @@ func TestRunnerControlCheckoutAttribution(t *testing.T) {
 			t.Run(fmt.Sprintf("attributed=%v/error=%v", attributed, sessionErr), func(t *testing.T) {
 				root := t.TempDir()
 				runGit(t, root, "init")
-				runGit(t, root, "config", "user.email", "test@example.com")
-				runGit(t, root, "config", "user.name", "Test")
 				runGit(t, root, "commit", "--allow-empty", "-m", "base")
 				runner := New(Config{Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 					writeLeakFile(t, root, "other.txt", "changed")

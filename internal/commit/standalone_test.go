@@ -362,8 +362,6 @@ func newStandaloneRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	runStandaloneGit(t, root, "init", "-b", "main")
-	runStandaloneGit(t, root, "config", "user.name", "Tao Test")
-	runStandaloneGit(t, root, "config", "user.email", "tao@example.invalid")
 	writeStandaloneFile(t, root, "README.md", "initial\n")
 	runStandaloneGit(t, root, "add", "README.md")
 	runStandaloneGit(t, root, "commit", "-m", "chore(test): initialize repository")

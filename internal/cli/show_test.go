@@ -887,8 +887,6 @@ func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T)
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	root := t.TempDir()
 	runCLICommitGit(t, root, "init", "-b", "main")
-	runCLICommitGit(t, root, "config", "user.name", "Tao Test")
-	runCLICommitGit(t, root, "config", "user.email", "tao@example.invalid")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

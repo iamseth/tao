@@ -169,8 +169,6 @@ func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoun
 		t.Fatal(err)
 	}
 	runMonitorGit(t, root, "init", "-b", "main")
-	runMonitorGit(t, root, "config", "user.name", "Tao Test")
-	runMonitorGit(t, root, "config", "user.email", "tao@example.invalid")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -382,8 +380,6 @@ func TestCollectorWithFileRepositoryRecommendsRestartForStaleSingleMergeIntent(t
 		t.Fatal(err)
 	}
 	runMonitorGit(t, root, "init", "-b", "main")
-	runMonitorGit(t, root, "config", "user.name", "Tao Test")
-	runMonitorGit(t, root, "config", "user.email", "tao@example.invalid")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -80,8 +80,6 @@ func TestDeltaDiffLinkedWorktreeReadOnly(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Test")
-	runGitCommand(t, root, "config", "user.email", "test@example.com")
 	write := func(root, path, text string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, path), []byte(text), 0600); err != nil {

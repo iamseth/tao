@@ -123,8 +123,6 @@ func TestResolvePrerequisiteBaselineMatchesAutomaticPreparation(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
 	runRebaseRecoveryGit(t, repoRoot, "init", "-b", "main")
-	runRebaseRecoveryGit(t, repoRoot, "config", "user.email", "tao@example.com")
-	runRebaseRecoveryGit(t, repoRoot, "config", "user.name", "Tao Test")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "base")
 	runRebaseRecoveryGit(t, repoRoot, "branch", "release")
 	runRebaseRecoveryGit(t, repoRoot, "commit", "--allow-empty", "-m", "prerequisite integrated")

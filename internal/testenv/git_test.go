@@ -86,6 +86,13 @@ func TestSetupGit(t *testing.T) {
 			}
 		}
 	}
+	// The global default identity applies unless a repository sets its own.
+	if got := git(t, bare, "config", "--get", "user.email"); got != "tao@example.invalid" {
+		t.Errorf("default identity = %s", got)
+	}
+	if got := git(t, root, "config", "--get", "user.email"); got != "fixture@example.invalid" {
+		t.Errorf("local identity = %s", got)
+	}
 	t.Run("intentional override", func(t *testing.T) {
 		t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(hostile, "global"))
 		if got := git(t, root, "config", "--get", "gc.auto"); got != "987" {

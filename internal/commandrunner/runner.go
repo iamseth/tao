@@ -35,8 +35,11 @@ func DefaultLocal(ctx context.Context, cwd string, name string, args []string, s
 	// A shell can exit while descendants retain its output pipes. Bound Wait's
 	// pipe drain too: context cancellation alone does not interrupt that wait
 	// after the shell exits. ErrWaitDelay reports incomplete output, and deferred
-	// process-group cleanup terminates the remaining descendants on Unix.
-	cmd.WaitDelay = 100 * time.Millisecond
+	// process-group cleanup terminates the remaining descendants on Unix. The
+	// bound must also outlast a child forked concurrently by another goroutine,
+	// which holds a copy of the pipe until it execs; under heavy process load
+	// that window exceeded 100ms and failed ordinary Git queries.
+	cmd.WaitDelay = time.Second
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()

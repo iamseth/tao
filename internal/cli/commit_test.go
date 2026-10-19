@@ -556,8 +556,6 @@ func newCLICommitRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	runCLICommitGit(t, root, "init", "-b", "main")
-	runCLICommitGit(t, root, "config", "user.name", "Tao Test")
-	runCLICommitGit(t, root, "config", "user.email", "tao@example.invalid")
 	writeCLICommitFile(t, root, "README.md", "initial\n")
 	runCLICommitGit(t, root, "add", "README.md")
 	runCLICommitGit(t, root, "commit", "-m", "chore(test): initialize repository")

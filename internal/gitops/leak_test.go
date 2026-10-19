@@ -47,8 +47,6 @@ func TestDirtyFingerprintUntrackedExcludesTrackedPaths(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	write := func(path, text string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, path), []byte(text), 0o600); err != nil {
@@ -80,8 +78,6 @@ func TestDirtyFingerprintEnumeratesNestedUntrackedFiles(t *testing.T) {
 		t.Run(setting, func(t *testing.T) {
 			root := t.TempDir()
 			runGitCommand(t, root, "init", "-b", "main")
-			runGitCommand(t, root, "config", "user.name", "Tao Test")
-			runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 			writeRepoFile(t, root, "tracked.txt", "base\n")
 			runGitCommand(t, root, "add", "tracked.txt")
 			runGitCommand(t, root, "commit", "-m", "base")
@@ -162,8 +158,6 @@ func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
 
-	runGitCommand(t, root, "config", "user.name", "Tao Test")
-	runGitCommand(t, root, "config", "user.email", "tao@example.invalid")
 	writeRepoFile(t, root, "tracked.txt", "base\n")
 	runGitCommand(t, root, "add", "tracked.txt")
 	runGitCommand(t, root, "commit", "-m", "initial")

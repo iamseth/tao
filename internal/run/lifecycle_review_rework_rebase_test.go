@@ -151,7 +151,6 @@ func newLifecycleGitFixture(t *testing.T, planID string) *lifecycleGitFixture {
 		now:       time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC),
 	}
 	lifecycleGitRun(t, fixture.repoRoot, "init", "-b", "main")
-	lifecycleGitRun(t, fixture.repoRoot, "config", "user.name", "Tao Test")
 	lifecycleGitRun(t, fixture.repoRoot, "config", "user.email", "tao-test@example.com")
 	lifecycleCommit(t, fixture.repoRoot, "README.md", "initial\n", "initial")
 	base := lifecycleGitOutput(t, fixture.repoRoot, "rev-parse", "HEAD")
