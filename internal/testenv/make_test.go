@@ -12,7 +12,7 @@ import (
 
 // Exercise the real recipe without recursively running the Go test suite.
 func TestMakeTestEnvironment(t *testing.T) {
-	for _, mode := range []string{"success", "explicit", "test-failure", "setup-failure", "termination", "build"} {
+	for _, mode := range []string{"success", "explicit", "test-failure", "setup-failure", "termination", "build", "contended"} {
 		t.Run(mode, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "fixture with spaces")
 			mustMakeDir(t, root)
@@ -30,6 +30,12 @@ func TestMakeTestEnvironment(t *testing.T) {
 			xdg := filepath.Join(root, "developer config")
 			for _, dir := range []string{tools, home, xdg} {
 				mustMakeDir(t, dir)
+			}
+			// A held stable scratch must be left alone and not shared.
+			held := filepath.Join(root, "bin", "test-env")
+			if mode == "contended" {
+				mustMakeDir(t, held)
+				mustWriteMakeFile(t, filepath.Join(held, "owner"), "other run\n", 0600)
 			}
 			sentinel := filepath.Join(home, ".gitconfig")
 			mustWriteMakeFile(t, sentinel, "hostile developer config\n", 0600)
@@ -136,8 +142,16 @@ fi
 							t.Fatalf("second invocation: %v: %s", err, out)
 						}
 						next := strings.Split(readMakeFile(t, filepath.Join(root, "observed")), "\n")
-						if next[0] == observed[0] {
-							t.Error("scratch reused across invocations")
+						// Only the uncontended stable path keeps the Go test cache valid.
+						if stable := root + "/bin/test-env/home"; mode == "contended" {
+							if observed[0] == stable || next[0] == stable || next[0] == observed[0] {
+								t.Errorf("contended scratch shared: %q then %q", observed[0], next[0])
+							}
+							if !strings.Contains(out, "will not be cached") {
+								t.Errorf("missing contention notice: %s", out)
+							}
+						} else if observed[0] != stable || next[0] != stable {
+							t.Errorf("scratch not stable across invocations: %q then %q", observed[0], next[0])
 						}
 					} else if strings.Contains(out, "example/a") {
 						t.Errorf("summary ran after failure: %s", out)
@@ -150,7 +164,14 @@ fi
 			if err != nil && !os.IsNotExist(err) {
 				t.Fatal(err)
 			}
-			if len(entries) != 0 {
+			if mode == "contended" {
+				if got := readMakeFile(t, filepath.Join(held, "owner")); got != "other run\n" {
+					t.Errorf("held scratch changed: %q", got)
+				}
+				if len(entries) != 1 || entries[0].Name() != "test-env" {
+					t.Errorf("scratch not cleaned: %v", entries)
+				}
+			} else if len(entries) != 0 {
 				t.Errorf("scratch not cleaned: %v", entries)
 			}
 			if got := readMakeFile(t, sentinel); got != "hostile developer config\n" {

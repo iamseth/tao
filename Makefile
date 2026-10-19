@@ -43,7 +43,11 @@ clean:
 test:
 	@set -e; \
 	mkdir -p bin; \
-	scratch=$$(mktemp -d "$$(pwd -P)/bin/test-env.XXXXXX"); \
+	scratch="$$(pwd -P)/bin/test-env"; \
+	if ! mkdir "$$scratch" 2>/dev/null; then \
+		echo "make test: $$scratch is in use or stale; using unique scratch, so test results will not be cached (run make clean if no other make test is running)" >&2; \
+		scratch=$$(mktemp -d "$$(pwd -P)/bin/test-env.XXXXXX"); \
+	fi; \
 	trap 'status=$$?; trap - 0; rm -rf "$$scratch"; exit "$$status"' 0; \
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	mkdir "$$scratch/home" "$$scratch/xdg"; \

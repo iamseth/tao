@@ -22,6 +22,10 @@ import (
 var suiteTaoDataHome string
 
 func TestMain(m *testing.M) {
+	// The suite's fake Pi never answers readiness RPCs, so the real doctor
+	// probe would wait out its startup timeout in every UI/doctor test.
+	// Tests that exercise readiness install their own probe.
+	probeDoctorPiReadiness = func(context.Context, string) error { return nil }
 	os.Exit(runCLISuite(m.Run))
 }
 
