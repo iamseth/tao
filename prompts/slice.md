@@ -145,6 +145,8 @@ When a task renames, moves, re-exports, aliases, or changes the visibility or re
 
 For changed contracts, search the repository for affected consumers, including environment-key sets, validation rules, registries and completion metadata, injected-runner call sequences, and exported API contracts. Search `*_test.go` files and `testdata` as well as other relevant consumers, including indirect or generated consumers rather than only literal symbol matches. List concrete affected tests and fixtures that need edits in the same contract-changing slice's `expected_files`, with explicit update tasks in `tasks`. When adding, removing, or reordering a Git or subprocess invocation, search every package covered by the slice's verification commands (including all packages covered by recursive or multi-package commands) for injected `CommandRunner` implementations and process fakes, including argument-key switches and recorded call sequences; symbol-only search is insufficient, and require explicit update tasks in `tasks` and ownership in `expected_files` for doubles needing edits, or an explicit explanation that none are affected. Unchanged search matches do not require edits or ownership; this is not blanket ownership or permission for unrelated repairs.
 
+When a slice adds a required field, constructor parameter, or injected dependency whose zero or production default fails closed, refuses, or otherwise changes behavior, or a task says to inject a dependency into a type, own the file that declares the type and search every package covered by the slice's verification commands, including `*_test.go` files and tests skipped by short or fast test tiers, for constructor calls and struct or composite literals of that type. List every site that would break or change behavior in `expected_files` with explicit update tasks, or, when the sites are too many for one slice, add an earlier fixture-migration slice that routes construction through a named shared test helper. When a requirement covers all exported mutating entrypoints, methods, or operations of a type, list every file that declares an exported method on that type in `expected_files`, not only the file that declares the type.
+
 ## Verification command selection
 
 Before writing `slices.json`, inspect repository guidance for canonical validation commands.
@@ -282,7 +284,7 @@ Copy the Planning Packet's strict four-field Source Note block, or write `None` 
 
 ## Expected Files/Packages
 
-- Likely files, packages, or subsystems future slices may touch. Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable.
+- Likely files, packages, or subsystems future slices may touch. Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable. For a new fail-closed required field or injected dependency, enumerate the file declaring the type and its constructor and literal construction sites, including test files.
 
 ## Validation Strategy
 

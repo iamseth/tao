@@ -96,7 +96,7 @@ When planning is complete, respond only with this fixed Planning Packet format:
 
 ## Expected Files/Packages
 
-- <likely files, packages, commands, or subsystems future slices may touch. Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable.>
+- <likely files, packages, commands, or subsystems future slices may touch. Enumerate the current references of any identifier a slice will rename, move, alias, or change the visibility or receiver of, or record that a same-package compatibility shim keeps the old identifier callable. For a new fail-closed required field or injected dependency, enumerate the file declaring the type and its constructor and literal construction sites, including test files.>
 
 ## Validation Strategy
 

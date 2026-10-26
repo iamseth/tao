@@ -1146,6 +1146,11 @@ func TestSlicePromptsRequireContractConsumerOwnership(t *testing.T) {
 				"explicit update tasks in `tasks`",
 				"Unchanged search matches do not require edits or ownership",
 				"not blanket ownership or permission for unrelated repairs",
+				"own the file that declares the type",
+				"including `*_test.go` files and tests skipped by short or fast test tiers",
+				"constructor calls and struct or composite literals of that type",
+				"add an earlier fixture-migration slice that routes construction through a named shared test helper",
+				"list every file that declares an exported method on that type",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("missing contract-consumer ownership guidance %q", want)
@@ -1184,6 +1189,10 @@ func TestPlanningPromptsRequireExistingSymbolOwnership(t *testing.T) {
 	for name, prompt := range map[string]string{"plan": PlanPromptTemplate, "slice": SlicePromptTemplate} {
 		if !strings.Contains(prompt, scope) {
 			t.Errorf("%s prompt missing Expected Files/Packages guidance %q", name, scope)
+		}
+		const constructionScope = "enumerate the file declaring the type and its constructor and literal construction sites, including test files"
+		if !strings.Contains(prompt, constructionScope) {
+			t.Errorf("%s prompt missing Expected Files/Packages guidance %q", name, constructionScope)
 		}
 	}
 	if !strings.Contains(SlicePromptTemplate, "are not an interface contract") {
