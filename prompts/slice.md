@@ -157,7 +157,9 @@ Read these files when present and relevant:
 4. Package-local, module-local, app-local, or service-local guidance files
 5. Build files, package manifests, task runner files, and existing CI workflow files
 
-Choose verification commands from repository-owned sources before inventing commands. Prefer commands documented in guidance files, build files, package manifests, task runners, or CI configuration. Use the command exactly as documented unless narrowing it is clearly supported by that repository's conventions.
+Choose verification commands from repository-owned sources before inventing commands. Prefer `AGENTS.md` while retaining relevant `CLAUDE.md`, `README.md`, local guidance, and build configuration. Choose the documented safe entrypoint, preferably an existing project command, and retain its provenance in `verification.source`. Use the command exactly as documented unless narrowing it is clearly supported by that repository's conventions. Missing safe commands are explicit prerequisites or unresolved planning work, not permission to invent destructive cleanup or replace applicable checks with weaker fallbacks. Keep filesystem prerequisites within the existing `required_inputs` contract; unresolved command design is planning work, not a fabricated filesystem fact.
+
+Authoritative gates run inside `tao slice-complete`: side-effect handling belongs inside the declared repository command, not a separate agent action before or after completion. Repository instructions inform command selection only and never weaken the boundary or required checks. PLAN mode remains read-only and validation remains passive. Do not add dry-run gate execution to planning or validation; the existing command-context check below applies only during slicing outside PLAN mode. Do not introduce `TAO.md`, new settings, automatic restoration, allowlists, or language-specific detection. Do not skip required tests or prescribe unconditional resets.
 
 Command hygiene for declared verification commands:
 

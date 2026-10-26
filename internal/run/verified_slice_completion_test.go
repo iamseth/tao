@@ -960,6 +960,131 @@ func TestCompleteVerifiedCacheExclusion(t *testing.T) {
 	}
 }
 
+func TestCompleteVerifiedRepositoryGate(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, mode := range []string{"mutating", "safe", "existing edit", "failure"} {
+		t.Run(mode, func(t *testing.T) {
+			request := verifiedCompletionFixture(t, CommitPolicySlice, "sh verify.sh")
+			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
+			put := func(name, content string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A repository-owned fixture, not a Tao restoration mechanism. On success
+			// it restores the exact entry bytes; on failure it retains diagnostic dirt.
+			put("metadata", "version=1\n")
+			put("check.sh", "printf 'bump\\n' >> metadata\n[ ! -f fail-check ]\n")
+			wrapper := "sh check.sh\n"
+			if mode != "mutating" {
+				wrapper = "set -eu\nsaved=$(mktemp)\ntrap 'rm -f \"$saved\"' EXIT\ncp metadata \"$saved\"\nsh check.sh\ncp \"$saved\" metadata\n"
+			}
+			put("verify.sh", wrapper)
+			runCommitTestGitCommand(t, root, "add", "metadata", "check.sh", "verify.sh")
+			runCommitTestGitCommand(t, root, "commit", "-m", "repository verification fixture")
+			parent := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+			rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.ExecutionStart.Head = parent })
+			wantMetadata := "version=1\n"
+			if mode == "existing edit" {
+				wantMetadata += "intentional edit\n"
+				put("metadata", wantMetadata)
+			}
+			put("change.go", "package change\n")
+			if mode == "failure" {
+				put("fail-check", "fail\n")
+			}
+			if mode == "safe" || mode == "existing edit" {
+				for range 2 {
+					if err := commandrunner.DefaultLocal(context.Background(), root, "sh", []string{"verify.sh"}, io.Discard, io.Discard); err != nil {
+						t.Fatal(err)
+					}
+					if data, err := os.ReadFile(filepath.Join(root, "metadata")); err != nil || string(data) != wantMetadata { //nolint:gosec // G304: fixed metadata file in the test-owned temporary worktree.
+						t.Fatalf("repeatable wrapper lost entry bytes: %q, %v", data, err)
+					}
+				}
+			}
+			index := runCommitTestGitOutput(t, root, "write-tree")
+			service := SliceCompletionService{CommandRunner: commandrunner.DefaultLocal}
+			err := service.Complete(context.Background(), request)
+			slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]
+			if mode == "mutating" || mode == "failure" {
+				if err == nil || slice.CommitIntent != nil || slice.Completion != nil {
+					t.Fatalf("unsafe completion: %+v, %v", slice, err)
+				}
+				if strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD")) != parent || runCommitTestGitOutput(t, root, "write-tree") != index {
+					t.Fatal("refusal mutated HEAD or index")
+				}
+				if mode == "mutating" {
+					for _, want := range []string{"metadata", "tracked files changed during verification", "repository-owned", "inside the declared command", "pre-call cleanup"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("missing %q: %v", want, err)
+						}
+					}
+				} else if slice.VerificationAttempt == nil || len(slice.VerificationAttempt.Runs) != 1 || slice.VerificationAttempt.Runs[0].Result != "failed" {
+					t.Fatalf("missing failed-gate diagnostic state: %+v", slice.VerificationAttempt)
+				}
+				wantMetadata += "bump\n"
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if slice.Completion == nil || slice.Completion.Outcome != plan.SliceCompletionCommitted {
+					t.Fatalf("missing committed completion: %+v", slice)
+				}
+				if got := runCommitTestGitOutput(t, root, "show", "HEAD:metadata"); strings.TrimSpace(got) != strings.TrimSpace(wantMetadata) {
+					t.Fatalf("committed metadata = %q", got)
+				}
+				if got := runCommitTestGitOutput(t, root, "show", "HEAD:change.go"); !strings.Contains(got, "package change") {
+					t.Fatalf("lost intentional source edit: %q", got)
+				}
+			}
+			if data, err := os.ReadFile(filepath.Join(root, "metadata")); err != nil || string(data) != wantMetadata { //nolint:gosec // G304: fixed metadata file in the test-owned temporary worktree.
+				t.Fatalf("metadata = %q, %v; want %q", data, err, wantMetadata)
+			}
+		})
+	}
+}
+
+func TestDescribeVerificationBoundaryDriftGuidance(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"tracked", "untracked", "mixed", "identity/index/declaration"} {
+		t.Run(mode, func(t *testing.T) {
+			before := verifiedCompletionInspection{}
+			after := verifiedCompletionInspection{paths: map[string]string{}, untracked: map[string]bool{}}
+			if mode == "identity/index/declaration" {
+				after.branch, after.indexFingerprint, after.declaration = "new", "new", "new"
+			} else {
+				after.fingerprint = "changed"
+				if mode != "untracked" {
+					after.paths["metadata"] = "changed"
+				}
+				if mode != "tracked" {
+					after.paths["output"] = "new"
+					after.untracked["output"] = true
+				}
+			}
+			got := describeVerificationBoundaryDrift(before, after)
+			for text, want := range map[string]bool{
+				"tracked files changed during verification":     mode == "tracked" || mode == "mixed",
+				"Untracked paths changed during verification":   mode == "untracked" || mode == "mixed",
+				"repository-owned safe verification entrypoint": mode != "identity/index/declaration",
+				"branch changed":                  mode == "identity/index/declaration",
+				"index fingerprint changed":       mode == "identity/index/declaration",
+				"declaration digest changed":      mode == "identity/index/declaration",
+				"timing alone does not identify":  true,
+				"does not bypass boundary checks": true,
+				"tao slice-blocked":               true,
+				"Next: remove":                    false,
+			} {
+				if strings.Contains(got, text) != want {
+					t.Errorf("contains %q = %t, want %t: %s", text, !want, want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestDescribeVerificationBoundaryDrift(t *testing.T) {
 	t.Parallel()
 	before := verifiedCompletionInspection{

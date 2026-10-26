@@ -1345,6 +1345,29 @@ func TestSlicePromptRequiresExactDirectInputProducersAndLegacyOmission(t *testin
 	}
 }
 
+func TestPlanningPromptsRequireSafeRepositoryVerification(t *testing.T) {
+	for name, prompt := range map[string]string{"plan": PlanPromptTemplate, "slice": SlicePromptTemplate} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				"Prefer `AGENTS.md`", "`CLAUDE.md`", "`README.md`", "local guidance", "build configuration",
+				"documented safe entrypoint", "`verification.source`",
+				"explicit prerequisites or unresolved planning work",
+				"Authoritative gates run inside `tao slice-complete`",
+				"not a separate agent action before or after completion",
+				"never weaken the boundary or required checks",
+				"PLAN mode remains read-only", "validation remains passive",
+				"Do not add dry-run gate execution",
+				"Do not introduce `TAO.md`, new settings, automatic restoration, allowlists, or language-specific detection",
+				"Do not skip required tests or prescribe unconditional resets",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("missing safe verification contract %q", want)
+				}
+			}
+		})
+	}
+}
+
 func TestSlicePromptKeepsVerificationProvenanceAndSemanticsAdvisory(t *testing.T) {
 	for _, want := range []string{
 		"verification commands from repository-owned sources",

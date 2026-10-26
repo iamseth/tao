@@ -268,6 +268,17 @@ Each slice should include:
 
 ### Observed slice verification
 
+Repository guidance selects safe commands and supplies `verification.source`
+provenance only; it never relaxes boundary fingerprints, pre-intent checks, or
+completion authority. Gates run inside `tao slice-complete`, so any handling of
+known disposable side effects belongs inside the declared command. Boundary drift
+after passing gates still refuses new intent; timing alone does not prove causation.
+See [repository-owned safe entrypoints](usage-guide.md#repository-owned-safe-verification-entrypoints)
+for the wrapper contract. This guidance changes no schema, adds no
+verification-command amendment API, does not automatically repair existing plans,
+and does not permit hand-editing frozen artifacts. Frozen-intent recovery remains
+exact recovery without rerunning gates.
+
 `verification_results` retains its historical `command`, `cwd`, `result`, and `details` fields. Optional additions are `source`, one-based `command_index`, `original_command`, nullable `exit_code` and `duration_milliseconds`, `output_digest`, `output_truncated`, and `failure_kind` (the final-verification classification). Absent source stays absent; unknown exits/durations stay absent, while measured zero values are emitted. Legacy result JSON, intent hashes, and exact messages are not upgraded or reformatted.
 
 Optional slice `verification_attempt` records the latest Tao-observed attempt, including failures, without completing a slice or changing lifecycle queues or timing. Optional `commit_intent.verification` holds a frozen snapshot for later verified completion. Both use `SliceVerificationSnapshot` version 1 with keys `version`, `attempt_id`, `execution_root`, `starting_branch`, `starting_head`, `worktree_fingerprint`, `declaration_digest`, `runs`, and `recorded_at`. All keys inside a present snapshot are emitted. Digests are 64 lowercase, unprefixed SHA-256 hex characters; roots and run working directories are absolute.

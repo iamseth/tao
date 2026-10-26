@@ -22,6 +22,7 @@ func describeVerificationBoundaryDrift(before, after verifiedCompletionInspectio
 			fmt.Fprintf(&out, "%s changed\n", field.name)
 		}
 	}
+	var trackedDrift, untrackedDrift bool
 	if before.fingerprint != after.fingerprint {
 		out.WriteString("worktree fingerprint changed\n")
 		var appeared, changed, vanished []string
@@ -52,6 +53,13 @@ func describeVerificationBoundaryDrift(before, after verifiedCompletionInspectio
 			if len(category.paths) == 0 {
 				continue
 			}
+			for _, path := range category.paths {
+				if before.untracked[path] || after.untracked[path] {
+					untrackedDrift = true
+				} else {
+					trackedDrift = true
+				}
+			}
 			fmt.Fprintf(&out, "%s:\n", category.name)
 			slices.Sort(category.paths)
 			for _, path := range category.paths[:min(20, len(category.paths))] {
@@ -70,6 +78,16 @@ func describeVerificationBoundaryDrift(before, after verifiedCompletionInspectio
 			}
 		}
 	}
-	out.WriteString("Next: remove untracked gate outputs (they are not part of the slice) and rerun tao slice-complete. Make them ignored via .gitignore or stop the tool writing them only when that is in scope; otherwise use tao slice-blocked.")
+	out.WriteString("Next: inspect the changes before retrying tao slice-complete; timing alone does not identify which command or process changed the boundary. ")
+	if trackedDrift {
+		out.WriteString("tracked files changed during verification; preserve intentional edits. ")
+	}
+	if untrackedDrift {
+		out.WriteString("Untracked paths changed during verification; inspect ownership and contents before removing any disposable outputs. Ignoring outputs or stopping their creation is appropriate only when in scope. ")
+	}
+	if trackedDrift || untrackedDrift {
+		out.WriteString("For known verification side effects, use a documented repository-owned safe verification entrypoint that handles them inside the declared command, preserves intentional edits and failure exit status, and supports repeated invocation. Agent pre-call cleanup cannot prevent mutation during internal gates. This diagnostic does not authorize cleanup or changes to plan artifacts or verification declarations. ")
+	}
+	out.WriteString("Resolve any reported identity, index, or declaration changes separately; a safe entrypoint does not bypass boundary checks. If no safe in-scope path exists, use tao slice-blocked.")
 	return out.String()
 }

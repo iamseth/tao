@@ -554,6 +554,38 @@ A managed `tao slice-complete` live at the session deadline gets at most ten min
 Tao reports failures and supported mechanical corrections; final
 repository verification is unchanged. See [observed verification](plan-format.md#observed-slice-verification).
 
+#### Repository-owned safe verification entrypoints
+
+When planning verification, prefer existing project entrypoints documented in
+`AGENTS.md`, then relevant `CLAUDE.md`, `README.md`, local guidance, and build or
+CI configuration. Record the source in `verification.source`; repository guidance
+selects commands, never weakens required checks or Tao's completion boundary.
+PLAN mode stays read-only and validation stays passive, not a gate dry run.
+
+For any language or build system, a repository-owned wrapper for known verification
+side effects must:
+
+- Preserve intended edits, including edits present before invocation, and preserve
+  the failing check's nonzero exit status.
+- Handle only understood disposable effects safely within that same invocation.
+- Remain repeatable, including after a failed invocation, and fail safely when
+  cleanup cannot preserve work.
+
+Authoritative gates execute inside `tao slice-complete`. Side-effect handling must
+therefore be inside the declared command, not an agent cleanup step before or after
+completion. Passing tests do not authorize a changed worktree, index, identity, or
+verification declaration. A drift report is an observation, not proof that the gate
+caused the change: inspect reported paths and preserve intentional work before
+retrying. A safe wrapper does not protect against every concurrent writer or bypass
+boundary checks. Do not use unconditional resets or skip tests to make a gate pass.
+
+If no safe command exists, keep that as an explicit prerequisite or unresolved
+planning task; during execution, block when no safe in-scope remedy exists. Tao adds
+no automatic restoration, allowlist, language detection, `TAO.md`, or settings
+mechanism. Existing plans are not automatically repaired, and this guidance grants
+no permission to hand-edit frozen artifacts or amend verification commands through
+a new API. See the [unchanged verification contract](plan-format.md#observed-slice-verification).
+
 Tao-owned slice, final, baseline, and merge gates override inherited
 `GOLANGCI_LINT_CACHE` with a private versioned namespace beneath
 `.tao/cache/golangci-lint` in the actual execution worktree (the integration

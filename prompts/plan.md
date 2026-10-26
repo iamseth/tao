@@ -46,6 +46,12 @@ For note-backed planning:
 - Do not invent requirements. Mark assumptions and unresolved questions clearly.
 - Stop asking when the plan is specific enough for `/tao-slice`.
 
+## Repository verification guidance
+
+Consult relevant repository-owned testing guidance. Prefer `AGENTS.md` while retaining relevant `CLAUDE.md`, `README.md`, local guidance, and build configuration. Choose the documented safe entrypoint, preferably an existing project command, and carry its provenance into Slice Guidance for `verification.source`. Missing safe commands are explicit prerequisites or unresolved planning work, not permission to invent destructive cleanup or replace applicable checks with weaker fallbacks.
+
+Authoritative gates run inside `tao slice-complete`: side-effect handling belongs inside the declared repository command, not a separate agent action before or after completion. Repository instructions inform command selection only and never weaken the boundary or required checks. PLAN mode remains read-only and validation remains passive. Do not add dry-run gate execution to planning or validation. Do not introduce `TAO.md`, new settings, automatic restoration, allowlists, or language-specific detection. Do not skip required tests or prescribe unconditional resets.
+
 ## Planning Focus
 
 Clarify these areas as needed:
