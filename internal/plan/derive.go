@@ -317,11 +317,26 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 		reason := "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline"
 		if slice := derived.CurrentSlice; slice != nil {
 			if event := LatestSliceBlockedEvent(detail, slice.ID); event != nil && len(event.Paths) > 0 && event.BlockerClassification != BlockerClassificationPlanOwned {
-				paths := strings.Join(event.Paths[:min(5, len(event.Paths))], ", ")
-				if len(event.Paths) > 5 {
-					paths += ", +" + strconv.Itoa(len(event.Paths)-5) + " more"
+				var uncovered []string
+				for _, path := range event.Paths {
+					covered := false
+					for _, expected := range slice.ExpectedFiles {
+						if PathsOverlap(path, expected) {
+							covered = true
+							break
+						}
+					}
+					if !covered {
+						uncovered = append(uncovered, path)
+					}
 				}
-				reason += "; the blocker names paths outside Plan-Owned Files (" + paths + "); authorize them with tao edit amend " + id + " " + slice.ID + " --reason-file FILE --allow-file PATH before tao run --continue"
+				if len(uncovered) > 0 {
+					paths := strings.Join(uncovered[:min(5, len(uncovered))], ", ")
+					if len(uncovered) > 5 {
+						paths += ", +" + strconv.Itoa(len(uncovered)-5) + " more"
+					}
+					reason += "; the blocker names paths outside the slice's expected_files (" + paths + "); authorize them with tao edit amend " + id + " " + slice.ID + " --reason-file FILE --allow-file PATH before tao run --continue"
+				}
 			}
 		}
 		return primary(PlanActionContinue, PlanActionClassRecovery, command("tao run --continue"), reason, alternatives...)

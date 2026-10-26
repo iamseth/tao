@@ -1137,13 +1137,38 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 	t.Parallel()
 	const original = "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline"
 	guidance := func(paths string) string {
-		return original + "; the blocker names paths outside Plan-Owned Files (" + paths + "); authorize them with tao edit amend plan-a 001-a --reason-file FILE --allow-file PATH before tao run --continue"
+		return original + "; the blocker names paths outside the slice's expected_files (" + paths + "); authorize them with tao edit amend plan-a 001-a --reason-file FILE --allow-file PATH before tao run --continue"
 	}
 	for _, tt := range []struct {
-		name   string
-		events []Event
-		want   string
+		name          string
+		events        []Event
+		expectedFiles []string
+		want          string
 	}{
+		{
+			name:          "all paths covered after amendment",
+			events:        []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"original.go", "amended.go"}}},
+			expectedFiles: append([]string{"original.go"}, "amended.go"),
+			want:          original,
+		},
+		{
+			name:          "partially covered paths",
+			events:        []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"owned.go", "outside.go", "also-outside.go"}}},
+			expectedFiles: []string{"owned.go"},
+			want:          guidance("outside.go, also-outside.go"),
+		},
+		{
+			name:          "bounded uncovered paths",
+			events:        []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"owned.go", "a.go", "b.go", "also-owned.go", "c.go", "d.go", "e.go", "f.go", "g.go"}}},
+			expectedFiles: []string{"owned.go", "also-owned.go"},
+			want:          guidance("a.go, b.go, c.go, d.go, e.go, +2 more"),
+		},
+		{
+			name:          "directory covers nested path",
+			events:        []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"internal/merge/nested/file.go"}}},
+			expectedFiles: []string{"internal/merge/"},
+			want:          original,
+		},
 		{name: "outside paths", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"outside.go"}}}, want: guidance("outside.go")},
 		{name: "plan owned", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"owned.go"}, BlockerClassification: BlockerClassificationPlanOwned}}, want: original},
 		{name: "prose only", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a"}}, want: original},
@@ -1162,7 +1187,7 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			detail := &PlanDetail{
 				State:  State{Status: StatusBlocked, Plan: PlanState{ID: "plan-a", CurrentSlice: ptrString("001-a"), PendingSlices: []string{"001-a"}}},
-				Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusBlocked}}},
+				Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusBlocked, ExpectedFiles: tt.expectedFiles}}},
 				Events: tt.events,
 			}
 			action := DeriveNextAction(detail).Primary
