@@ -17,6 +17,53 @@ import (
 	"github.com/iamseth/tao/prompts"
 )
 
+func zshFlagSpec(t *testing.T, command, subcommand, flagName, valueSuffix string) string {
+	t.Helper()
+	metadata := commandByName(command)
+	if metadata == nil {
+		t.Fatalf("missing command metadata for %q", command)
+	}
+	register := metadata.registerFlags
+	if subcommand != "" {
+		matched := completionSubcommand(metadata, subcommand)
+		if matched == nil {
+			t.Fatalf("missing subcommand %q for %q", subcommand, command)
+		}
+		register = matched.registerFlags
+	}
+	fs := flag.NewFlagSet(command+" "+subcommand, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if register != nil {
+		register(fs)
+	}
+	fl := fs.Lookup(flagName)
+	if fl == nil {
+		t.Fatalf("missing flag %q for %s %s", flagName, command, subcommand)
+	}
+	prefix := "--"
+	if len(flagName) == 1 {
+		prefix = "-"
+	}
+	return prefix + flagName + "[" + zshArgumentsDescription(fl.Usage) + "]" + valueSuffix
+}
+
+func zshEntry(t *testing.T, alias, command, subcommand string) string {
+	t.Helper()
+	metadata := commandByName(command)
+	if metadata == nil {
+		t.Fatalf("missing command metadata for %q", command)
+	}
+	description := metadata.completionDescription
+	if subcommand != "" {
+		matched := completionSubcommand(metadata, subcommand)
+		if matched == nil {
+			t.Fatalf("missing subcommand %q for %q", subcommand, command)
+		}
+		description = matched.description
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(zshSingleQuote(alias+":"+description), "'"), "'")
+}
+
 func TestReviewAgentFlagScopeAndCompletion(t *testing.T) {
 	for _, command := range []commandMetadata{runCommand, reviewCommand, reworkCommand} {
 		fs := flag.NewFlagSet(command.name, flag.ContinueOnError)
@@ -79,10 +126,10 @@ func TestCommandAliases(t *testing.T) {
 
 func TestZshCompletionIncludesExactUpdateCommand(t *testing.T) {
 	script := buildZshCompletionScript()
-	if !strings.Contains(script, "'update:Update Tao to the latest stable release'") {
+	if !strings.Contains(script, "'"+zshEntry(t, "update", "update", "")+"'") {
 		t.Fatalf("completion script is missing update command: %q", script)
 	}
-	if strings.Contains(script, "'up:Update Tao") {
+	if strings.Contains(script, "'"+zshEntry(t, "up", "update", "")) {
 		t.Fatalf("completion script contains an unrequested update alias: %q", script)
 	}
 }
@@ -90,15 +137,15 @@ func TestZshCompletionIncludesExactUpdateCommand(t *testing.T) {
 func TestZshCommandEntriesUseShortestAliasAndFullCommandInRegistryOrder(t *testing.T) {
 	entries := strings.Split(zshCommandEntries(), "\n")
 	wantPrefix := []string{
-		"    'l:List plans'",
-		"    'list:List plans'",
-		"    'version:Show build commit'",
-		"    'update:Update Tao to the latest stable release'",
-		"    'init:Register this repository in Tao data home'",
-		"    'lo:Show or follow agent run log'",
-		"    'log:Show or follow agent run log'",
-		"    'r:Run pending slices with the selected agent'",
-		"    'run:Run pending slices with the selected agent'",
+		"    '" + zshEntry(t, "l", "list", "") + "'",
+		"    '" + zshEntry(t, "list", "list", "") + "'",
+		"    '" + zshEntry(t, "version", "version", "") + "'",
+		"    '" + zshEntry(t, "update", "update", "") + "'",
+		"    '" + zshEntry(t, "init", "init", "") + "'",
+		"    '" + zshEntry(t, "lo", "log", "") + "'",
+		"    '" + zshEntry(t, "log", "log", "") + "'",
+		"    '" + zshEntry(t, "r", "run", "") + "'",
+		"    '" + zshEntry(t, "run", "run", "") + "'",
 	}
 	if len(entries) < len(wantPrefix) {
 		t.Fatalf("zshCommandEntries produced %d entries, want at least %d", len(entries), len(wantPrefix))
@@ -109,7 +156,7 @@ func TestZshCommandEntriesUseShortestAliasAndFullCommandInRegistryOrder(t *testi
 		}
 	}
 
-	for _, notWant := range []string{"    'li:List plans'", "    'ru:Run pending slices with the selected agent'", "    'v:Show build commit'"} {
+	for _, notWant := range []string{"    '" + zshEntry(t, "li", "list", "") + "'", "    '" + zshEntry(t, "ru", "run", "") + "'", "    '" + zshEntry(t, "v", "version", "") + "'"} {
 		if slices.Contains(entries, notWant) {
 			t.Fatalf("zshCommandEntries should not include generated intermediate alias %q", notWant)
 		}
@@ -176,54 +223,53 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 		{
 			command: "run",
 			want: []string{
-				"'--agent[agent runtime: pi or claude]:agent:(pi claude)'",
-				"'--session-timeout[session timeout as a Go duration; 0 disables]:duration:'",
-				"'--dangerously-skip-permissions[bypass Claude permission checks; compatibility no-op for Pi]'",
-
-				"'--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)'",
-				"'--rework-escalation-from-attempt[first automatic rework attempt eligible for escalation]:count:'",
-				"'--commit-policy[automatic commit policy: slice or none]:policy:(slice none)'",
-				"'--execution-mode[execution mode: isolated or current]:mode:(isolated current)'",
-				"'--max-rework-attempts[maximum automatic rework cycles (0 disables)]:count:'",
-				"'--review-agent[select the plan review runtime: pi or claude (default inherit)]:agent:(pi claude)'",
-				"'--max-slices[maximum slices to run; use 0 for all]:count:'",
+				zshSingleQuote(zshFlagSpec(t, "run", "", "agent", ":agent:(pi claude)")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "session-timeout", ":duration:")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "dangerously-skip-permissions", "")),
+				zshSingleQuote(strings.Replace(zshFlagSpec(t, "run", "", "auto-rework", ":boolean:(true false)"), "--auto-rework[", "--auto-rework=-[", 1)),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "rework-escalation-from-attempt", ":count:")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "commit-policy", ":policy:(slice none)")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "execution-mode", ":mode:(isolated current)")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "max-rework-attempts", ":count:")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "review-agent", ":agent:(pi claude)")),
+				zshSingleQuote(zshFlagSpec(t, "run", "", "max-slices", ":count:")),
 			},
 		},
 		{
 			command: "note",
 			want: []string{
-				"'--agent[agent runtime: pi or claude]:agent:(pi claude)'",
-				"'--session-timeout[session timeout as a Go duration; 0 disables]:duration:'",
+				zshSingleQuote(zshFlagSpec(t, "note", "", "agent", ":agent:(pi claude)")),
+				zshSingleQuote(zshFlagSpec(t, "note", "", "session-timeout", ":duration:")),
 			},
 		},
 		{
 			command: "merge",
 			want: []string{
-				"'--auto-eject[automatically eject an attributed non-converging plan and reland the rest]'",
-				"'--verify-command[override the post-merge build/test verification command]:command:'",
+				zshSingleQuote(zshFlagSpec(t, "merge", "", "auto-eject", "")),
+				zshSingleQuote(zshFlagSpec(t, "merge", "", "verify-command", ":command:")),
 			},
 		},
 		{
 			command: "commit",
 			want: []string{
-				"'--context[print bounded safety-filtered commit context as JSON]'",
-				"'--message[explicit full canonical commit message]:message:'",
-				"'--proposal-file[JSON file containing a structured commit proposal]:path:_files'",
-				"'--repo-root[repository path]:path:_files'",
+				zshSingleQuote(zshFlagSpec(t, "commit", "", "context", "")),
+				zshSingleQuote(zshFlagSpec(t, "commit", "", "message", ":message:")),
+				zshSingleQuote(zshFlagSpec(t, "commit", "", "proposal-file", ":path:_files")),
+				zshSingleQuote(zshFlagSpec(t, "commit", "", "repo-root", ":path:_files")),
 			},
 		},
 		{
 			command: "report",
 			want: []string{
-				"'--output[output Markdown path, or - for stdout (required)]:path:_files'",
-				"'--planning-only[export a synthesized planning record without execution history]'",
-				"'--force[safely replace an existing output file]'",
+				zshSingleQuote(zshFlagSpec(t, "report", "", "output", ":path:_files")),
+				zshSingleQuote(zshFlagSpec(t, "report", "", "planning-only", "")),
+				zshSingleQuote(zshFlagSpec(t, "report", "", "force", "")),
 			},
 		},
 		{
 			command: "abandon",
 			want: []string{
-				"'--reason[required reason for abandoning the plan]:text:'",
+				zshSingleQuote(zshFlagSpec(t, "abandon", "", "reason", ":text:")),
 			},
 		},
 	}
@@ -472,9 +518,9 @@ func zshArgumentsContainFlag(arguments, flagName string) bool {
 func TestZshCompletionScriptCompletesReportsWithoutChangingRepo(t *testing.T) {
 	reportCase := zshCommandCase(commandByName("report"))
 	for _, want := range []string{
-		"--output[output Markdown path, or - for stdout (required)]:path:_files",
-		"--planning-only[export a synthesized planning record without execution history]",
-		"--force[safely replace an existing output file]",
+		zshFlagSpec(t, "report", "", "output", ":path:_files"),
+		zshFlagSpec(t, "report", "", "planning-only", ""),
+		zshFlagSpec(t, "report", "", "force", ""),
 		"complete plan-ids",
 	} {
 		if !strings.Contains(reportCase, want) {
@@ -483,11 +529,11 @@ func TestZshCompletionScriptCompletesReportsWithoutChangingRepo(t *testing.T) {
 	}
 	repoCase := zshCommandCase(commandByName("repo"))
 	for _, want := range []string{
-		"'list:List registered repositories and health summaries'",
-		"'show:Show details for one registered repository'",
-		"'doctor:Check registered repositories for health problems'",
-		"--max-rework-attempts[set automatic rework attempts (non-negative integer, zero disables) or unset]",
-		"--rework-escalation-from-attempt[set the first escalation-eligible attempt (integer at least one) or unset]",
+		"'" + zshEntry(t, "list", "repo", "list") + "'",
+		"'" + zshEntry(t, "show", "repo", "show") + "'",
+		"'" + zshEntry(t, "doctor", "repo", "doctor") + "'",
+		zshFlagSpec(t, "repo", "config", "max-rework-attempts", ""),
+		zshFlagSpec(t, "repo", "config", "rework-escalation-from-attempt", ""),
 		"_describe -t commands 'repo command' subcommands",
 	} {
 		if !strings.Contains(repoCase, want) {
@@ -510,7 +556,7 @@ func TestZshCompletionPreservesSubcommandFlagScopes(t *testing.T) {
 			}
 		})
 	}
-	if got := zshParentCompletionContext(commandByName("note"), ""); !strings.Contains(got, "--repo[registered repository ID prefix or exact name]") {
+	if got := zshParentCompletionContext(commandByName("note"), ""); !strings.Contains(got, zshFlagSpec(t, "note", "", "repo", "")) {
 		t.Fatalf("note parent completion omitted shared flags: %q", got)
 	}
 
@@ -545,7 +591,7 @@ func TestZshBooleanCompletionUsesEqualsOnlyParserSyntax(t *testing.T) {
 		},
 	}
 
-	const want = "'--auto-rework=-[deprecated: use --max-rework-attempts (false=0, true=5)]:boolean:(true false)'"
+	want := zshSingleQuote(strings.Replace(zshFlagSpec(t, "run", "", "auto-rework", ":boolean:(true false)"), "--auto-rework[", "--auto-rework=-[", 1))
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			arguments := zshCommandArguments(test.command, test.subcommands...)
@@ -689,7 +735,18 @@ func TestZshCompletionScriptPreservesSpecialCompleteCommand(t *testing.T) {
 
 func TestZshCompletionScriptCompletesMergePlanIDs(t *testing.T) {
 	mergeCase := zshCommandCase(commandByName("merge"))
-	for _, want := range []string{"--all[merge every reviewed and approved plan in one atomic batch]", "--auto-eject[automatically eject an attributed non-converging plan and reland the rest]", "--dry-run[preview batch candidates and order without durable changes or verification; with --restart only list proposed removals and stop; an interrupted dry run removes its disposable integration worktree before exiting]", "--restart[discard an eligible stale single-plan merge intent and stop; with --all remove pre-landing batch recovery and start again, or only list removals with --dry-run]", "--force[bypass pre-merge approval, review-base, and dirty-worktree gates, not conflict-resolution safety or independent review (single-plan only)]", "--record-only[record an external merge and run cleanup (single-plan only)]", "--no-squash[preserve plan commits with rebase-plus-fast-forward; conflicts remain manual (single-plan only)]", "--no-verify[skip post-merge command verification, not structural validation or independent review (single-plan only)]", "--verify-command[override the post-merge build/test verification command]:command:", "$(${words[1]} complete plan-ids 2>/dev/null)"} {
+	for _, want := range []string{
+		zshFlagSpec(t, "merge", "", "all", ""),
+		zshFlagSpec(t, "merge", "", "auto-eject", ""),
+		zshFlagSpec(t, "merge", "", "dry-run", ""),
+		zshFlagSpec(t, "merge", "", "restart", ""),
+		zshFlagSpec(t, "merge", "", "force", ""),
+		zshFlagSpec(t, "merge", "", "record-only", ""),
+		zshFlagSpec(t, "merge", "", "no-squash", ""),
+		zshFlagSpec(t, "merge", "", "no-verify", ""),
+		zshFlagSpec(t, "merge", "", "verify-command", ":command:"),
+		"$(${words[1]} complete plan-ids 2>/dev/null)",
+	} {
 		if !strings.Contains(mergeCase, want) {
 			t.Fatalf("expected merge completion case to contain %q, got %q", want, mergeCase)
 		}
@@ -708,7 +765,33 @@ func TestCompletionAndCompleteCommands(t *testing.T) {
 	if !strings.Contains(out.String(), "compdef _tao") {
 		t.Fatalf("expected zsh completion script, got %q", out.String())
 	}
-	for _, want := range []string{"repo:Inspect registered repositories", "'show:Show details for one registered repository'", "note:Capture and maintain repository notes", "'create:Create a note from arguments or standard input'", "'c:Create a note from arguments or standard input'", "complete note-ids", "approve:Approve a gated slice", "stale:Check whether a plan is stale against its recorded base commit", "cleanup:Remove merged Tao branches and worktrees", "delete:Delete local plan artifacts", "edit:Edit pending slices in a plan", "validate:Validate plan artifacts and verification commands", "--slice[slice id to approve]", "--by[approver name]", "--commit-policy[automatic commit policy: slice or none]:policy:(slice none)", "--commit-policy[run prompt commit policy: slice or none]:policy:(slice none)", "--execution-mode[execution mode: isolated or current]", "--continue[continue a blocked slice at its preserved execution boundary]", "--no-review[disable automatic plan review for this run]", "--run[run a fresh review before displaying the result]", "--dry-run[show branches and worktrees that would be removed]", "--force[also remove unmerged branches and dirty worktrees]", "--force[confirm deletion of local plan artifacts]", "--before[move before slice id]", "--after[move after slice id]"} {
+	for _, want := range []string{
+		zshEntry(t, "repo", "repo", ""),
+		"'" + zshEntry(t, "show", "repo", "show") + "'",
+		zshEntry(t, "note", "note", ""),
+		"'" + zshEntry(t, "create", "note", "create") + "'",
+		"'" + zshEntry(t, "c", "note", "create") + "'",
+		"complete note-ids",
+		zshEntry(t, "approve", "approve", ""),
+		zshEntry(t, "stale", "staleness", ""),
+		zshEntry(t, "cleanup", "cleanup", ""),
+		zshEntry(t, "delete", "delete", ""),
+		zshEntry(t, "edit", "edit", ""),
+		zshEntry(t, "validate", "validate", ""),
+		zshFlagSpec(t, "approve", "", "slice", ""),
+		zshFlagSpec(t, "approve", "", "by", ""),
+		zshFlagSpec(t, "run", "", "commit-policy", ":policy:(slice none)"),
+		zshFlagSpec(t, "prompt", "", "commit-policy", ":policy:(slice none)"),
+		zshFlagSpec(t, "run", "", "execution-mode", ""),
+		zshFlagSpec(t, "run", "", "continue", ""),
+		zshFlagSpec(t, "run", "", "no-review", ""),
+		zshFlagSpec(t, "review", "", "run", ""),
+		zshFlagSpec(t, "cleanup", "", "dry-run", ""),
+		zshFlagSpec(t, "cleanup", "", "force", ""),
+		zshFlagSpec(t, "delete", "", "force", ""),
+		zshFlagSpec(t, "edit", "move", "before", ""),
+		zshFlagSpec(t, "edit", "move", "after", ""),
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected completion to contain %q, got %q", want, out.String())
 		}

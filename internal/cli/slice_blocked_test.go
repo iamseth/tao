@@ -501,11 +501,11 @@ func TestSliceBlockedCommandHelpAndMetadataDerivedCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"slice-blocked:Block a slice after an exceptional stop",
-		"--reason-file[file containing the blocker reason]",
-		"--gate-command[failing verification gate command]",
-		"*--failing-path[repository-relative failing path (repeatable)]",
-		"--corrected-command[mechanically equivalent corrected verification command]",
+		zshEntry(t, "slice-blocked", "slice-blocked", ""),
+		zshFlagSpec(t, "slice-blocked", "", "reason-file", ""),
+		zshFlagSpec(t, "slice-blocked", "", "gate-command", ""),
+		"*" + zshFlagSpec(t, "slice-blocked", "", "failing-path", ""),
+		zshFlagSpec(t, "slice-blocked", "", "corrected-command", ""),
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("zsh completion missing %q", want)

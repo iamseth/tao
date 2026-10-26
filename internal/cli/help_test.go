@@ -207,7 +207,7 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "#compdef tao") {
 		t.Fatalf("expected completion output, got %q", out.String())
 	}
-	if !strings.Contains(out.String(), "'l:List plans'") {
+	if !strings.Contains(out.String(), "'"+zshEntry(t, "l", "list", "")+"'") {
 		t.Fatalf("expected shortest aliases in completion output, got %q", out.String())
 	}
 	if !strings.Contains(out.String(), "l|li|lis|list)") {
@@ -219,21 +219,30 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "de|del|dele|delet|delete)") {
 		t.Fatalf("expected delete aliases in completion case handling, got %q", out.String())
 	}
-	if !strings.Contains(out.String(), "repo)") || !strings.Contains(out.String(), "'show:Show details for one registered repository'") {
+	if !strings.Contains(out.String(), "repo)") || !strings.Contains(out.String(), "'"+zshEntry(t, "show", "repo", "show")+"'") {
 		t.Fatalf("expected repo subcommands in completion output, got %q", out.String())
 	}
 	if !strings.Contains(out.String(), "rev|revi|revie|review)") || strings.Contains(out.String(), "[review mode]") {
 		t.Fatalf("expected registry-generated review completion without the removed review mode flag, got %q", out.String())
 	}
-	for _, want := range []string{"--agent[agent runtime: pi or claude]:agent:(pi claude)", "--session-timeout[session timeout as a Go duration; 0 disables]:duration:", "--dangerously-skip-permissions[bypass Claude permission checks; compatibility no-op for Pi]"} {
+	for _, want := range []string{
+		zshFlagSpec(t, "run", "", "agent", ":agent:(pi claude)"),
+		zshFlagSpec(t, "run", "", "session-timeout", ":duration:"),
+		zshFlagSpec(t, "run", "", "dangerously-skip-permissions", ""),
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("completion missing %q", want)
 		}
 	}
-	if !strings.Contains(out.String(), "w|wo|wor|work|works|worksp|workspa|workspac|workspace)") || !strings.Contains(out.String(), "--force-dirty[allow cleaning a dirty or unmerged workspace]") {
+	if !strings.Contains(out.String(), "w|wo|wor|work|works|worksp|workspa|workspac|workspace)") || !strings.Contains(out.String(), zshFlagSpec(t, "workspace", "clean", "force-dirty", "")) {
 		t.Fatalf("expected workspace aliases and flags in completion output, got %q", out.String())
 	}
-	for _, want := range []string{"--commit-policy[automatic commit policy: slice or none]:policy:(slice none)", "--commit-policy[run prompt commit policy: slice or none]:policy:(slice none)", "--execution-mode[execution mode: isolated or current]:mode:(isolated current)", "--execution-mode[run prompt execution mode: isolated or current]:mode:(isolated current)"} {
+	for _, want := range []string{
+		zshFlagSpec(t, "run", "", "commit-policy", ":policy:(slice none)"),
+		zshFlagSpec(t, "prompt", "", "commit-policy", ":policy:(slice none)"),
+		zshFlagSpec(t, "run", "", "execution-mode", ":mode:(isolated current)"),
+		zshFlagSpec(t, "prompt", "", "execution-mode", ":mode:(isolated current)"),
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected runtime completion %q, got %q", want, out.String())
 		}

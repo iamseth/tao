@@ -323,7 +323,10 @@ func TestSliceCompleteHelpAndCompletion(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"completion", "zsh"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"slice-complete:Verify declared gates and complete a slice", "--verification-results-file[optional JSON advisory claims"} {
+	for _, want := range []string{
+		zshEntry(t, "slice-complete", "slice-complete", ""),
+		zshFlagSpec(t, "slice-complete", "", "verification-results-file", ""),
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("completion missing %q", want)
 		}
