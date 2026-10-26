@@ -9,6 +9,21 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-10-19
+
+#### Added
+- Keep detected Pi and Claude prompts up to date automatically when Tao starts, without overwriting custom files. Use `tao install-prompts` for explicit inspection or recovery.
+- Prepare isolated workspaces before an agent starts with the repository-only `workspace.setup` setting. The command receives `TAO_PLAN_ID`, `TAO_WORKSPACE_PATH`, and `TAO_REPO_ROOT`; a nonzero exit stops preparation.
+
+#### Changed
+- Get more accurate dashboard guidance from `tao ui --help`; use the in-app `?` overlay to discover shortcuts. `tao monitor --once` remains available when a terminal UI is not suitable.
+- Run related Git checks with fewer process launches, improving efficiency while keeping ref checks on a consistent snapshot.
+- Get faster contributor feedback with `make test`’s short suite; use `make test-full` for the complete suite. `make verify` and CI continue to run all tests, while verification overlaps tests with lint and cross-target builds.
+
+#### Reliability
+- Avoid intermittent command failures under load: Tao now allows more time for command output pipes to drain after a process exits.
+- Keep plan snapshots independent, so editing a copied or recovered snapshot cannot unintentionally change another snapshot.
+
 ### Week of 2026-10-12
 
 #### Added
