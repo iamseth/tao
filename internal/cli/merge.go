@@ -29,7 +29,7 @@ var mergeCommand = commandMetadata{
 		"merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
 	completionDescription: "Merge approved plans; wait for active repository runs or merges",
-	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. Mutating merges exclude repository runs and other merges, including linked worktrees; wait for or finish the active operation before retrying. --force never bypasses admission. Single --record-only and batch --dry-run remain exempt from exclusive admission but retain existing ownership safeguards. Older binaries and manual Git are outside the exclusion guarantee. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, verifies the staged aggregate once, attributes an aggregate verification failure to one candidate, and requires aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. On SIGINT or SIGTERM, an interrupted dry run removes its disposable integration worktree before exiting. --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
+	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. Mutating merges exclude repository runs and other merges, including linked worktrees; wait for or finish the active operation before retrying. --force never bypasses admission. Single --record-only and batch --dry-run remain exempt from exclusive admission but retain existing ownership safeguards. Older binaries and manual Git are outside the exclusion guarantee. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, verifies the staged aggregate once, attributes an aggregate verification failure to one candidate, and requires aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. On SIGINT or SIGTERM, an interrupted dry run removes its disposable integration worktree before exiting. --all --restart discards only pre-landing batch recovery and starts again; adding --dry-run only lists proposed removals and stops without changing recovery or discovering fresh candidates. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
 	examples: "  tao merge my-plan\n" +
 		"  tao merge --restart my-plan\n" +
 		"  tao merge --all\n" +
@@ -53,8 +53,8 @@ var mergeCommand = commandMetadata{
 
 func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("all", false, "merge every reviewed and approved plan in one atomic batch")
-	fs.Bool("dry-run", false, "preview batch candidates and order without durable changes or verification; an interrupted dry run removes its disposable integration worktree before exiting")
-	fs.Bool("restart", false, "discard safe pre-landing recovery state and start again: a stale single-plan merge intent, or batch recovery state with --all")
+	fs.Bool("dry-run", false, "preview batch candidates and order without durable changes or verification; with --restart only list proposed removals and stop; an interrupted dry run removes its disposable integration worktree before exiting")
+	fs.Bool("restart", false, "discard an eligible stale single-plan merge intent and stop; with --all remove pre-landing batch recovery and start again, or only list removals with --dry-run")
 	fs.Bool("auto-eject", false, "automatically eject an attributed non-converging plan and reland the rest")
 	fs.Bool("force", false, "bypass pre-merge approval, review-base, and dirty-worktree gates, not conflict-resolution safety or independent review (single-plan only)")
 	fs.Bool("record-only", false, "record an external merge and run cleanup (single-plan only)")
@@ -390,7 +390,10 @@ func newMergeBatchAgentConfig(a App, controlRoot string, runner commandrunner.Ru
 
 func renderMergeBatchResult(out io.Writer, result mergeBatchResult) error {
 	if result.Restarted != nil {
-		if err := writef(out, "Restarted merge batch %s: worktree=%t branch=%t recovery=%t\n", result.Restarted.BatchID, result.Restarted.RemoveWorktree, result.Restarted.RemoveBranch, result.Restarted.RemoveRecovery); err != nil {
+		if result.DryRun {
+			return writef(out, "Proposed restart removals: %s\nPreview only; no resources removed and no fresh candidates discovered.\n", result.Restarted.RemovalSummary())
+		}
+		if err := writef(out, "Restarted merge batch %s\n", result.Restarted.BatchID); err != nil {
 			return err
 		}
 	}
@@ -561,7 +564,7 @@ func renderMergeBatchFailure(out io.Writer, err error) error {
 	if resumeErr.RestartVerdict != mergepkg.BatchRestartVerdictRestartable {
 		return nil
 	}
-	if err := writeln(out, "Restart discards only safe pre-landing batch recovery state and previews a fresh candidate snapshot without landing."); err != nil {
+	if err := writeln(out, "Restart preview lists only proposed pre-landing removals and stops without changing recovery or discovering fresh candidates."); err != nil {
 		return err
 	}
 	return writeln(out, "Next: `tao merge --all --restart --dry-run`")

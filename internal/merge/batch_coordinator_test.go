@@ -223,6 +223,53 @@ func TestBatchCoordinatorResumeProgress(t *testing.T) {
 	}
 }
 
+func TestBatchCoordinatorRestartPlanningAndExecution(t *testing.T) {
+	t.Parallel()
+	for _, dryRun := range []bool{false, true} {
+		for _, mode := range []string{"success", "nil progress", "no active", "probe failure", "partial cleanup", "landing intent"} {
+			t.Run(fmt.Sprintf("%s/dry=%t", mode, dryRun), func(t *testing.T) {
+				state := coordinatorActiveState(BatchStatusIntegrating)
+				store := &coordinatorStore{activeID: state.ID, loaded: state}
+				owner := &coordinatorWorkspace{}
+				var output bytes.Buffer
+				failure := errors.New(mode)
+				switch mode {
+				case "no active":
+					store.activeID = ""
+				case "probe failure":
+					owner.planRestartErr = failure
+				case "partial cleanup":
+					owner.restartErr = failure
+				case "landing intent":
+					owner.landingIntent = true
+				}
+				owner.beforeRestart = func() {
+					if mode == "nil progress" {
+						return
+					}
+					preview, _ := owner.PlanRestart(context.Background(), state)
+					if !strings.Contains(output.String(), "proposed restart removals: "+preview.RemovalSummary()) {
+						t.Fatalf("removal preceded summary: %s", output.String())
+					}
+				}
+				seams := BatchCoordinatorSeams{RepositoryAdmission: testRepositoryAdmission, Store: store, Workspace: owner, Discovery: coordinatorDiscovery{}, Progress: &output}
+				if mode == "nil progress" {
+					seams.Progress = nil
+				}
+				result, err := NewBatchCoordinator(seams).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: dryRun})
+				wantErr := mode == "no active" || mode == "probe failure" || mode == "landing intent" || (mode == "partial cleanup" && !dryRun)
+				if (err != nil) != wantErr || (result.Restarted == nil) != wantErr {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+				wantRestart := !dryRun && mode != "no active" && mode != "probe failure" && mode != "landing intent"
+				if owner.restarted != wantRestart || store.initialized.ID != "" || store.transitioned.ID != "" || owner.started != "" {
+					t.Fatalf("unexpected mutation: %+v %+v", owner, store)
+				}
+			})
+		}
+	}
+}
+
 func TestBatchCoordinatorProgressDryRunRestartAndFailure(t *testing.T) {
 	t.Parallel()
 	integrationErr := errors.New("integration failed")
@@ -256,6 +303,15 @@ func TestBatchCoordinatorProgressDryRunRestartAndFailure(t *testing.T) {
 			}).Run(context.Background(), BatchCoordinatorOptions{DryRun: tt.dryRun, Restart: tt.restart})
 			if !errors.Is(err, tt.err) {
 				t.Fatalf("Run error = %v, want %v", err, tt.err)
+			}
+			if tt.restart && tt.dryRun {
+				if result.Restarted == nil || workspaceOwner.restarted || workspaceOwner.started != "" || workspaceOwner.removed != "" || store.initialized.ID != "" || integrator.options.DryRun {
+					t.Fatalf("restart preview performed work: %+v %+v", result, workspaceOwner)
+				}
+				if strings.Contains(output.String(), "discovery complete") || strings.Contains(output.String(), "integration starting") {
+					t.Fatalf("preview progressed past planning: %s", output.String())
+				}
+				return
 			}
 			workspaceOwner.requireOwnershipReleased(t)
 			if result.DryRun != tt.dryRun || workspaceOwner.restarted != tt.restart || integrator.options.DryRun != tt.dryRun {
@@ -443,8 +499,8 @@ func TestBatchCoordinatorResumesWithOrdinaryEjectionAndPostLandingValidation(t *
 
 func TestBatchCoordinatorRefusesAbandonedSnapshotBeforeResumeOrRestart(t *testing.T) {
 	t.Parallel()
-	for _, restart := range []bool{false, true} {
-		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+	for _, options := range []BatchCoordinatorOptions{{}, {DryRun: true}, {Restart: true}, {Restart: true, DryRun: true}} {
+		t.Run(fmt.Sprintf("restart=%t/dry=%t", options.Restart, options.DryRun), func(t *testing.T) {
 			state := coordinatorActiveState(BatchStatusIntegrating)
 			detailA := batchReadyDetail("plan-a", "tao/plan-a")
 			detailA.State.Status = plan.StatusAbandoned
@@ -457,7 +513,7 @@ func TestBatchCoordinatorRefusesAbandonedSnapshotBeforeResumeOrRestart(t *testin
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: workspaceOwner,
 				Discovery: BatchCandidateDiscovery{Repository: repo},
-			}).Run(context.Background(), BatchCoordinatorOptions{Restart: restart})
+			}).Run(context.Background(), options)
 			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
 				t.Fatalf("Run() error = %v, want abandonment refusal", err)
 			}
@@ -1218,23 +1274,25 @@ type coordinatorWorkspace struct {
 	statused         string
 	removed          string
 	restarted        bool
+	planRestartErr   error
+	restartErr       error
+	beforeRestart    func()
 	ownershipFile    *os.File
 }
 
 func (w *coordinatorWorkspace) DefaultReachedLandingIntent(context.Context, BatchState) (bool, error) {
 	return w.landingIntent, nil
 }
-func (w *coordinatorWorkspace) PreviewRestart(_ context.Context, state BatchState) (BatchRestartPlan, error) {
-	owner, err := w.AcquireOwnership(state, time.Now().UTC())
-	if err != nil {
-		return BatchRestartPlan{}, err
-	}
-	defer func() { _ = owner.Release() }()
-	return BatchRestartPlan{BatchID: state.ID, RemoveRecovery: true}, nil
+func (w *coordinatorWorkspace) PlanRestart(_ context.Context, state BatchState) (BatchRestartPlan, error) {
+	return BatchRestartPlan{BatchID: state.ID, Branch: "tao/integration/" + state.ID, WorktreePath: "/integration/" + state.ID, RemoveBranch: true, RemoveWorktree: true, RemoveRecovery: true}, w.planRestartErr
 }
+
 func (w *coordinatorWorkspace) Restart(_ context.Context, state BatchState) (BatchRestartPlan, error) {
+	if w.beforeRestart != nil {
+		w.beforeRestart()
+	}
 	w.restarted = true
-	return BatchRestartPlan{BatchID: state.ID, RemoveRecovery: true}, nil
+	return BatchRestartPlan{BatchID: state.ID, RemoveRecovery: true}, w.restartErr
 }
 func (w *coordinatorWorkspace) ValidateResume(context.Context, BatchState) error {
 	w.validated = "ordinary"

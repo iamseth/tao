@@ -593,6 +593,11 @@ type BatchRestartPlan struct {
 	RemoveRecovery bool
 }
 
+// RemovalSummary describes proposed removals without claiming execution.
+func (p BatchRestartPlan) RemovalSummary() string {
+	return fmt.Sprintf("batch=%s worktree=%q remove_worktree=%t branch=%q remove_branch=%t remove_recovery=%t", p.BatchID, p.WorktreePath, p.RemoveWorktree, p.Branch, p.RemoveBranch, p.RemoveRecovery)
+}
+
 type batchRestartRefusalError struct {
 	reason string
 }

@@ -1359,12 +1359,18 @@ earlier ejection already completed. If an interruption happened after the
 guarded fast-forward, the durable landing intent proves the exact head and
 settlement resumes without a second merge; evidence recording and cleanup are
 idempotent. Use `tao merge --all --restart` only to discard stale, batch-owned
-pre-landing state, branch, and worktree. When Tao reports that restart is safe,
-preview that recovery and a fresh candidate snapshot with:
+pre-landing state, branch, and worktree, then discover fresh candidates and start
+again. Actual restart reports exact proposed removals before rechecking safety
+and acting. When Tao reports that restart is safe, preview only those removals
+without changing recovery, branches, or worktrees with:
 
 ```sh
 tao merge --all --restart --dry-run
 ```
+
+This restart preview stops after listing removals: it does not discover fresh
+candidates, integrate, or verify an aggregate. Run without `--dry-run` to execute
+the restart; the preview itself does not authorize cleanup.
 
 An **already landed; integration cleanup failed** error names the batch, landed
 SHA, and offending path: integration succeeded, but safe cleanup did not. Preserve
@@ -1420,9 +1426,9 @@ bypass an active batch: Tao inspects
 and resume-validates durable progress before producing a fresh candidate
 snapshot. `--restart` works in both forms and means something different in each:
 with a plan argument it clears that plan's stale pre-landing merge intent, and
-with `--all` it discards batch-owned pre-landing recovery state. Combining
-`--all --restart --dry-run` is the safe preview for eligible pre-landing batch
-recovery. Batch mode allows one `--verify-command CMD` override and the separate
+with `--all` it discards batch-owned pre-landing recovery state and starts again.
+Combining `--all --restart --dry-run` only lists eligible proposed removals and
+stops, preserving recovery without discovering fresh candidates. Batch mode allows one `--verify-command CMD` override and the separate
 `--auto-eject` convergence opt-in, but still rejects `--force`, `--record-only`,
 `--no-squash`, and `--no-verify`. Those bypass semantics remain available only
 to the explicit single-plan workflow.

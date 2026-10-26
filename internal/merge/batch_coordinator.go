@@ -49,6 +49,7 @@ type BatchCoordinatorStore interface {
 // workspace boundary. It deliberately exposes no registry or CLI types.
 type BatchCoordinatorWorkspace interface {
 	DefaultReachedLandingIntent(context.Context, BatchState) (bool, error)
+	PlanRestart(context.Context, BatchState) (BatchRestartPlan, error)
 	Restart(context.Context, BatchState) (BatchRestartPlan, error)
 	ValidateResume(context.Context, BatchState) error
 	ValidateEjectionResume(context.Context, BatchState, string) error
@@ -208,21 +209,20 @@ func (c *BatchCoordinator) run(ctx context.Context, options BatchCoordinatorOpti
 			if defaultReachedIntent {
 				return result, fmt.Errorf("merge batch %s default has reached durable landing intent; restart is forbidden", state.ID)
 			}
-			restart := c.seams.Workspace.Restart
-			if options.DryRun {
-				// Restart cleanup touches only Tao-owned integration resources.
-				// Retain batch/plan ownership without exclusive repository admission.
-				if owner, ok := c.seams.Workspace.(interface {
-					restartForDryRun(context.Context, BatchState) (BatchRestartPlan, error)
-				}); ok {
-					restart = owner.restartForDryRun
-				}
-			}
-			preview, restartErr := restart(ctx, state)
-			result.Restarted = &preview
+			preview, restartErr := c.seams.Workspace.PlanRestart(ctx, state)
 			if restartErr != nil {
 				return result, restartErr
 			}
+			if options.DryRun {
+				result.Restarted = &preview
+				return result, nil
+			}
+			c.progressf("proposed restart removals: %s", preview.RemovalSummary())
+			executed, restartErr := c.seams.Workspace.Restart(ctx, state)
+			if restartErr != nil {
+				return result, restartErr
+			}
+			result.Restarted = &executed
 			activeID = ""
 		} else {
 			postLanding := state.Landing != nil && (state.LandedSHA != "" || defaultReachedIntent)

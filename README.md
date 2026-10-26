@@ -236,6 +236,10 @@ tao log --prompts <plan> # list captured prompts for a plan
 
 Batch merge keeps the default branch unchanged until the combined result passes
 full verification and aggregate review.
+For stale pre-landing recovery, `tao merge --all --restart --dry-run` only lists
+proposed removals and stops, preserving recovery, branches, and worktrees without
+discovering fresh candidates. Without `--dry-run`, restart reports removals,
+rechecks safety, removes eligible batch recovery, and starts again.
 Non-interactive session prompts are captured locally on a best-effort basis;
 they may contain repository text and must stay local.
 

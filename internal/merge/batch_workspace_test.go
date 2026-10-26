@@ -118,6 +118,13 @@ func TestBatchWorkspaceSubmodulesInitializeReuseAndCleanupSafeguards(t *testing.
 	if _, err := owner.PlanRestart(context.Background(), state); err == nil {
 		t.Fatal("restart would discard dirty submodule")
 	}
+	for _, dryRun := range []bool{false, true} {
+		store := &coordinatorStore{activeID: state.ID, loaded: state}
+		result, err := NewBatchCoordinator(BatchCoordinatorSeams{Store: store, Workspace: owner}).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: dryRun})
+		if err == nil || result.Restarted != nil {
+			t.Fatalf("unsafe submodule restart dry=%t: result=%+v err=%v", dryRun, result, err)
+		}
+	}
 	if err := os.WriteFile(payload, []byte("initial\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -882,7 +889,7 @@ func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *te
 		t.Fatal(err)
 	}
 	// Follow the CLI's recovery guidance: --all --restart --dry-run must
-	// discard this stale batch, not merely print the same restart preview.
+	// preview removals without discarding recovery or requesting admission.
 	owner.RepositoryAdmission = func(context.Context, repoadmission.Request, func(context.Context) error) error {
 		t.Fatal("restart dry-run requested exclusive admission")
 		return nil
@@ -899,14 +906,14 @@ func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *te
 	if result.Restarted == nil || !result.Restarted.RemoveRecovery || !result.DryRun {
 		t.Fatalf("restart result = %+v", result)
 	}
-	if active, err := owner.store.ActiveID(); err != nil || active != "" {
-		t.Fatalf("stale active batch remains: %q, %v", active, err)
+	if active, err := owner.store.ActiveID(); err != nil || active != state.ID {
+		t.Fatalf("restart preview changed active batch: %q, %v", active, err)
 	}
-	if _, err := os.Stat(filepath.Join(owner.batchesDir, state.ID, "state.json")); !os.IsNotExist(err) {
-		t.Fatalf("stale recovery remains: %v", err)
+	if recovered, err := owner.store.Load(state.ID); err != nil || recovered.ID != state.ID {
+		t.Fatalf("restart preview removed recovery: %+v, %v", recovered, err)
 	}
-	if _, err := coordinator.Run(context.Background(), BatchCoordinatorOptions{DryRun: true}); err != nil {
-		t.Fatalf("fresh preview repeated resume failure: %v", err)
+	if _, err := coordinator.Run(context.Background(), BatchCoordinatorOptions{DryRun: true}); !errors.As(err, &resumeErr) {
+		t.Fatalf("restart preview changed resume refusal: %v", err)
 	}
 }
 
@@ -1017,6 +1024,42 @@ func TestBatchWorkspaceRestartRemovesOnlyBatchResources(t *testing.T) {
 			defaultBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 			sourceBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
 
+			branchBefore := realGitOutput(t, fixture.repoRoot, "rev-parse", integration.Branch)
+			recoveryBefore := map[string]string{}
+			if err := filepath.WalkDir(batchDir, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() {
+					return err
+				}
+				data, err := os.ReadFile(path) // #nosec G304 G122 -- test-owned disposable directory has no concurrent writers or untrusted symlinks.
+				recoveryBefore[path] = string(data)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			result, err := NewBatchCoordinator(BatchCoordinatorSeams{Store: owner.store, Workspace: owner}).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: true})
+			if err != nil {
+				t.Fatalf("restart preview failed: %v", err)
+			}
+			if result.Restarted == nil || result.Restarted.WorktreePath != integration.Path || !result.Restarted.RemoveRecovery {
+				t.Fatalf("restart preview = %#v", result.Restarted)
+			}
+			if active, err := owner.store.ActiveID(); err != nil || active != state.ID {
+				t.Fatalf("preview changed active batch: %q, %v", active, err)
+			}
+			for path, want := range recoveryBefore {
+				if got, err := os.ReadFile(path); err != nil || string(got) != want { // #nosec G304 -- path captured from this test's disposable batch directory.
+					t.Fatalf("preview changed recovery %s: %v", path, err)
+				}
+			}
+			if _, err := os.Stat(integration.Path); err != nil {
+				t.Fatalf("preview removed worktree: %v", err)
+			}
+			for ref, want := range map[string]string{integration.Branch: branchBefore, fixture.defaultBranch: defaultBefore, fixture.planBranch: sourceBefore} {
+				if got := realGitOutput(t, fixture.repoRoot, "rev-parse", ref); got != want {
+					t.Fatalf("preview changed %s: %s -> %s", ref, want, got)
+				}
+			}
+
 			preview, err := owner.Restart(context.Background(), state)
 			if err != nil {
 				t.Fatal(err)
@@ -1065,8 +1108,12 @@ func TestBatchWorkspaceRestartRefusesAfterLanding(t *testing.T) {
 	state := batchWorkspaceState(t, fixture)
 	state.Status = BatchStatusLanded
 	owner, _ := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
-	if _, err := owner.PlanRestart(context.Background(), state); err == nil {
-		t.Fatal("expected landed batch restart refusal")
+	for _, dryRun := range []bool{false, true} {
+		store := &coordinatorStore{activeID: state.ID, loaded: state}
+		result, err := NewBatchCoordinator(BatchCoordinatorSeams{Store: store, Workspace: owner}).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: dryRun})
+		if err == nil || !strings.Contains(err.Error(), "has landed") || result.Restarted != nil {
+			t.Fatalf("landed restart dry=%t: result=%+v err=%v", dryRun, result, err)
+		}
 	}
 }
 
@@ -1104,6 +1151,13 @@ func TestBatchWorkspaceRestartRefusesWhenDefaultReachedLandingIntentBeforeLanded
 	}
 	if resumeErr.RestartVerdict != BatchRestartVerdictNotRestartable || !strings.Contains(resumeErr.RestartReason, "durable landing intent") {
 		t.Fatalf("restart verdict = %q (%q), want not restartable landing-intent reason", resumeErr.RestartVerdict, resumeErr.RestartReason)
+	}
+	for _, dryRun := range []bool{false, true} {
+		store := &coordinatorStore{activeID: state.ID, loaded: state}
+		result, err := NewBatchCoordinator(BatchCoordinatorSeams{Store: store, Workspace: owner}).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: dryRun})
+		if err == nil || !strings.Contains(err.Error(), "durable landing intent") || result.Restarted != nil {
+			t.Fatalf("landing intent restart dry=%t: result=%+v err=%v", dryRun, result, err)
+		}
 	}
 	if _, err := owner.Restart(context.Background(), state); err == nil || !strings.Contains(err.Error(), "durable landing intent") {
 		t.Fatalf("expected durable landing intent restart refusal, got %v", err)

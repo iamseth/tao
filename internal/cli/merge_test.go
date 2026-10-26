@@ -754,6 +754,23 @@ func TestMergeRestartStopsAfterSinglePlanRecoveryWithoutBatchMutation(t *testing
 	}
 }
 
+func TestRenderMergeBatchRestartPreviewStopsBeforeStaleOutput(t *testing.T) {
+	var out bytes.Buffer
+	preview := &mergepkg.BatchRestartPlan{BatchID: "old-batch", Branch: "tao/integration/old-batch", WorktreePath: "/integration/old-batch", RemoveBranch: true, RemoveWorktree: true, RemoveRecovery: true}
+	result := mergeBatchResult{DryRun: true, Restarted: preview, Resumed: true, Candidates: []mergepkg.BatchCandidate{{PlanID: "stale-candidate"}}}
+	if err := renderMergeBatchResult(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Proposed restart removals: "+preview.RemovalSummary()) || !strings.Contains(out.String(), "Preview only") {
+		t.Fatalf("preview output: %s", out.String())
+	}
+	for _, forbidden := range []string{"Restarted", "Resuming", "stale-candidate", "verified"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Fatalf("preview contains %q: %s", forbidden, out.String())
+		}
+	}
+}
+
 func TestMergeBatchRestartDoesNotConstructSinglePlanService(t *testing.T) {
 	batch := &fakeCLIMergeBatchRunner{}
 	stubMergeBatchRunner(t, batch)
@@ -1092,7 +1109,7 @@ func TestMergeAllResumeFailureOffersRestartPreviewIndependentOfDryRun(t *testing
 		for _, want := range []string{
 			"integration branch: tip changed",
 			`expected "head-a", actual "head-b"`,
-			"Restart discards only safe pre-landing batch recovery state and previews a fresh candidate snapshot without landing.",
+			"Restart preview lists only proposed pre-landing removals and stops without changing recovery or discovering fresh candidates.",
 			"Next: `tao merge --all --restart --dry-run`",
 		} {
 			if !strings.Contains(out.String(), want) {
@@ -1112,7 +1129,7 @@ func (emptyRecoveryDiscovery) Discover(context.Context) (mergepkg.BatchPreflight
 	return mergepkg.BatchPreflightResult{}, nil
 }
 
-func TestMergeAllRecoveryGuidanceDiscardsStaleBatch(t *testing.T) {
+func TestMergeAllRecoveryGuidancePreviewsStaleBatchRemovals(t *testing.T) {
 	testenv.SkipIfShort(t)
 	root := initTestGitRepo(t)
 	initRunGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "base")
@@ -1154,14 +1171,18 @@ func TestMergeAllRecoveryGuidanceDiscardsStaleBatch(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--all", "--restart", "--dry-run"}); err != nil {
 		t.Fatal(err)
 	}
-	if active, err := store.ActiveID(); err != nil || active != "" {
-		t.Fatalf("stale batch still active: %q, %v", active, err)
+	if active, err := store.ActiveID(); err != nil || active != state.ID {
+		t.Fatalf("restart preview changed active batch: %q, %v", active, err)
 	}
-	if _, err := os.Stat(filepath.Join(batches, state.ID, "state.json")); !os.IsNotExist(err) {
-		t.Fatalf("stale recovery still exists: %v", err)
+	if recovered, err := store.Load(state.ID); err != nil || recovered.ID != state.ID {
+		t.Fatalf("restart preview removed recovery: %+v, %v", recovered, err)
 	}
-	if err := app.Run(context.Background(), []string{"merge", "--all", "--dry-run"}); err != nil {
-		t.Fatalf("guidance left a resume failure loop: %v", err)
+	if !strings.Contains(out.String(), "Preview only; no resources removed") {
+		t.Fatalf("restart preview disclaimer missing: %s", out.String())
+	}
+	var resumeErr *mergepkg.BatchResumeError
+	if err := app.Run(context.Background(), []string{"merge", "--all", "--dry-run"}); !errors.As(err, &resumeErr) {
+		t.Fatalf("restart preview changed resume refusal: %v", err)
 	}
 }
 
