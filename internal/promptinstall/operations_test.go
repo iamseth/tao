@@ -188,7 +188,7 @@ func TestInstallAllPiWritesPromptTemplatesAndTaoExtension(t *testing.T) {
 		}
 	}
 	groomNotes := readPromptInstallText(t, filepath.Join(promptsDir, "tao-groom-notes.md"))
-	for _, want := range []string{"agent: plan", "tao-managed: tao-groom-notes v1", "tao repo config", "tao repo show", "--status open --limit 0", "Arguments are optional focus only", "No invocation-time writes", "fresh full-note read"} {
+	for _, want := range []string{"agent: plan", "tao-managed: tao-groom-notes v1", "tao repo list", "tao repo show", "--status open --limit 0", "Arguments are optional focus only", "No invocation-time writes", "fresh full-note read"} {
 		if !strings.Contains(groomNotes, want) {
 			t.Fatalf("Pi grooming prompt missing %q", want)
 		}

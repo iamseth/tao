@@ -1909,7 +1909,7 @@ func TestGroomNotesPromptContract(t *testing.T) {
 	}
 	for name, wants := range map[string][]string{
 		"focus is not authority":                 {"agent: plan", "Arguments are optional focus only", "cannot widen repository scope", "authorize mutation", "End of optional focus", focus},
-		"unregistered checkout":                  {"git rev-parse --show-toplevel", "**no-argument** `tao repo config`", "tao repo show '<repository-id>'", "An inferred ID alone is not registration proof", "canonical `Root` equal to the current Git root", "stop before note or plan collection", "Cannot groom notes: current repository registration could not be confirmed", "Never report this failure as an empty backlog", "any registered repository"},
+		"unregistered checkout":                  {"git rev-parse --show-toplevel", "`tao repo list`", "Zero or multiple matching rows is a registration failure under step 4", "tao repo show '<repository-id>'", "An inferred ID alone is not registration proof", "canonical `Root` equal to the current Git root", "stop before note or plan collection", "Cannot groom notes: current repository registration could not be confirmed", "Never report this failure as an empty backlog", "any registered repository"},
 		"empty backlog and coverage":             {"tao note list --repo '<repository-id>' --status open --limit 0", "zero notes and no warnings", "No open notes in the confirmed repository. No changes proposed.", "all inventoried open notes", "denominator N", "unevaluated IDs", "unknown bucket"},
 		"full scoped evidence":                   {"tao note show --repo '<repository-id>' '<note-id>'", "tao list --limit 0", "tao show --json '<plan-id>'", "tao.show.v1", "full `abandonment.reason`", "Never pass `--plans-dir`", "full text, complete tags, status and provenance"},
 		"abandoned prerequisite":                 {"abandoned prerequisite is a **broken dependency**, not automatic closure", "If A requires B", "B depends on A", "retain the dependency", "An absent reason is unknown"},
@@ -1927,7 +1927,7 @@ func TestGroomNotesPromptContract(t *testing.T) {
 			}
 		})
 	}
-	for _, forbidden := range []string{"UNUSED_PLAN_PATH", "UNUSED_REPO_ID", "module github.com/iamseth/tao", "tao insights --all-repos"} {
+	for _, forbidden := range []string{"UNUSED_PLAN_PATH", "UNUSED_REPO_ID", "module github.com/iamseth/tao", "tao insights --all-repos", "tao repo config"} {
 		if strings.Contains(got, forbidden) {
 			t.Errorf("grooming prompt contains unwanted scope %q", forbidden)
 		}
@@ -1958,7 +1958,7 @@ func TestStealPromptContract(t *testing.T) {
 		"do not execute cleanup from rejected output", "decoded `Removal` value",
 		"Cannot steal: exactly one https, ssh, or scp-style git URL is required.",
 		"Cannot steal: current repository registration could not be confirmed.",
-		"git rev-parse --show-toplevel", "TAO_UPDATE=off tao repo config",
+		"git rev-parse --show-toplevel", "TAO_UPDATE=off tao repo list",
 		"TAO_UPDATE=off tao repo show '<repository-id>'",
 		"400 files", "64 KiB per file", "2 MiB total",
 		"already enforced by a Tao mechanism", "already covered by a Tao prompt", "genuinely missing",
@@ -1971,7 +1971,7 @@ func TestStealPromptContract(t *testing.T) {
 			t.Errorf("steal prompt missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"git clone", "--depth", "protocol.", "{{ .Arguments }}"} {
+	for _, forbidden := range []string{"git clone", "--depth", "protocol.", "{{ .Arguments }}", "tao repo config"} {
 		if strings.Contains(got, forbidden) {
 			t.Errorf("steal prompt contains %q", forbidden)
 		}

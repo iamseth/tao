@@ -410,7 +410,7 @@ func TestPromptGroomNotesRendersWithoutTaoModule(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"prompt", "groom-notes", "--arguments-stdin"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{focus, "Arguments are optional focus only", "tao repo config", "tao repo show", "No invocation-time writes"} {
+	for _, want := range []string{focus, "Arguments are optional focus only", "tao repo list", "tao repo show", "No invocation-time writes"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("rendered grooming prompt missing %q", want)
 		}
