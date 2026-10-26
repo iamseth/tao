@@ -345,8 +345,8 @@ rework handoffs and automatic rounds; PR triage keeps its existing runtime.
 to be available.
 Invalid selectors are rejected before execution or reopening work.
 
-Runtime and model selection are independent: `TAO_REVIEW_MODEL` and repository
-`--review-model` still select the review model, with existing base-model fallback
+Runtime and model selection are independent: `TAO_REVIEW_MODEL` and the saved
+`models.review_model` setting still select the review model, with existing base-model fallback
 and invocation `--model` precedence. Tao passes model names unchanged; runtime or
 model rejection never triggers fallback to another runtime or model. Plan-review
 failures retain their existing best-effort handling. This selector does not affect
