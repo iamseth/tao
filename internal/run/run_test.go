@@ -803,7 +803,7 @@ func TestServiceExecuteRefusesDirtyReadyWorkspaceBeforePreparation(t *testing.T)
 	runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string {
 		return " M unattributed.go\n"
 	}, "tao/plan-a", "base")
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			preparerCalls++
@@ -841,7 +841,7 @@ func TestServiceExecuteRefusesActiveSequencerInReadyWorkspaceBeforePreparation(t
 	preparerCalls := 0
 	agentCalls := 0
 	runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "base")
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			preparerCalls++
@@ -880,7 +880,7 @@ func TestServiceExecuteRefusesDirtyUnrecordedManagedWorkspaceBeforePreparation(t
 	runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string {
 		return " M interrupted.go\n"
 	}, "tao/plan-a", "base")
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			preparerCalls++
@@ -935,7 +935,8 @@ func TestServiceExecuteRefusesDirtyRecordedWorkspaceBeforeMutation(t *testing.T)
 				return " M interrupted.go\n"
 			}, "tao/plan-a", "base")
 			err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-				CommandRunner: runner,
+				RepositoryAdmission: testRepositoryAdmission,
+				CommandRunner:       runner,
 				WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 					preparerCalls++
 					dependencyCalls++
@@ -1012,7 +1013,8 @@ func TestServiceExecuteStartsNextAutomaticSliceAfterMaxSlicesStop(t *testing.T) 
 	})
 	newService := func() Service {
 		return NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
-			CommandRunner: runner,
+			RepositoryAdmission: testRepositoryAdmission,
+			CommandRunner:       runner,
 			WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 				return workspaceRoot, nil
 			},
@@ -1112,7 +1114,8 @@ func TestServiceExecuteMigratesLegacyCompletedSliceWorkspaceHead(t *testing.T) {
 	prepared := 0
 	var runs []string
 	service := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: runner,
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       runner,
 		WorkspacePreparer: func(ctx context.Context, detail *plan.PlanDetail, _ WorkspaceResolverInput) (string, error) {
 			prepared++
 			if detail.State.Workspace.HeadSHA != "after-001-a" {
@@ -1209,7 +1212,8 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceBeforeWorkspaceMutation(t
 
 	var out bytes.Buffer
 	err := NewService(repo, &out, Options{RunDependencies: RunDependencies{
-		CommandRunner: runner, SliceExecutor: executor, EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       runner, SliceExecutor: executor, EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++
 			return root, nil
@@ -1315,7 +1319,8 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 			var events []plan.Event
 			var out bytes.Buffer
 			err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{
-				CommandRunner: tt.runner(t, root),
+				RepositoryAdmission: testRepositoryAdmission,
+				CommandRunner:       tt.runner(t, root),
 				EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
 					events = append(events, event)
 					return nil
@@ -1351,7 +1356,7 @@ func TestServiceExecuteRefusesInterruptedAutomaticSliceWithActiveSequencer(t *te
 	agentCalls := 0
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
 
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			preparerCalls++
@@ -1431,9 +1436,10 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceThenRunsNextSlice(t *test
 
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{initial, initial, afterFirst, completed}}
 	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner:     runner,
-		EventAppender:     eventAppenderFunc(func(string, plan.Event) error { return nil }),
-		PlanRecordFactory: memoryPlanRecordFactory,
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       runner,
+		EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),
+		PlanRecordFactory:   memoryPlanRecordFactory,
 		SliceExecutor: sliceExecutorFunc(func(_ context.Context, run SliceRun) error {
 			runs = append(runs, run)
 			return nil
@@ -1465,7 +1471,8 @@ func TestServiceExecuteResumesAgainAfterASecondProviderInterruption(t *testing.T
 	agentCalls := 0
 	var events []plan.Event
 	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: runner, EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       runner, EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
 			events = append(events, event)
 			return nil
 		}),
@@ -1515,7 +1522,7 @@ func TestInterruptedResumeFailureEventWarningPreservesProviderError(t *testing.T
 	providerErr := errors.New("provider connection lost")
 	var out bytes.Buffer
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
 			if event.Type == plan.EventTypeSliceResumeFailed {
@@ -1543,8 +1550,9 @@ func TestServiceExecuteRoutesCommitIntentWithoutAgent(t *testing.T) {
 	agentCalls := 0
 	gitCalls := 0
 	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: (&scriptedGitRunner{CallCount: &gitCalls}).Run,
-		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       (&scriptedGitRunner{CallCount: &gitCalls}).Run,
+		SliceExecutor:       sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
 	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
 	if err == nil || !strings.Contains(err.Error(), "interrupted post-intent completion transaction") || !strings.Contains(err.Error(), "rerun tao slice-complete") || !strings.Contains(err.Error(), "do not rerun the implementation agent") {
 		t.Fatalf("error = %v, want post-intent slice-complete-only recovery guidance", err)
@@ -1563,7 +1571,8 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 	agentCalls := 0
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base")
 	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: runner, EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       runner, EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
 		SliceExecutor:     sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return errors.New("provider stopped") }),
 		PlanRecordFactory: memoryPlanRecordFactory,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
@@ -1582,7 +1591,7 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 	dirty.Slices.Slices[0].ExecutionStart = nil
 	agentCalls = 0
 	dirtyRunner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M unattributed.go\n" }, "tao/plan-a", "base")
-	err = NewService(&memoryRunRepository{details: []*plan.PlanDetail{dirty}}, io.Discard, Options{RunDependencies: RunDependencies{CommandRunner: dirtyRunner, SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil })}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
+	err = NewService(&memoryRunRepository{details: []*plan.PlanDetail{dirty}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, CommandRunner: dirtyRunner, SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil })}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
 	if err == nil || !strings.Contains(err.Error(), "dirty worktree has no immutable execution boundary") || !strings.Contains(err.Error(), "changed_paths=unattributed.go") || !strings.Contains(err.Error(), "leave the automatic slice uncommitted") || agentCalls != 0 {
 		t.Fatalf("dirty torn start error=%v agent=%d", err, agentCalls)
 	}
@@ -1638,7 +1647,8 @@ func TestServiceExecuteRepairsMissingStartEventAfterReload(t *testing.T) {
 	providerErr := errors.New("provider stopped after start event repair")
 	agentCalls := 0
 	service := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			t.Fatal("event-gap recovery prepared workspace")
 			return "", nil
@@ -1729,7 +1739,8 @@ func TestServiceExecuteRepairsStateAdvancedSliceStartAfterReload(t *testing.T) {
 	prepared := 0
 	var gitCalls []string
 	service := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: interruptedServiceGitRunner(t, workspaceRoot, &gitCalls, func() string { return "" }, "tao/plan-a", "base"),
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       interruptedServiceGitRunner(t, workspaceRoot, &gitCalls, func() string { return "" }, "tao/plan-a", "base"),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++
 			return "", errors.New("workspace preparation must not run during torn-start repair")
@@ -1803,7 +1814,8 @@ func TestServiceExecuteRefusesInterruptedBoundaryDriftAndManualOwnership(t *test
 			prepared := 0
 			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M work.go\n" }, tt.branch, tt.head)
 			err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-				CommandRunner: runner, SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
+				RepositoryAdmission: testRepositoryAdmission,
+				CommandRunner:       runner, SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
 				WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 					prepared++
 					return root, nil
@@ -1868,7 +1880,8 @@ func TestServiceExecuteWaitsForIsolatedWorkspacePreparationBeforeAgent(t *testin
 	var gitCalls []string
 
 	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{
-		SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory,
+		RepositoryAdmission: testRepositoryAdmission,
+		SliceExecutor:       executor, PlanRecordFactory: memoryPlanRecordFactory,
 		WorkspacePreparer: preparer, CommandRunner: runGitFake(&gitCalls, nil),
 	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, MaxSlices: 1}})
 	if err != nil {
@@ -2182,7 +2195,7 @@ func TestServiceExecuteRefusesUnchangedPlanOwnedBlocker(t *testing.T) {
 	executor := &countingSliceExecutor{}
 	continued := false
 	var events []plan.Event
-	err = NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err = NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner:     runner.Run,
 		SliceExecutor:     executor,
 		PlanRecordFactory: callbackPlanRecordFactory(nil, func(*plan.PlanDetail, time.Time) error { continued = true; return nil }),
@@ -2411,7 +2424,8 @@ func TestRunResumeChecksRequiredInputsBeforeRepairOrHandoff(t *testing.T) {
 	executor := &countingSliceExecutor{}
 
 	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner: interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++
 			return root, nil

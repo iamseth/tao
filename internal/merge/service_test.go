@@ -392,7 +392,8 @@ func TestMergeReportsPhases(t *testing.T) {
 		t.Run(fmt.Sprintf("verification failure=%t", failVerification), func(t *testing.T) {
 			var phases []runstatus.Phase
 			service := Service{
-				Git: mergeVerifyGit(), Cleaner: successfulCleanup(), Events: &fakeEventAppender{},
+				RepositoryAdmission: testRepositoryAdmission,
+				Git:                 mergeVerifyGit(), Cleaner: successfulCleanup(), Events: &fakeEventAppender{},
 				ReportPhase: func(phase runstatus.Phase) { phases = append(phases, phase) },
 				Runner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 					if !slices.Equal(phases, []runstatus.Phase{"merge_integrating", "merge_verifying"}) {
@@ -445,7 +446,7 @@ func TestMergeRefusesAbandonedPlanBeforeEverySideEffect(t *testing.T) {
 			events := &fakeEventAppender{}
 			generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 
-			err := (Service{Git: git, Cleaner: cleaner, Events: events, ProposalGenerator: generator}).Merge(context.Background(), detail, options)
+			err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events, ProposalGenerator: generator}).Merge(context.Background(), detail, options)
 			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded") {
 				t.Fatalf("Merge() error = %v, want abandonment refusal", err)
 			}
@@ -751,7 +752,7 @@ func TestIntegrateFastForwardsDescendantPlanBranch(t *testing.T) {
 		ancestors:     map[string]bool{"main..tao/plan-a": true},
 	}
 
-	if err := (Service{Git: git}).Integrate(context.Background(), mergeReadyDetail("base123")); err != nil {
+	if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).Integrate(context.Background(), mergeReadyDetail("base123")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -768,7 +769,7 @@ func TestIntegrateRebasesThenFastForwardsWhenDefaultAdvanced(t *testing.T) {
 		revParse:      map[string]string{"main": "pre123"},
 	}
 
-	if err := (Service{Git: git}).Integrate(context.Background(), mergeReadyDetail("base123")); err != nil {
+	if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).Integrate(context.Background(), mergeReadyDetail("base123")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -790,7 +791,7 @@ func TestIntegrateRebaseConflictAbortsAndRestoresDefault(t *testing.T) {
 		rebaseErr:     errors.New("conflict"),
 	}
 
-	err := (Service{Git: git}).Integrate(context.Background(), mergeReadyDetail("base123"))
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).Integrate(context.Background(), mergeReadyDetail("base123"))
 	if err == nil {
 		t.Fatal("expected merge conflict")
 	}
@@ -908,7 +909,7 @@ func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
 	t.Run("force refuses", func(t *testing.T) {
 		cleaner := successfulCleanup()
 		events := &fakeEventAppender{}
-		err := (Service{Git: newGit(), Cleaner: cleaner, Events: events}).Merge(context.Background(), newDetail(), Options{Force: true})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: newGit(), Cleaner: cleaner, Events: events}).Merge(context.Background(), newDetail(), Options{Force: true})
 		if err == nil || !strings.Contains(err.Error(), "no commits beyond the previously recorded merge") {
 			t.Fatalf("expected rework refusal, got %v", err)
 		}
@@ -921,7 +922,7 @@ func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
 	})
 
 	t.Run("plain merge refuses with the rework reason", func(t *testing.T) {
-		err := (Service{Git: newGit()}).Merge(context.Background(), newDetail(), Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: newGit()}).Merge(context.Background(), newDetail(), Options{})
 		if err == nil || !strings.Contains(err.Error(), "no commits beyond the previously recorded merge") {
 			t.Fatalf("expected rework refusal, got %v", err)
 		}
@@ -931,7 +932,7 @@ func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
 		git := newGit()
 		git.revParse["tao/plan-a"] = "rework-tip"
 		git.ancestors = map[string]bool{"rework-tip..merged456": false, "tao/plan-a..main": false}
-		err := (Service{Git: git}).Merge(context.Background(), newDetail(), Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).Merge(context.Background(), newDetail(), Options{})
 		if !errors.Is(err, ErrNotApproved) {
 			t.Fatalf("expected the guard to pass through to the approval gate, got %v", err)
 		}
@@ -999,7 +1000,7 @@ func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
 
 	t.Run("leftover worktree cleaned", func(t *testing.T) {
 		cleaner := successfulCleanup()
-		if err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
+		if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(cleaner.cleaned) != 1 || cleaner.cleaned[0].Branch != "tao/plan-a" {
@@ -1010,7 +1011,7 @@ func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
 	t.Run("already cleaned is success", func(t *testing.T) {
 		cleaner := successfulCleanup()
 		cleaner.managed = nil // branch no longer managed: nothing left to clean
-		if err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
+		if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -1018,7 +1019,7 @@ func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
 	t.Run("cleanup failure surfaces", func(t *testing.T) {
 		cleaner := successfulCleanup()
 		cleaner.cleanErr = errors.New("worktree busy")
-		err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
 		if err == nil || !strings.Contains(err.Error(), "already recorded, but cleanup failed") {
 			t.Fatalf("expected surfaced cleanup failure, got %v", err)
 		}
@@ -1040,7 +1041,7 @@ func TestMergeSurfacesCleanupFailureAfterRecordingExternalMerge(t *testing.T) {
 	cleaner.cleanErr = errors.New("worktree busy")
 	events := &fakeEventAppender{}
 
-	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{})
 	if err == nil || !strings.Contains(err.Error(), "external merge recorded, but cleanup failed") {
 		t.Fatalf("expected surfaced cleanup failure, got %v", err)
 	}
@@ -1152,7 +1153,7 @@ func TestMergeRejectsInvalidReviewProposalBeforeIntentOrGitMutation(t *testing.T
 	detail.State.Plan.Review.CommitMessage.Body += "\n\nTao-Plan: forged"
 	events := &fakeEventAppender{}
 
-	err := (Service{Git: git, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil || !strings.Contains(err.Error(), "review commit proposal is invalid") {
 		t.Fatalf("expected invalid proposal refusal, got %v", err)
 	}
@@ -1254,7 +1255,7 @@ func TestMergeResolvesSquashConflictVerifiesAndRequiresIndependentApproval(t *te
 				_, _ = io.WriteString(stdout, "verified resolved head\n")
 				return nil
 			}
-			service := Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 			err = service.Merge(context.Background(), detail, Options{Force: tt.force, NoVerify: tt.noVerify, VerifyCommand: "test -f README.md"})
 			if tt.wantMerged {
 				if err != nil {
@@ -1343,7 +1344,7 @@ func TestMergeResolutionFailureRollsBackAfterCallerCancellation(t *testing.T) {
 				_, _ = io.WriteString(stdout, "verified resolved head\n")
 				return nil
 			}
-			service := Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 
 			err = service.Merge(ctx, detail, Options{VerifyCommand: "test -f README.md"})
 			if !errors.Is(err, context.Canceled) {
@@ -1431,7 +1432,7 @@ func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testin
 		reviewerCalls++
 		return BatchAgentSessionResult{Output: reviewJSON("approve", "recovered exact resolution approved", "")}, nil
 	})}
-	service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+	service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 	if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -1504,7 +1505,7 @@ func TestMergeAutomaticallyResolvesConflictsWithExactFilenames(t *testing.T) {
 			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 				return BatchAgentSessionResult{Output: reviewJSON("approve", "exact path approved", "")}, nil
 			})}
-			service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 
 			if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
 				t.Fatal(err)
@@ -1600,7 +1601,7 @@ func TestMergeAutomaticallyResolvesConflictWithExactSourcePathScope(t *testing.T
 			reviewer := GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: batchSessionAgentFunc(func(_ context.Context, _ BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 				return BatchAgentSessionResult{Output: reviewJSON("approve", "exact source scope approved", "")}, nil
 			})}
-			service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 
 			if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
 				t.Fatal(err)
@@ -1663,7 +1664,7 @@ func TestMergeConflictResolutionRejectsDefaultOnlyPathEdits(t *testing.T) {
 		reviewerCalls++
 		return BatchAgentSessionResult{Output: reviewJSON("approve", "should not review unsafe scope", "")}, nil
 	})}
-	service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+	service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 
 	err = service.Merge(context.Background(), detail, Options{NoVerify: true})
 	if !errors.Is(err, ErrSingleResolutionRejected) {
@@ -1740,7 +1741,7 @@ func TestMergeResolutionFailureSettlesRollbackAndAllowsReworkedRerun(t *testing.
 				_, _ = io.WriteString(stdout, "verified resolved head\n")
 				return nil
 			}
-			service := Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, SingleResolver: resolver, SingleReviewer: reviewer}
 
 			err = service.Merge(context.Background(), detail, Options{VerifyCommand: "test -f README.md"})
 			if tt.failVerify {
@@ -1867,7 +1868,7 @@ func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
 	}
 	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 	events := &fakeEventAppender{}
-	service := Service{Git: git, Cleaner: successfulCleanup(), Events: events, ProposalGenerator: generator}
+	service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, ProposalGenerator: generator}
 
 	if err := service.Merge(context.Background(), detail, Options{Force: true, NoVerify: true}); err != nil {
 		t.Fatal(err)
@@ -1906,7 +1907,7 @@ func TestMergeForceGeneratesFromLiveDiffWhenApprovedReviewBaseIsStale(t *testing
 		ancestors:     map[string]bool{"tao/plan-a..main": false}, dirtyFingerprints: []gitops.DirtyFingerprint{{Hash: "clean"}, {Hash: "clean"}},
 	}
 	generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
-	service := Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}
+	service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}
 
 	if err := service.Merge(context.Background(), detail, Options{Force: true, NoVerify: true}); err != nil {
 		t.Fatal(err)
@@ -1933,7 +1934,7 @@ func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
 		detail := mergeVerifyDetail()
 		git := mergeVerifyGit()
 		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
-		err := (Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{NoSquash: true, NoVerify: true})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{NoSquash: true, NoVerify: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1945,7 +1946,7 @@ func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
 	t.Run("pre gate", func(t *testing.T) {
 		detail := notApprovedDetail()
 		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
-		err := (Service{Git: &fakeGitClient{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{})
 		if !errors.Is(err, ErrNotApproved) {
 			t.Fatalf("error = %v, want approval gate", err)
 		}
@@ -1972,7 +1973,7 @@ func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
 		detail.Dir = t.TempDir()
 		git := &fakeGitClient{defaultBranch: "main", revParse: map[string]string{"main": "merged123", "tao/plan-a": "tip-sha"}, ancestors: map[string]bool{"tao/plan-a..main": true, "base123..tao/plan-a": true}}
 		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
-		err := (Service{Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}, ProposalGenerator: generator}).Merge(context.Background(), detail, Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1985,7 +1986,7 @@ func TestMergeNonSquashAndPreGateFailuresNeverGenerateProposal(t *testing.T) {
 		detail := mergeReadyDetail("base123")
 		detail.Events = []plan.Event{{Type: plan.EventTypePlanMerged}}
 		generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
-		err := (Service{Git: &fakeGitClient{}, Cleaner: successfulCleanup(), ProposalGenerator: generator}).Merge(context.Background(), detail, Options{NoSquash: true})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: successfulCleanup(), ProposalGenerator: generator}).Merge(context.Background(), detail, Options{NoSquash: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2128,7 +2129,7 @@ func TestMergeRollsBackWhenMergedSHACaptureFails(t *testing.T) {
 	detail.Dir = t.TempDir()
 	detail.State.Plan.Review.Head = "tip-sha"
 
-	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil || !errors.Is(err, captureErr) {
 		t.Fatalf("expected merged-SHA capture failure, got %v", err)
 	}
@@ -2261,7 +2262,7 @@ func TestMergeRetainsDurableIntentWhenPlanMergedEventFails(t *testing.T) {
 	detail.State.Status = plan.StatusReviewed
 	detail.State.Plan.Review.Head = "tip-sha"
 
-	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil || !errors.Is(err, recordErr) {
 		t.Fatalf("expected event persistence failure, got %v", err)
 	}
@@ -2346,7 +2347,7 @@ func TestMergeDirtyInCleanupGapPreservesRecordedStateAndRetries(t *testing.T) {
 	detail.State.Plan.Review.Head = "tip-sha"
 	detail.State.Repo.Root = fixture.repoRoot
 	events := &fakeEventAppender{}
-	service := Service{Git: git, Cleaner: cleaner, Events: events}
+	service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}
 
 	err := service.Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil || !strings.Contains(err.Error(), "has uncommitted changes") {
@@ -2403,7 +2404,7 @@ func TestMergeRecordsMergeBeforeCleanup(t *testing.T) {
 	cleaner.onCall = func(call string) { order = append(order, call) }
 	events.onCall = func(call string) { order = append(order, call) }
 
-	err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err == nil {
 		t.Fatal("expected cleanup failure to surface")
 	}

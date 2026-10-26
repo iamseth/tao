@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/planning"
+	"github.com/iamseth/tao/internal/repoadmission"
 	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/settings"
@@ -24,6 +25,8 @@ import (
 )
 
 type App struct {
+	// RepositoryAdmission defaults to the production guard when nil.
+	RepositoryAdmission      repoadmission.Guard
 	In                       io.Reader
 	Out                      io.Writer
 	Err                      io.Writer

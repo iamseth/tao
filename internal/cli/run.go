@@ -382,7 +382,7 @@ func (a App) executeResolvedRunWithSources(ctx context.Context, repo planRunRepo
 			SkipPermissions:    skipPermissions,
 			MaxReworkAttempts:  policy.MaxAttempts,
 		},
-		RunDependencies: run.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, HeaderReporter: headerReporter, SessionLogWriter: runOut, Now: a.now},
+		RunDependencies: run.RunDependencies{RepositoryAdmission: a.RepositoryAdmission, CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, HeaderReporter: headerReporter, SessionLogWriter: runOut, Now: a.now},
 	})
 
 	return service.WithPlanRunLock(runCtx, request, func(ownedCtx context.Context) error {

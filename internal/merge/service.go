@@ -15,6 +15,7 @@ import (
 	commitpkg "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/repoadmission"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
@@ -90,6 +91,7 @@ type GitClient interface {
 var _ GitClient = gitops.Client{}
 
 type Service struct {
+	RepositoryAdmission repoadmission.Guard
 	// RuntimeEnv is the invocation snapshot; nil uses built-ins, never ambient state.
 	RuntimeEnv        *runtimeconfig.EnvSnapshot
 	Git               GitClient
@@ -167,6 +169,16 @@ func (s Service) RestartSingleMerge(ctx context.Context, planDir string) (Single
 	if err != nil {
 		return SingleMergeRestartResult{}, fmt.Errorf("load single-merge restart plan: %w", err)
 	}
+	var result SingleMergeRestartResult
+	err = WithRepositoryAdmission(ctx, s.RepositoryAdmission, detail, false, func(ctx context.Context) error {
+		var restartErr error
+		result, restartErr = s.restartSingleMerge(ctx, detail)
+		return restartErr
+	})
+	return result, err
+}
+
+func (s Service) restartSingleMerge(ctx context.Context, detail *plan.PlanDetail) (SingleMergeRestartResult, error) {
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return SingleMergeRestartResult{}, err
 	}
@@ -380,6 +392,12 @@ func (s Service) mergeVerifyMayNeedSnapshot(options Options) bool {
 }
 
 func (s Service) Merge(ctx context.Context, detail *plan.PlanDetail, options Options) error {
+	return WithRepositoryAdmission(ctx, s.RepositoryAdmission, detail, options.RecordOnly, func(ctx context.Context) error {
+		return s.merge(ctx, detail, options)
+	})
+}
+
+func (s Service) merge(ctx context.Context, detail *plan.PlanDetail, options Options) error {
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")
 	}
@@ -1052,7 +1070,7 @@ func (s Service) recordMergeAndCleanup(ctx context.Context, detail *plan.PlanDet
 	if err := s.AppendPlanMergedEvent(detail, ref, mergedDefaultSHA); err != nil {
 		return err
 	}
-	if _, err := s.Cleanup(ctx, detail, options); err != nil && !cleanupAlreadySettled(err) {
+	if _, err := s.cleanup(ctx, detail, options); err != nil && !cleanupAlreadySettled(err) {
 		return fmt.Errorf("plan %s %s, but cleanup failed: %w", detail.State.Plan.ID, recordedAs, err)
 	}
 	return nil
@@ -1113,7 +1131,7 @@ func (s Service) retryRecordedMergeCleanup(ctx context.Context, git GitClient, d
 	// Only a Tao squash commit tied to this plan and its reviewed source head may
 	// bypass the ordinary unmerged-branch safeguard on a cleanup retry.
 	options.allowNonAncestralCleanup = !options.NoSquash && recordedTaoSquash(ctx, git, detail)
-	_, err := s.Cleanup(ctx, detail, options)
+	_, err := s.cleanup(ctx, detail, options)
 	if err == nil || cleanupAlreadySettled(err) {
 		return nil
 	}

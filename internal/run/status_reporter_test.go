@@ -138,7 +138,7 @@ func executeServiceWithStatusReporter(t *testing.T, ctx context.Context, reporte
 	}
 	service := NewService(repo, io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: false}},
-		RunDependencies: RunDependencies{
+		RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 			CommandRunner:     runGitFake(&calls, nil),
 			PlanRecordFactory: memoryPlanRecordFactory,
 			SliceExecutor:     executor,

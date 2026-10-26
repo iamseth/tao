@@ -79,6 +79,7 @@ func TestIntegrateSquashRecoversExactOwnedCommitAtIntentParent(t *testing.T) {
 	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
 	defaultParent := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	detail := mergeReadyDetail(defaultParent)
+	detail.State.Repo.Root = fixture.repoRoot
 	detail.State.Workspace.Branch = fixture.planBranch
 	detail.State.Workspace.BaseBranch = fixture.defaultBranch
 	setSingleMergeIntent(t, detail, sourceHead, defaultParent)
@@ -106,7 +107,7 @@ func TestIntegrateSquashRefusesMismatchedPartialCommitWithoutMutation(t *testing
 		},
 		commitMessages: map[string]string{"partial789": "not the intended message"},
 	}
-	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).IntegrateSquash(context.Background(), detail)
 	if err == nil || !strings.Contains(err.Error(), "does not contain the exact intended squash") {
 		t.Fatalf("expected mismatched partial-commit refusal, got %v", err)
 	}
@@ -136,7 +137,7 @@ func TestIntegrateSquashCommitFailureRestoresDefault(t *testing.T) {
 
 	detail := mergeReadyDetail("base123")
 	setSingleMergeIntent(t, detail, "source456", "pre123")
-	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).IntegrateSquash(context.Background(), detail)
 	var conflict *MergeConflictError
 	if !errors.Is(err, ErrMergeConflict) || !errors.Is(err, git.commitErr) || !errors.As(err, &conflict) || conflict.Phase != "squash commit" {
 		t.Fatalf("expected typed commit failure, got %v", err)
@@ -156,7 +157,7 @@ func TestIntegrateSquashEmptyStagingRestoresDefaultWithoutCommit(t *testing.T) {
 	detail := mergeReadyDetail("base123")
 	setSingleMergeIntent(t, detail, "source456", "pre123")
 
-	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).IntegrateSquash(context.Background(), detail)
 	var empty *NoChangesToIntegrateError
 	if !errors.Is(err, ErrNoChangesToIntegrate) || !errors.Is(err, commitpkg.ErrNoStagedChanges) || errors.Is(err, ErrMergeConflict) || !errors.As(err, &empty) {
 		t.Fatalf("expected typed non-conflict empty squash, got %v", err)
@@ -190,7 +191,7 @@ func TestIntegrateSquashHEADFailurePreservesCreatedCommit(t *testing.T) {
 	detail := mergeReadyDetail("base123")
 	setSingleMergeIntent(t, detail, "source456", "pre123")
 
-	err := (Service{Git: git}).IntegrateSquash(context.Background(), detail)
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git}).IntegrateSquash(context.Background(), detail)
 	if !errors.Is(err, commitpkg.ErrCommitCreated) || !errors.Is(err, resolveErr) {
 		t.Fatalf("expected created-commit HEAD failure, got %v", err)
 	}
@@ -343,8 +344,9 @@ func TestIntegrateWorktreePlanMutatesOnlyWorktreeRoot(t *testing.T) {
 	detail.State.Workspace.Path = worktreePath
 
 	service := Service{
-		Git:    reg.client(repoRoot),
-		NewGit: reg.newGit,
+		RepositoryAdmission: testRepositoryAdmission,
+		Git:                 reg.client(repoRoot),
+		NewGit:              reg.newGit,
 	}
 
 	if err := service.Integrate(context.Background(), detail); err != nil {

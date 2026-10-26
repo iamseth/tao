@@ -77,7 +77,7 @@ func TestServiceJournalsRunAbort(t *testing.T) {
 				repo.appendErr = errors.New("append failed")
 			}
 			stamp := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
-			service := NewService(repo, io.Discard, Options{})
+			service := NewService(repo, io.Discard, testOptions(RunDependencies{}))
 			service.dependencies.Now = func() time.Time { return stamp }
 			service.dependencies.CommandRunner = func(ctx context.Context, cwd, name string, args []string, stdout, _ io.Writer) error {
 				if ctx.Err() != nil || cwd != "/workspace" || name != "git" || strings.Join(args, " ") != "rev-parse HEAD" {
@@ -142,7 +142,7 @@ func TestRunAbortEnrichmentBounded(t *testing.T) {
 			dir := t.TempDir()
 			detail := &plan.PlanDetail{Dir: dir, State: plan.State{Plan: plan.PlanState{ID: filepath.Base(dir)}, Workspace: &plan.Workspace{Path: dir}}}
 			repo := &abortRepository{memoryRunRepository: &memoryRunRepository{details: []*plan.PlanDetail{detail}}}
-			service := NewService(repo, io.Discard, Options{})
+			service := NewService(repo, io.Discard, testOptions(RunDependencies{}))
 			unblock := make(chan struct{})
 			mutationLock, err := os.OpenFile(filepath.Join(dir, ".mutation.lock"), os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- test-owned temporary plan directory.
 			if err != nil {

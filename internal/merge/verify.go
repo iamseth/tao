@@ -84,6 +84,12 @@ func (e *VerifyFailedError) Unwrap() error {
 }
 
 func (s Service) Verify(ctx context.Context, detail *plan.PlanDetail, defaultBranch string, preMergeSHA string, options Options) error {
+	return WithRepositoryAdmission(ctx, s.RepositoryAdmission, detail, false, func(ctx context.Context) error {
+		return s.verify(ctx, detail, defaultBranch, preMergeSHA, options)
+	})
+}
+
+func (s Service) verify(ctx context.Context, detail *plan.PlanDetail, defaultBranch string, preMergeSHA string, options Options) error {
 	resolution, err := s.resolveMergeVerifyCommandForDetail(detail, options)
 	if err != nil {
 		return err

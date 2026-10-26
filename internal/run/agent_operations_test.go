@@ -966,7 +966,7 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 	})
 	options := Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent}},
-		RunDependencies: RunDependencies{SliceExecutor: executor, CommandRunner: runGitFake(&[]string{}, nil)},
+		RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: executor, CommandRunner: runGitFake(&[]string{}, nil)},
 	}
 	service := NewService(repository, io.Discard, options)
 	err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})

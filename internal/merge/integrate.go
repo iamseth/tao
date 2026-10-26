@@ -97,7 +97,9 @@ func (e *preparedSquashConflict) Unwrap() error { return e.cause }
 // Its public behavior remains rollback-on-conflict; Merge uses the private
 // prepared variant when a guarded resolver is configured.
 func (s Service) IntegrateSquash(ctx context.Context, detail *plan.PlanDetail) error {
-	return s.integrateSquash(ctx, detail, false)
+	return WithRepositoryAdmission(ctx, s.RepositoryAdmission, detail, false, func(ctx context.Context) error {
+		return s.integrateSquash(ctx, detail, false)
+	})
 }
 
 func (s Service) integrateSquash(ctx context.Context, detail *plan.PlanDetail, preserveConflict bool) error {
@@ -247,6 +249,12 @@ func inspectSingleMergeIntent(ctx context.Context, git GitClient, detail *plan.P
 
 // Integrate preserves plan-branch commits by rebasing and fast-forwarding.
 func (s Service) Integrate(ctx context.Context, detail *plan.PlanDetail) error {
+	return WithRepositoryAdmission(ctx, s.RepositoryAdmission, detail, false, func(ctx context.Context) error {
+		return s.integrate(ctx, detail)
+	})
+}
+
+func (s Service) integrate(ctx context.Context, detail *plan.PlanDetail) error {
 	if detail == nil {
 		return fmt.Errorf("merge plan detail is nil")
 	}

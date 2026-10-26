@@ -207,7 +207,7 @@ func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
 			providerCalls := 0
 			service := NewService(repo, io.Discard, Options{
 				ExecutionConfig: ExecutionConfig{RuntimeEnv: runEnvSnapshot(map[string]string{key: "invalid"})},
-				RunDependencies: RunDependencies{
+				RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 					CommandRunner: newScriptedGitRunner("").Run,
 					AgentFactory: func(runExecution) agentRunCapabilities {
 						providerCalls++

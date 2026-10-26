@@ -13,6 +13,7 @@ import (
 
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/repoadmission"
 
 	"github.com/iamseth/tao/internal/testenv"
 )
@@ -875,6 +876,37 @@ func TestBatchWorkspaceResumeClassifiesDriftedPreLandingBatchAsRestartable(t *te
 		if !strings.Contains(resumeErr.Error(), want) {
 			t.Fatalf("resume error missing %q: %v", want, resumeErr)
 		}
+	}
+
+	if _, err := owner.store.Initialize(state, state.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	// Follow the CLI's recovery guidance: --all --restart --dry-run must
+	// discard this stale batch, not merely print the same restart preview.
+	owner.RepositoryAdmission = func(context.Context, repoadmission.Request, func(context.Context) error) error {
+		t.Fatal("restart dry-run requested exclusive admission")
+		return nil
+	}
+	coordinator := NewBatchCoordinator(BatchCoordinatorSeams{
+		Store: owner.store, Workspace: owner,
+		Discovery:           coordinatorDiscovery{},
+		RepositoryAdmission: owner.RepositoryAdmission,
+	})
+	result, err := coordinator.Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Restarted == nil || !result.Restarted.RemoveRecovery || !result.DryRun {
+		t.Fatalf("restart result = %+v", result)
+	}
+	if active, err := owner.store.ActiveID(); err != nil || active != "" {
+		t.Fatalf("stale active batch remains: %q, %v", active, err)
+	}
+	if _, err := os.Stat(filepath.Join(owner.batchesDir, state.ID, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("stale recovery remains: %v", err)
+	}
+	if _, err := coordinator.Run(context.Background(), BatchCoordinatorOptions{DryRun: true}); err != nil {
+		t.Fatalf("fresh preview repeated resume failure: %v", err)
 	}
 }
 

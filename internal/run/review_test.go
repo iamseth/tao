@@ -1955,6 +1955,7 @@ func TestResumeReviewHonorsExistingPlanOwnershipAndPreservesBestEffortReviewFail
 	service := NewService(repo, &warnings, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 		RunDependencies: RunDependencies{
+			RepositoryAdmission: testRepositoryAdmission,
 			ReviewCreator: reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
 				return plan.PlanReview{}, fmt.Errorf("review timed out")
 			}),

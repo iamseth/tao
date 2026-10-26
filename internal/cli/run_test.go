@@ -589,7 +589,7 @@ func TestRunCurrentDoesNotReplaceUnhealthyRecordedRootWithLaunchCheckout(t *test
 			if err := record.PersistArtifacts(); err != nil {
 				t.Fatal(err)
 			}
-			app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
 				t.Fatal("unhealthy recorded repository reached agent handoff")
 				return nil, nil
 			}}
@@ -1148,7 +1148,7 @@ func TestRunReverifyBypassesAutomaticReworkForChangesRequestedPlan(t *testing.T)
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	if err := (App{Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--reverify", planID}); err != nil {
+	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--reverify", planID}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -1211,7 +1211,7 @@ func TestRunContinueChainsIntoAutoRework(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := (App{Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--no-run-header", "--continue", planID}); err != nil {
+	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--no-run-header", "--continue", planID}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 {
@@ -1385,7 +1385,7 @@ func TestRunSinglePlanAutoReworkLoop(t *testing.T) {
 			defer func() { executeSinglePlan = oldExecutor }()
 
 			args := append(append([]string{}, tt.args...), planID)
-			err := (App{Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
+			err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
 			if tt.wantError == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -1441,7 +1441,7 @@ func TestRunAutoReworkUsesOneStatusInvocationAndPublishesPhase(t *testing.T) {
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	app := App{Out: io.Discard, StatusReporter: reporter, Now: func() time.Time { return now }}
+	app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, StatusReporter: reporter, Now: func() time.Time { return now }}
 	if err := app.run(context.Background(), repo, []string{planID}); err != nil {
 		t.Fatal(err)
 	}
@@ -1551,7 +1551,7 @@ func TestRunAutoReworkRestartGuardLeavesPendingPlanUnchanged(t *testing.T) {
 	}
 	defer func() { executeSinglePlan = oldExecutor }()
 
-	if err := (App{Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{planID}); err != nil {
+	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{planID}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -1602,7 +1602,7 @@ func TestRunSinglePlanHoldsLockAcrossReopenBoundary(t *testing.T) {
 	}
 	defer func() { executeSinglePlan = oldExecutor }()
 
-	if err := (App{Out: io.Discard, Now: func() time.Time { return now }}).run(ctx, repo, []string{planID}); err != nil {
+	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }}).run(ctx, repo, []string{planID}); err != nil {
 		t.Fatal(err)
 	}
 	if competitorRan {

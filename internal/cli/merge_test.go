@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,10 +19,12 @@ import (
 	"github.com/iamseth/tao/internal/agentsession"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/repoadmission"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/testenv"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -259,7 +262,7 @@ func TestMergeCommandRuntimeStatusLifetime(t *testing.T) {
 				}
 			}}
 			stubMergeServiceRunner(t, service)
-			app := App{Out: io.Discard, Now: func() time.Time { return startedAt }, StatusReporter: runtimeStatusReporter{
+			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return startedAt }, StatusReporter: runtimeStatusReporter{
 				newPublisher: func(got runpkg.StatusInvocation) runtimeStatusPublisher {
 					invocation = got
 					return publisher
@@ -312,8 +315,9 @@ func TestMergeCommandPublishesServicePhases(t *testing.T) {
 			gitRunner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
 			verified := false
 			app := App{
-				Out:              io.Discard,
-				WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
+				RepositoryAdmission: testRepositoryAdmission,
+				Out:                 io.Discard,
+				WorkspaceManager:    func(string) (WorkspaceManager, error) { return manager, nil },
 				StatusReporter: runtimeStatusReporter{
 					newPublisher: func(runpkg.StatusInvocation) runtimeStatusPublisher { return publisher },
 					newTicker:    func(time.Duration) runtimeStatusTicker { return ticker },
@@ -370,9 +374,10 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	providerCalls := 0
 	var out bytes.Buffer
 	app := App{
-		Out:           &out,
-		Err:           &out,
-		CommandRunner: runner,
+		RepositoryAdmission: testRepositoryAdmission,
+		Out:                 &out,
+		Err:                 &out,
+		CommandRunner:       runner,
 		ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
 			providerCalls++
 			return nil, errors.New("current approved merge must not start a provider")
@@ -423,7 +428,8 @@ func TestMergeCommandRefusesAbandonedPlanBeforeServiceConstruction(t *testing.T)
 	t.Cleanup(func() { newMergeServiceRunner = original })
 	var out bytes.Buffer
 	app := App{
-		Out: &out, Err: &out,
+		RepositoryAdmission: testRepositoryAdmission,
+		Out:                 &out, Err: &out,
 		Repository: func(string) Repository {
 			return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 		},
@@ -568,7 +574,7 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 			service := &fakeCLIMergeService{err: tt.err}
 			stubMergeServiceRunner(t, service)
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+			app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 				return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 			}}
 
@@ -728,7 +734,7 @@ func TestMergeRestartStopsAfterSinglePlanRecoveryWithoutBatchMutation(t *testing
 	batch := &fakeCLIMergeBatchRunner{}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository {
+	app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(string) Repository {
 		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	}}
 
@@ -846,7 +852,7 @@ func TestMergeCommandPassesForceNoSquashNoVerifyAndVerifyCommandOptions(t *testi
 	service := &fakeCLIMergeService{}
 	stubMergeServiceRunner(t, service)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+	app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	}}
 
@@ -871,7 +877,7 @@ func TestMergeCommandPassesSignalContextToBatchAndSinglePlan(t *testing.T) {
 			stubMergeBatchRunner(t, batch)
 			stubMergeServiceRunner(t, service)
 			detail := cliMergeDetail(t)
-			app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
+			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
 				return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 			}}
 			args := []string{"merge", "plan-a"}
@@ -1097,6 +1103,65 @@ func TestMergeAllResumeFailureOffersRestartPreviewIndependentOfDryRun(t *testing
 	}
 	if outputs[0] != outputs[1] {
 		t.Fatalf("resume guidance changed with --dry-run:\nwithout: %q\nwith: %q", outputs[0], outputs[1])
+	}
+}
+
+type emptyRecoveryDiscovery struct{}
+
+func (emptyRecoveryDiscovery) Discover(context.Context) (mergepkg.BatchPreflightResult, error) {
+	return mergepkg.BatchPreflightResult{}, nil
+}
+
+func TestMergeAllRecoveryGuidanceDiscardsStaleBatch(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := initTestGitRepo(t)
+	initRunGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "base")
+	cmd := exec.Command("git", "-C", root, "rev-parse", "HEAD") //nolint:gosec // test-owned repository
+	head, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batches := t.TempDir()
+	store := mergepkg.NewBatchStore(batches, filepath.Join(batches, "active.json"))
+	state := mergepkg.BatchState{
+		Schema: mergepkg.BatchStateSchema, ID: "stale-batch", Status: mergepkg.BatchStatusIntegrating,
+		RepoRoot: root, DefaultBranch: "main", DefaultStartSHA: strings.TrimSpace(string(head)),
+	}
+	if _, err := store.Initialize(state, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := mergepkg.NewBatchWorkspace(root, batches, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denyAdmission := func(context.Context, repoadmission.Request, func(context.Context) error) error {
+		t.Fatal("dry-run requested exclusive repository admission")
+		return nil
+	}
+	owner.RepositoryAdmission = denyAdmission
+	coordinator := mergepkg.NewBatchCoordinator(mergepkg.BatchCoordinatorSeams{
+		Store: store, Workspace: owner, Discovery: emptyRecoveryDiscovery{}, RepositoryAdmission: denyAdmission,
+	})
+	stubMergeBatchRunner(t, coordinator)
+	var out bytes.Buffer
+	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	if err := app.Run(context.Background(), []string{"merge", "--all", "--dry-run"}); err == nil {
+		t.Fatal("missing integration workspace did not refuse resume")
+	}
+	if !strings.Contains(out.String(), "Next: `tao merge --all --restart --dry-run`") {
+		t.Fatalf("restart guidance missing: %s", out.String())
+	}
+	if err := app.Run(context.Background(), []string{"merge", "--all", "--restart", "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := store.ActiveID(); err != nil || active != "" {
+		t.Fatalf("stale batch still active: %q, %v", active, err)
+	}
+	if _, err := os.Stat(filepath.Join(batches, state.ID, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("stale recovery still exists: %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"merge", "--all", "--dry-run"}); err != nil {
+		t.Fatalf("guidance left a resume failure loop: %v", err)
 	}
 }
 

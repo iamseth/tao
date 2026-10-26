@@ -33,7 +33,7 @@ func TestMergeModelSelection(t *testing.T) {
 				t.Setenv("TAO_MERGE_REVIEW_MODEL", "env-review")
 				detail := cliMergeDetail(t)
 				registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Base: "repo-base", Resolver: "repo-resolver"}}}}
-				app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} }}
+				app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} }}
 				check := func(a App, model string, effort ...string) {
 					t.Helper()
 					options, err := a.mergeSessionOptions(model, effort...)()

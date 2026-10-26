@@ -297,15 +297,17 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	if resolved, resolveErr := prepareRequestConfig(s.config, request); resolveErr == nil {
 		headerConfig = resolved
 	}
-	return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
-		return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
-			return WithPlanRunLock(statusCtx, detail, startedAt, func(ownedCtx context.Context) error {
-				err := operation(ownedCtx)
-				if err != nil {
-					// Diagnostic journaling is never lifecycle or recovery authority.
-					s.journalRunAbort(ownedCtx, detail, err)
-				}
-				return err
+	return WithRepositoryAdmission(ctx, detail, s.dependencies.RepositoryAdmission, func(ctx context.Context) error {
+		return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
+			return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
+				return WithPlanRunLock(statusCtx, detail, startedAt, func(ownedCtx context.Context) error {
+					err := operation(ownedCtx)
+					if err != nil {
+						// Diagnostic journaling is never lifecycle or recovery authority.
+						s.journalRunAbort(ownedCtx, detail, err)
+					}
+					return err
+				})
 			})
 		})
 	})
@@ -350,7 +352,7 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 
 func (s Service) Execute(ctx context.Context, request Request) error {
 	ctx = withPlacementNotice(ctx)
-	return s.withResolvedPlan(ctx, request, resolvedPlanOptions{header: true, status: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
+	return s.withResolvedPlan(ctx, request, resolvedPlanOptions{header: true, status: true, admission: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
 		ownedCtx.Value(placementNoticeKey{}).(*sync.Once).Do(func() {
 			s.reportPlacementMismatch(detail, config)
 		})

@@ -28,8 +28,8 @@ var mergeCommand = commandMetadata{
 		"merge (m) --restart <plan-id-or-slug-or-path>",
 		"merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
-	completionDescription: "Merge approved plans into the default branch",
-	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, verifies the staged aggregate once, attributes an aggregate verification failure to one candidate, and requires aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. On SIGINT or SIGTERM, an interrupted dry run removes its disposable integration worktree before exiting. --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
+	completionDescription: "Merge approved plans; wait for active repository runs or merges",
+	long:                  "Merge one reviewed, approved Tao plan, or atomically stage every reviewed and approved plan with --all. Mutating merges exclude repository runs and other merges, including linked worktrees; wait for or finish the active operation before retrying. --force never bypasses admission. Single --record-only and batch --dry-run remain exempt from exclusive admission but retain existing ownership safeguards. Older binaries and manual Git are outside the exclusion guarantee. For one plan, --restart safely discards only an eligible stale pre-landing merge intent, then stops so the branch can be rebased and reviewed again; it cannot be combined with --force. An ordinary single-plan squash conflict gets one automatic resolver attempt, exact structural validation, the configured verification gate, and an independent fresh-session review before completion; --force cannot bypass these safety and review gates, while --no-verify skips only command verification. --no-squash rebase conflicts remain manual. Batch mode keeps default unchanged while it orders and stages one squash per source, uses bounded agent resolution, verifies the staged aggregate once, attributes an aggregate verification failure to one candidate, and requires aggregate approval before one fast-forward. Eligible attributed aggregate-review non-convergence stops and offers to eject that plan on the next rerun; --auto-eject performs the eject-and-reland in the same run. Ejection is offered only when it leaves a non-empty batch and no plan was already ejected. Reruns resume durable progress. When an active durable batch exists, --dry-run inspects and resume-validates it before it can snapshot fresh candidates; use tao merge --all --restart --dry-run as the safe pre-landing recovery preview when restart is offered. On SIGINT or SIGTERM, an interrupted dry run removes its disposable integration worktree before exiting. --all --restart discards only pre-landing batch recovery. Batch mode rejects --force, --record-only, --no-squash, and --no-verify.",
 	examples: "  tao merge my-plan\n" +
 		"  tao merge --restart my-plan\n" +
 		"  tao merge --all\n" +
@@ -174,51 +174,53 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		RecordOnly:    flagBoolValue(fs, "record-only"),
 		NoSquash:      flagBoolValue(fs, "no-squash"),
 	}
-	return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
-		// Reload by exact directory after acquisition so every merge gate and
-		// mutation uses state protected from concurrent lifecycle drivers.
-		refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
-		if err != nil {
-			return err
-		}
-		if refreshed == nil {
-			return fmt.Errorf("plan %q not found", detail.Dir)
-		}
-		if err := plan.RequireNotAbandoned(refreshed); err != nil {
-			return err
-		}
-		service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model, effort)
-		if err != nil {
-			return err
-		}
-		if restart {
-			result, err := service.RestartSingleMerge(ownedCtx, refreshed.Dir)
+	return mergepkg.WithRepositoryAdmission(ctx, a.RepositoryAdmission, detail, options.RecordOnly && !restart, func(ctx context.Context) error {
+		return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
+			// Reload by exact directory after acquisition so every merge gate and
+			// mutation uses state protected from concurrent lifecycle drivers.
+			refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
 			if err != nil {
 				return err
 			}
-			return renderSingleMergeRestartResult(a.Out, result)
-		}
-		a = a.withDefaultStatusReporter()
-		invocation := runpkg.StatusInvocation{
-			RepoID: taodata.RepoID(refreshed.State.Repo.Root), RepoName: refreshed.State.Repo.Name,
-			PlanID: refreshed.State.Plan.ID, PlanTitle: refreshed.State.Plan.Title, StartedAt: a.now().UTC(),
-		}
-		operation := func(phases runpkg.PhaseReporter) error {
-			return service.Merge(ownedCtx, refreshed, options, phases)
-		}
-		status := "merge " + invocation.PlanID
-		if reporter, ok := a.StatusReporter.(runpkg.InvocationStatusReporter); ok {
-			err = reporter.TrackInvocation(status, invocation, operation)
-		} else {
-			err = a.StatusReporter.Track(status, func() error { return operation(nil) })
-		}
-		if err != nil {
-			if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
-				return renderErr
+			if refreshed == nil {
+				return fmt.Errorf("plan %q not found", detail.Dir)
 			}
-			return err
-		}
-		return renderMergeSuccess(a.Out, refreshed)
+			if err := plan.RequireNotAbandoned(refreshed); err != nil {
+				return err
+			}
+			service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model, effort)
+			if err != nil {
+				return err
+			}
+			if restart {
+				result, err := service.RestartSingleMerge(ownedCtx, refreshed.Dir)
+				if err != nil {
+					return err
+				}
+				return renderSingleMergeRestartResult(a.Out, result)
+			}
+			a = a.withDefaultStatusReporter()
+			invocation := runpkg.StatusInvocation{
+				RepoID: taodata.RepoID(refreshed.State.Repo.Root), RepoName: refreshed.State.Repo.Name,
+				PlanID: refreshed.State.Plan.ID, PlanTitle: refreshed.State.Plan.Title, StartedAt: a.now().UTC(),
+			}
+			operation := func(phases runpkg.PhaseReporter) error {
+				return service.Merge(ownedCtx, refreshed, options, phases)
+			}
+			status := "merge " + invocation.PlanID
+			if reporter, ok := a.StatusReporter.(runpkg.InvocationStatusReporter); ok {
+				err = reporter.TrackInvocation(status, invocation, operation)
+			} else {
+				err = a.StatusReporter.Track(status, func() error { return operation(nil) })
+			}
+			if err != nil {
+				if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
+					return renderErr
+				}
+				return err
+			}
+			return renderMergeSuccess(a.Out, refreshed)
+		})
 	})
 }
 
@@ -255,7 +257,10 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 	if err != nil {
 		return nil, err
 	}
+	a.RepositoryAdmission = a.repositoryObservationGuard(repository)
 	service := mergepkg.NewService(current.Root, runner)
+	service.RepositoryAdmission = a.RepositoryAdmission
+	workspaceOwner.RepositoryAdmission = a.RepositoryAdmission
 	snapshot := a.envSnapshot()
 	service.RuntimeEnv = &snapshot
 	service.Runner = runner
@@ -282,17 +287,18 @@ func (a App) newMergeBatchRunner(ctx context.Context, repository mergepkg.BatchP
 func newMergeBatchCoordinatorSeams(a App, store *mergepkg.BatchStore, service mergepkg.Service, workspace *mergepkg.BatchWorkspace, repository mergepkg.BatchPlanRepository, session mergepkg.BatchAgentSession) mergepkg.BatchCoordinatorSeams {
 	progressStore := mergepkg.NewBatchProgressStore(store, a.Out)
 	return mergepkg.BatchCoordinatorSeams{
-		Store:      progressStore,
-		Workspace:  workspace,
-		Discovery:  mergepkg.BatchCandidateDiscovery{Repository: repository, Merge: service},
-		Planner:    service,
-		Integrator: mergepkg.BatchIntegrator{Store: progressStore, Service: service, Now: a.Now},
-		Resolver:   mergepkg.BatchAgentResolver{Store: progressStore, Service: service, Agent: session, Now: a.Now},
-		Reviewer:   mergepkg.BatchAggregateReviewer{Store: progressStore, Service: service, Agent: session, Now: a.Now},
-		Lander:     mergepkg.BatchLander{Store: progressStore, Service: service, Repository: repository, Now: a.Now},
-		Settler:    mergepkg.BatchSettler{Store: progressStore, Service: service, Repository: repository, Workspace: workspace, Now: a.Now},
-		Now:        a.Now,
-		Progress:   a.Out,
+		RepositoryAdmission: a.RepositoryAdmission,
+		Store:               progressStore,
+		Workspace:           workspace,
+		Discovery:           mergepkg.BatchCandidateDiscovery{Repository: repository, Merge: service},
+		Planner:             service,
+		Integrator:          mergepkg.BatchIntegrator{Store: progressStore, Service: service, Now: a.Now},
+		Resolver:            mergepkg.BatchAgentResolver{Store: progressStore, Service: service, Agent: session, Now: a.Now},
+		Reviewer:            mergepkg.BatchAggregateReviewer{Store: progressStore, Service: service, Agent: session, Now: a.Now},
+		Lander:              mergepkg.BatchLander{Store: progressStore, Service: service, Repository: repository, Now: a.Now},
+		Settler:             mergepkg.BatchSettler{Store: progressStore, Service: service, Repository: repository, Workspace: workspace, Now: a.Now},
+		Now:                 a.Now,
+		Progress:            a.Out,
 	}
 }
 
@@ -591,6 +597,7 @@ func (a App) newMergeServiceRunner(ctx context.Context, detail *plan.PlanDetail,
 	}
 	agentSession := mergepkg.NewFreshSingleMergeAgentSession(agentConfig)
 	svc := mergepkg.NewService(repoRoot, runner)
+	svc.RepositoryAdmission = a.RepositoryAdmission
 	snapshot := a.envSnapshot()
 	svc.RuntimeEnv = &snapshot
 	git := svc.Git

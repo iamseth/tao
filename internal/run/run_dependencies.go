@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/repoadmission"
 )
 
 // RunDependencies is the dependency struct a run execution reads from. It holds
@@ -15,6 +16,7 @@ import (
 // missing dependencies are resolved lives in run_setup.go so the dependency
 // graph stays legible at a single place.
 type RunDependencies struct {
+	RepositoryAdmission  repoadmission.Guard
 	CommandRunner        CommandRunner
 	reviewGitFactory     reviewGitFactory
 	ProcessStarter       ProcessStarter

@@ -20,6 +20,36 @@ func openLockFile(t *testing.T, path string) *os.File {
 	return file
 }
 
+func TestSharedLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	first, second, exclusive := openLockFile(t, path), openLockFile(t, path), openLockFile(t, path)
+	for _, file := range []*os.File{first, second} {
+		if err := TrySharedLock(file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := TryLock(exclusive); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("exclusive overlapped shared: %v", err)
+	}
+	for _, file := range []*os.File{first, second} {
+		if err := Unlock(file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := TryLock(exclusive); err != nil {
+		t.Fatal(err)
+	}
+	if err := TrySharedLock(first); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("shared overlapped exclusive: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := TrySharedLock(first); !errors.Is(err, syscall.EBADF) {
+		t.Fatalf("closed descriptor: %v", err)
+	}
+}
+
 func TestLockUnlock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lock")
 	file := openLockFile(t, path)

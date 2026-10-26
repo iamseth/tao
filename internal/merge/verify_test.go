@@ -197,7 +197,7 @@ func TestMergeRunsPassingVerifyAfterSquash(t *testing.T) {
 	}
 
 	events := &fakeEventAppender{}
-	err := (Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{VerifyCommand: "go test ./internal/merge"})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{VerifyCommand: "go test ./internal/merge"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestMergeDetectsDefaultVerifyCommand(t *testing.T) {
 				return nil
 			}
 
-			err := (Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}}).Merge(context.Background(), detail, Options{})
+			err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: &fakeEventAppender{}}).Merge(context.Background(), detail, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -336,7 +336,7 @@ func TestMergeVerificationCacheSubprocess(t *testing.T) {
 				}
 			}
 			git, events, cleaner := mergeVerifyGit(), &fakeEventAppender{}, successfulCleanup()
-			service := Service{Git: git, Events: events, Cleaner: cleaner}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Events: events, Cleaner: cleaner}
 			command := mergeCacheProbe + "touch executed"
 			err := service.Merge(context.Background(), detail, Options{VerifyCommand: command})
 			verification := events.requireSingle(t, plan.EventTypeMergeVerification)
@@ -439,7 +439,7 @@ func TestMergeSkipsVerifyAndLogsWhenNoBuildSystemDetected(t *testing.T) {
 	}
 
 	events := &fakeEventAppender{}
-	if err := (Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, Logf: logf}).Merge(context.Background(), detail, Options{}); err != nil {
+	if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events, Logf: logf}).Merge(context.Background(), detail, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if called {
@@ -482,7 +482,7 @@ func TestMergeVerifyFailureRollsBackDefault(t *testing.T) {
 
 	cleaner := successfulCleanup()
 	events := &fakeEventAppender{}
-	err := (Service{Git: git, Runner: runner, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{VerifyCommand: "make test"})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{VerifyCommand: "make test"})
 	if err == nil {
 		t.Fatal("expected verify failure")
 	}
@@ -536,7 +536,8 @@ func TestMergeVerificationEventAppendFailureIsBestEffort(t *testing.T) {
 		var logs []string
 		runner := func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }
 		err := (Service{
-			Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events,
+			RepositoryAdmission: testRepositoryAdmission,
+			Git:                 git, Runner: runner, Cleaner: successfulCleanup(), Events: events,
 			Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
 		}).Merge(context.Background(), mergeVerifyDetail(), Options{VerifyCommand: "true"})
 		if err != nil {
@@ -553,7 +554,7 @@ func TestMergeVerificationEventAppendFailureIsBestEffort(t *testing.T) {
 		runnerErr := errors.New("tests failed")
 		runner := func(context.Context, string, string, []string, io.Writer, io.Writer) error { return runnerErr }
 		events := newEvents()
-		err := (Service{Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{VerifyCommand: "make test"})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{VerifyCommand: "make test"})
 		if !errors.Is(err, runnerErr) || !errors.Is(err, ErrVerifyFailed) {
 			t.Fatalf("event append failure changed verify error: %v", err)
 		}
@@ -568,7 +569,7 @@ func TestMergeVerificationEventAppendFailureIsBestEffort(t *testing.T) {
 		git := mergeVerifyGit()
 		detail := mergeVerifyFixtureDetail(t, map[string]string{"README.md": "# project\n"})
 		events := newEvents()
-		err := (Service{Git: git, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events}).Merge(context.Background(), detail, Options{})
 		if err != nil {
 			t.Fatalf("event append failure changed skipped merge outcome: %v", err)
 		}
@@ -616,8 +617,9 @@ func TestMergeIntentionalVerifySkipsEmitEventsWithoutLogging(t *testing.T) {
 			events := &fakeEventAppender{}
 
 			err := (Service{
-				RuntimeEnv: mergeTestRuntimeEnv(),
-				Git:        git, Runner: runner, Cleaner: successfulCleanup(), Events: events,
+				RepositoryAdmission: testRepositoryAdmission,
+				RuntimeEnv:          mergeTestRuntimeEnv(),
+				Git:                 git, Runner: runner, Cleaner: successfulCleanup(), Events: events,
 				Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
 			}).Merge(context.Background(), mergeVerifyDetail(), tt.options)
 			if err != nil {

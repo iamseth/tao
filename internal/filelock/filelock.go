@@ -1,4 +1,4 @@
-// Package filelock provides exclusive advisory locks on caller-owned files.
+// Package filelock provides advisory locks on caller-owned files.
 // It never opens, closes, or unlinks files; callers retain responsibility for
 // their lifecycle and must not unlink lock files while they may be in use.
 package filelock
@@ -19,6 +19,11 @@ func Lock(file *os.File) error {
 // TryLock attempts an exclusive lock without waiting and returns the raw syscall error.
 func TryLock(file *os.File) error {
 	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
+// TrySharedLock attempts a shared lock without waiting and returns the raw syscall error.
+func TrySharedLock(file *os.File) error {
+	return syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
 }
 
 // LockPoll attempts an exclusive lock immediately, then retries contention at

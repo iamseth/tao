@@ -62,7 +62,16 @@ func (e *CleanupDeclinedError) Is(target error) bool {
 
 // Cleanup removes the merged plan branch and worktree through workspace.Manager's
 // managed cleanup path. Non-force cleanup only proceeds for a clean managed decision.
-func (s Service) Cleanup(ctx context.Context, detail *plan.PlanDetail, options Options) (CleanupResult, error) {
+func (s Service) Cleanup(ctx context.Context, detail *plan.PlanDetail, options Options) (result CleanupResult, err error) {
+	err = WithRepositoryAdmission(ctx, s.RepositoryAdmission, detail, false, func(ctx context.Context) error {
+		var cleanupErr error
+		result, cleanupErr = s.cleanup(ctx, detail, options)
+		return cleanupErr
+	})
+	return result, err
+}
+
+func (s Service) cleanup(ctx context.Context, detail *plan.PlanDetail, options Options) (CleanupResult, error) {
 	if detail == nil {
 		return CleanupResult{}, fmt.Errorf("merge plan detail is nil")
 	}

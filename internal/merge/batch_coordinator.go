@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/repoadmission"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -98,17 +99,18 @@ type BatchCoordinatorSettler interface {
 // BatchCoordinatorSeams contains every dependency used by the complete batch
 // state machine without importing caller-specific construction details.
 type BatchCoordinatorSeams struct {
-	Store      BatchCoordinatorStore
-	Workspace  BatchCoordinatorWorkspace
-	Discovery  BatchCoordinatorDiscovery
-	Planner    BatchCoordinatorPlanner
-	Integrator BatchCoordinatorIntegrator
-	Resolver   BatchResolver
-	Reviewer   BatchReviewer
-	Lander     BatchCoordinatorLander
-	Settler    BatchCoordinatorSettler
-	Now        func() time.Time
-	Progress   io.Writer
+	RepositoryAdmission repoadmission.Guard
+	Store               BatchCoordinatorStore
+	Workspace           BatchCoordinatorWorkspace
+	Discovery           BatchCoordinatorDiscovery
+	Planner             BatchCoordinatorPlanner
+	Integrator          BatchCoordinatorIntegrator
+	Resolver            BatchResolver
+	Reviewer            BatchReviewer
+	Lander              BatchCoordinatorLander
+	Settler             BatchCoordinatorSettler
+	Now                 func() time.Time
+	Progress            io.Writer
 }
 
 // BatchCoordinator owns the complete batch state machine, including setup,
@@ -137,6 +139,29 @@ func (c *BatchCoordinator) progressf(format string, args ...any) {
 // Run prepares one new or resumed batch and coordinates it through every
 // active phase that can make progress in this invocation.
 func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOptions) (result BatchCoordinatorResult, err error) {
+	if options.DryRun {
+		return c.run(ctx, options)
+	}
+	if c == nil {
+		return result, errors.New("batch coordinator is required")
+	}
+	guard := c.seams.RepositoryAdmission
+	if guard == nil {
+		guard = repoadmission.With
+	}
+	root := ""
+	if owner, ok := c.seams.Workspace.(interface{ RepositoryRoot() string }); ok {
+		root = owner.RepositoryRoot()
+	}
+	err = guard(ctx, repoadmission.Request{Root: root, Mode: repoadmission.Merge}, func(ctx context.Context) error {
+		var runErr error
+		result, runErr = c.run(ctx, options)
+		return runErr
+	})
+	return result, err
+}
+
+func (c *BatchCoordinator) run(ctx context.Context, options BatchCoordinatorOptions) (result BatchCoordinatorResult, err error) {
 	result.DryRun = options.DryRun
 	defer func() {
 		status := result.State.Status
@@ -183,7 +208,17 @@ func (c *BatchCoordinator) Run(ctx context.Context, options BatchCoordinatorOpti
 			if defaultReachedIntent {
 				return result, fmt.Errorf("merge batch %s default has reached durable landing intent; restart is forbidden", state.ID)
 			}
-			preview, restartErr := c.seams.Workspace.Restart(ctx, state)
+			restart := c.seams.Workspace.Restart
+			if options.DryRun {
+				// Restart cleanup touches only Tao-owned integration resources.
+				// Retain batch/plan ownership without exclusive repository admission.
+				if owner, ok := c.seams.Workspace.(interface {
+					restartForDryRun(context.Context, BatchState) (BatchRestartPlan, error)
+				}); ok {
+					restart = owner.restartForDryRun
+				}
+			}
+			preview, restartErr := restart(ctx, state)
 			result.Restarted = &preview
 			if restartErr != nil {
 				return result, restartErr

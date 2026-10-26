@@ -53,7 +53,8 @@ func TestServiceExecuteReloadsPlanAfterAcquiringRunLock(t *testing.T) {
 	})
 
 	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
-		StatusReporter: reporter,
+		RepositoryAdmission: testRepositoryAdmission,
+		StatusReporter:      reporter,
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			preparerCalls++
 			return repoRoot, nil
@@ -82,7 +83,7 @@ func TestServiceExecuteFailsFastWhenPlanRunLockHeld(t *testing.T) {
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail}}
 	executor := &countingSliceExecutor{}
 
-	err = NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{SliceExecutor: executor}}).Execute(context.Background(), Request{Input: "plan-a"})
+	err = NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: executor}}).Execute(context.Background(), Request{Input: "plan-a"})
 	if err == nil {
 		t.Fatal("expected contended lock error")
 	}

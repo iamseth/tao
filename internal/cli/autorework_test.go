@@ -128,7 +128,7 @@ func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
 			args := append([]string{"--no-run-header"}, tt.args...)
 			args = append(args, planID)
 			snapshot := runtimeconfig.RuntimeEnv()
-			if err := (App{RuntimeEnv: &snapshot, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args); err != nil {
+			if err := (App{RepositoryAdmission: testRepositoryAdmission, RuntimeEnv: &snapshot, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args); err != nil {
 				t.Fatal(err)
 			}
 			if calls != 5 {
@@ -540,7 +540,7 @@ func TestRunLocationAdvisoriesContinueThroughDirectExecution(t *testing.T) {
 				args = append(args, "--max-rework-attempts", "2")
 			}
 			args = append(args, planID)
-			err := (App{Out: out, RuntimeEnv: snapshot, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
+			err := (App{RepositoryAdmission: testRepositoryAdmission, Out: out, RuntimeEnv: snapshot, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -643,7 +643,7 @@ func TestRunHistoricalLocationStopsStillRequireExplicitRestart(t *testing.T) {
 					args = append(args, "--rework-restart")
 				}
 				args = append(args, planID)
-				err := (App{Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
+				err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
 				if restart {
 					if calls != 1 || err == nil || !strings.Contains(err.Error(), "cap exhausted after 1 cycles") {
 						t.Fatalf("bounded restart: calls=%d error=%v", calls, err)

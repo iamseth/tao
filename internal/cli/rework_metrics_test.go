@@ -68,7 +68,7 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 					providerErr := errors.New("provider failed")
 					fixed := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
 					snapshot := runtimeconfig.RuntimeEnv()
-					app := App{RuntimeEnv: &snapshot, Out: &bytes.Buffer{}, Now: func() time.Time { return fixed }, ProcessStarter: reworkMetricsProcessStarter(t, provider, outcome, providerErr, &calls)}
+					app := App{RepositoryAdmission: testRepositoryAdmission, RuntimeEnv: &snapshot, Out: &bytes.Buffer{}, Now: func() time.Time { return fixed }, ProcessStarter: reworkMetricsProcessStarter(t, provider, outcome, providerErr, &calls)}
 					args := []string{"--from-pr", "--dry-run", id}
 					if outcome == "reopen" {
 						args = []string{"--from-pr", "--run", id}

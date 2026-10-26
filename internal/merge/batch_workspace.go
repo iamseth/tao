@@ -15,6 +15,7 @@ import (
 	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/repoadmission"
 	"github.com/iamseth/tao/internal/workspace"
 )
 
@@ -57,12 +58,13 @@ func (e *BatchResumeError) Error() string {
 // BatchWorkspace owns the isolated Git namespace and cross-process ownership
 // used by one repository-wide merge transaction.
 type BatchWorkspace struct {
-	repoRoot   string
-	batchesDir string
-	git        gitops.Client
-	runner     commandrunner.Runner
-	workspaces *workspace.Manager
-	store      *BatchStore
+	RepositoryAdmission repoadmission.Guard
+	repoRoot            string
+	batchesDir          string
+	git                 gitops.Client
+	runner              commandrunner.Runner
+	workspaces          *workspace.Manager
+	store               *BatchStore
 }
 
 // NewBatchWorkspace constructs the integration-workspace boundary. batchesDir
@@ -629,9 +631,45 @@ func (b *BatchWorkspace) PlanRestart(ctx context.Context, state BatchState) (Bat
 	return BatchRestartPlan{BatchID: state.ID, Branch: branch, WorktreePath: status.Path, RemoveBranch: branchExists, RemoveWorktree: !status.Missing, RemoveRecovery: true}, nil
 }
 
-// Restart executes a previously previewable safe restart. Cleanup failure stops
-// before recovery metadata is removed, preserving an actionable retry point.
-func (b *BatchWorkspace) Restart(ctx context.Context, state BatchState) (BatchRestartPlan, error) {
+// RepositoryRoot is the control repository used for batch admission.
+func (b *BatchWorkspace) RepositoryRoot() string { return b.repoRoot }
+
+// PreviewRestart retains batch and candidate ownership without removing resources.
+func (b *BatchWorkspace) PreviewRestart(ctx context.Context, state BatchState) (BatchRestartPlan, error) {
+	owner, err := b.AcquireOwnership(state, time.Now().UTC())
+	if err != nil {
+		return BatchRestartPlan{}, err
+	}
+	defer func() { _ = owner.Release() }()
+	return b.PlanRestart(ctx, state)
+}
+
+// Restart retains repository, batch and candidate ownership through cleanup and
+// recovery removal. Cleanup failure preserves an actionable retry point.
+func (b *BatchWorkspace) Restart(ctx context.Context, state BatchState) (result BatchRestartPlan, err error) {
+	guard := b.RepositoryAdmission
+	if guard == nil {
+		guard = repoadmission.With
+	}
+	err = guard(ctx, repoadmission.Request{Root: b.repoRoot, Mode: repoadmission.Merge}, func(ctx context.Context) error {
+		result, err = b.restartForDryRun(ctx, state)
+		return err
+	})
+	return result, err
+}
+
+// restartForDryRun discards safe pre-landing recovery under batch and candidate
+// ownership only; it never mutates the control checkout.
+func (b *BatchWorkspace) restartForDryRun(ctx context.Context, state BatchState) (BatchRestartPlan, error) {
+	owner, err := b.AcquireOwnership(state, time.Now().UTC())
+	if err != nil {
+		return BatchRestartPlan{}, err
+	}
+	defer func() { _ = owner.Release() }()
+	return b.restart(ctx, state)
+}
+
+func (b *BatchWorkspace) restart(ctx context.Context, state BatchState) (BatchRestartPlan, error) {
 	plan, err := b.PlanRestart(ctx, state)
 	if err != nil {
 		return BatchRestartPlan{}, err

@@ -39,7 +39,7 @@ func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
 			var out bytes.Buffer
 			options := Options{
 				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, MaxSlices: 1}},
-				RunDependencies: RunDependencies{
+				RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 					CommandRunner: runGitFake(&[]string{}, nil),
 					SliceExecutor: sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
 						calls++
@@ -134,7 +134,7 @@ func TestExecuteRecordedReworkModel(t *testing.T) {
 						})
 					}
 					options := ResolvedRunOptions{Agent: kind, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice, Models: selection.models}
-					dependencies := RunDependencies{
+					dependencies := RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 						CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 						TransportRetryDelay: func(context.Context, time.Duration) error { return nil },
 						LogAppender:         unscopedFileRepository(t),

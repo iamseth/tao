@@ -294,7 +294,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			var out bytes.Buffer
 			execution := testRunExecution(ExecutionConfig{
 				ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, ReviewEnabled: true, MaxSlices: test.maxSlices},
-			}, RunDependencies{
+			}, RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 				EventAppender: repo,
 				RootResolver:  ExecutionRootResolverFunc(func(context.Context, *plan.PlanDetail) (string, error) { return root, nil }),
 				CommandRunner: testenv.SplitBatchedRevParse(func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {

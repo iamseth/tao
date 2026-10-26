@@ -213,7 +213,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 		return fileRepo.AppendEvent(planDir, event)
 	})
 	var delays []time.Duration
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{
+	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: piTransportGitRunner(t, detail, root, func() string {
 			if len(processes) < 2 {
 				return " M partial.go\n"
@@ -291,8 +291,9 @@ func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *tes
 	})
 	var delays []time.Duration
 	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
-		CommandRunner:  piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
-		ProcessStarter: starter,
+		RepositoryAdmission: testRepositoryAdmission,
+		CommandRunner:       piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
+		ProcessStarter:      starter,
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
 			return nil
@@ -383,6 +384,7 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 			})
 			delayCalls := 0
 			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+				RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner:       piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
 				ProcessStarter:      starter,
 				TransportRetryDelay: func(context.Context, time.Duration) error { delayCalls++; return nil },

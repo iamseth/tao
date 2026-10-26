@@ -73,9 +73,10 @@ func noteTestApp(t *testing.T, in any, repos ...taodata.Repo) (App, *bytes.Buffe
 		}
 	}
 	app := App{
-		Out:      out,
-		Err:      errOut,
-		Registry: func() NoteRegistry { return registry },
+		RepositoryAdmission: testRepositoryAdmission,
+		Out:                 out,
+		Err:                 errOut,
+		Registry:            func() NoteRegistry { return registry },
 		NoteRepository: func(dir string, ref note.RepoReference) NoteRepository {
 			repo := note.NewRepository(dir, ref)
 			repo.Now = func() time.Time { return time.Date(2026, 7, 13, 16, 0, 0, 0, time.UTC) }

@@ -204,7 +204,13 @@ tao monitor --once # non-interactive snapshot
 ```
 
 A typical execution path uses `tao run <plan>`, `tao review <plan>`, and then
-`tao merge <plan>`. If a review requests changes, `tao rework <plan>` creates
+`tao merge <plan>`. Participating Tao binaries allow concurrent different-plan
+runs but exclude mutating merges from runs and other merges in the same repository,
+including linked worktrees. On contention, wait for or finish the active operation
+and retry; `--force` does not bypass admission. Older binaries and manual Git are
+outside this guarantee; see [Workspaces](docs/usage-guide.md#workspaces).
+
+If a review requests changes, `tao rework <plan>` creates
 bounded follow-up slices; `tao rework --run <plan>` immediately hands them back
 to the ordinary run path. Use `tao show <plan>` whenever you need Tao's
 recommended next action.

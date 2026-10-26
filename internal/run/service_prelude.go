@@ -8,8 +8,9 @@ import (
 )
 
 type resolvedPlanOptions struct {
-	header bool
-	status bool
+	admission bool
+	header    bool
+	status    bool
 }
 
 func (s Service) withResolvedPlan(ctx context.Context, request Request, options resolvedPlanOptions, operation func(context.Context, *plan.PlanDetail, ExecutionConfig) error) error {
@@ -47,8 +48,14 @@ func (s Service) withResolvedPlan(ctx context.Context, request Request, options 
 		}
 		return runLocked(ctx)
 	}
-	if options.header {
-		return trackRunHeader(ctx, s.dependencies.HeaderReporter, lockDetail, config, startedAt, runWithStatus)
+	run := func(ctx context.Context) error {
+		if options.header {
+			return trackRunHeader(ctx, s.dependencies.HeaderReporter, lockDetail, config, startedAt, runWithStatus)
+		}
+		return runWithStatus(ctx)
 	}
-	return runWithStatus(ctx)
+	if options.admission {
+		return WithRepositoryAdmission(ctx, lockDetail, s.dependencies.RepositoryAdmission, run)
+	}
+	return run(ctx)
 }

@@ -878,8 +878,9 @@ func TestRunNonSlicePathsIgnoreInvalidHardCaps(t *testing.T) {
 				}
 				t.Cleanup(func() { executeSinglePlan = old })
 				app := App{Out: io.Discard, Err: io.Discard,
-					RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
-					Registry:   func() NoteRegistry { return &fakeNoteRegistry{} },
+					RepositoryAdmission: testRepositoryAdmission,
+					RuntimeEnv:          snapshotWith(map[string]string{key: "invalid"}),
+					Registry:            func() NoteRegistry { return &fakeNoteRegistry{} },
 				}
 				err := app.run(context.Background(), repo, append(args, planID))
 				if tc.rejected {

@@ -536,6 +536,14 @@ context — it slices from the conversation, not from a file you pass it.
 
 ### `/tao-run` and `tao run` — execute slices
 
+Participating Tao binaries hold shared repository admission throughout a run,
+including automatic rework and finalization. Different-plan runs may overlap;
+mutating single and batch merges cannot overlap any run in the same repository,
+even at simultaneous start. A refusal happens before plan mutation and writes no
+plan event. Wait for the active operation to finish, then retry. Diagnostics name
+observed plans, PIDs and phases when available; unknown values are omitted, and
+missing diagnostics never weaken a held admission lock.
+
 Run **`tao run <plan-id>`** day to day. Its `/tao-run` agent implements exactly
 one pending slice per handoff, honoring dependencies and approval, using test-first
 checks, and calling `tao slice-complete` for Tao-owned gates before intent, commit,
@@ -1158,6 +1166,12 @@ provider still owns integration.
 
 ### `tao merge` — integrate an approved plan without a PR
 
+Mutating merges, including restart/recovery, hold exclusive repository admission
+before batch or plan ownership. `--force` never bypasses admission: finish the
+active run or merge, or wait for it to finish, then retry. Single `--record-only`
+is exempt from exclusive admission but retains its existing plan ownership and
+cleanup safeguards. Review and approval alone do not acquire run/merge admission.
+
 **When to use:** after `tao run` has completed every slice and its broad final
 verification, and you've read the persisted review with `tao review <plan>`.
 Use it for the solo workflow where the review is the human gate instead of a PR.
@@ -1264,6 +1278,12 @@ untracked and suggests deleting or ignoring those paths.
 See `tao merge --help` for the full flag reference.
 
 ### `tao merge --all` — atomically integrate the approved set
+
+A mutating batch holds the same exclusive repository admission as a single merge
+for its entire lifetime, including restart and settlement. `--dry-run` (including
+restart previews) is exempt from exclusive admission, not from existing batch,
+plan-ownership or cleanup checks. Contention is not an eligibility failure and
+cannot be overridden with force; wait for or finish the active operation first.
 
 **When to use:** when every reviewed and approved plan in the current repository
 should land as one all-or-nothing change. Tao strictly preflights the complete
@@ -1546,6 +1566,19 @@ evidence and never cleans branches or worktrees. Tao refuses it during an
 unsettled lifecycle transaction that still needs recovery.
 
 ### Workspaces
+
+Repository admission uses the canonical Git common directory, so linked
+worktrees and alternate plan directories share one exclusion boundary; unrelated
+repositories remain independent. Shared run leases and exclusive merge leases
+provide race-free exclusion only for participating Tao binaries. Bounded,
+read-only sibling scans can conservatively detect already-live older operations:
+a live run lock or fresh matching status can stop a merge, while a run is stopped
+only by a positively identified fresh merge phase. Scans warn and skip invalid
+records, never repair them, and cannot guarantee mixed-version simultaneous-start
+safety. Operational status is neither lock ownership nor lifecycle/recovery
+evidence. Manual Git activity and nonparticipating tools remain outside the
+guarantee; the existing control-checkout leak guard and attribution checks remain
+in place. No automatic checkout restoration is performed.
 
 While any `tao run` is active on a repository, do not edit, `git stash`,
 `git checkout --`, or `tao merge` into the control checkout: the leak guard

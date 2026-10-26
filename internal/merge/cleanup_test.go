@@ -130,7 +130,7 @@ func TestCleanupRefusesAbandonedPlanEvenWithForce(t *testing.T) {
 	detail.State.Status = plan.StatusAbandoned
 	cleaner := successfulCleanup()
 
-	result, err := (Service{Cleaner: cleaner}).Cleanup(context.Background(), detail, Options{Force: true, allowNonAncestralCleanup: true})
+	result, err := (Service{RepositoryAdmission: testRepositoryAdmission, Cleaner: cleaner}).Cleanup(context.Background(), detail, Options{Force: true, allowNonAncestralCleanup: true})
 	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned") {
 		t.Fatalf("Cleanup() error = %v, want abandonment refusal", err)
 	}
@@ -270,7 +270,7 @@ func TestMergeCleanupRunsOnlyAfterSuccessfulVerify(t *testing.T) {
 		return nil
 	}
 
-	err := (Service{Git: git, Runner: runner, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{VerifyCommand: "go test ./internal/merge"})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Runner: runner, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{VerifyCommand: "go test ./internal/merge"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestCleanupProvidesExactRecordedTypedBranchOwnership(t *testing.T) {
 	detail := mergeVerifyDetail()
 	detail.State.Workspace.Branch = "feature/native-pr-format"
 
-	result, err := (Service{Cleaner: cleaner}).Cleanup(context.Background(), detail, Options{})
+	result, err := (Service{RepositoryAdmission: testRepositoryAdmission, Cleaner: cleaner}).Cleanup(context.Background(), detail, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestCleanupRespectsUnmergedAndDirtyDecisionsWithoutForce(t *testing.T) {
 			cleaner := successfulCleanup()
 			cleaner.managed = []workspace.ManagedCleanup{{Branch: "tao/plan-a", Status: tt.status, Reason: tt.reason}}
 
-			_, err := (Service{Cleaner: cleaner}).Cleanup(context.Background(), mergeVerifyDetail(), Options{})
+			_, err := (Service{RepositoryAdmission: testRepositoryAdmission, Cleaner: cleaner}).Cleanup(context.Background(), mergeVerifyDetail(), Options{})
 			if err == nil {
 				t.Fatal("expected cleanup decline")
 			}
@@ -423,7 +423,7 @@ func TestMergeRecordsAlreadyMergedPlanWithoutIntegrating(t *testing.T) {
 	cleaner := successfulCleanup()
 	events := &fakeEventAppender{}
 
-	if err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{}); err != nil {
+	if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), detail, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	event := events.requireSingle(t, plan.EventTypePlanMerged)
@@ -512,7 +512,7 @@ func TestMergeNoChangesCompletion(t *testing.T) {
 			cleaner := successfulCleanup()
 			events := &fakeEventAppender{}
 			var logs []string
-			service := Service{Git: git, Cleaner: cleaner, Events: events, Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }}
+			service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events, Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }}
 			if err := service.Merge(context.Background(), detail, Options{RecordOnly: recordOnly}); err != nil {
 				t.Fatal(err)
 			}
@@ -617,7 +617,7 @@ func TestMergeAppendsPlanMergedEvent(t *testing.T) {
 	events := &fakeEventAppender{}
 	now := time.Date(2026, 6, 28, 21, 30, 0, 0, time.UTC)
 
-	err := (Service{Git: git, Cleaner: cleaner, Events: events, Now: func() time.Time { return now }}).Merge(context.Background(), detail, Options{NoVerify: true})
+	err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events, Now: func() time.Time { return now }}).Merge(context.Background(), detail, Options{NoVerify: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +653,7 @@ func TestMergeRecordsExternalMergeWhenNothingLeftToClean(t *testing.T) {
 	cleaner.managed = nil // branch not in the managed-cleanup list: nothing to clean
 	events := &fakeEventAppender{}
 
-	if err := (Service{Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{}); err != nil {
+	if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}).Merge(context.Background(), mergeVerifyDetail(), Options{}); err != nil {
 		t.Fatalf("nothing-left-to-clean decline must be success on first-time recording: %v", err)
 	}
 	events.requireSingle(t, plan.EventTypePlanMerged)
@@ -689,7 +689,7 @@ func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
 
 	t.Run("unmerged decline explains --force", func(t *testing.T) {
 		cleaner := declinedCleanup(workspace.ManagedStatusUnmerged, "not merged into main")
-		err := (Service{Git: verifiedSquashGit(), Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{NoSquash: true})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: verifiedSquashGit(), Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{NoSquash: true})
 		if err == nil || !strings.Contains(err.Error(), "rerun with --force") {
 			t.Fatalf("expected --force guidance for permanently-declined unmerged branch, got %v", err)
 		}
@@ -697,7 +697,7 @@ func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
 
 	t.Run("verified Tao squash retry cleans unmerged branch", func(t *testing.T) {
 		cleaner := declinedCleanup(workspace.ManagedStatusUnmerged, "not merged into main")
-		if err := (Service{Git: verifiedSquashGit(), Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
+		if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: verifiedSquashGit(), Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(cleaner.cleaned) != 1 || cleaner.cleanOptions[0].Force || !cleaner.cleanOptions[0].AllowNonAncestralBranch {
@@ -714,7 +714,7 @@ func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				cleaner := declinedCleanup(workspace.ManagedStatusUnmerged, "not merged into main")
 				git := &fakeGitClient{commitMessages: map[string]string{mergedSHA: message}}
-				err := (Service{Git: git, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
+				err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
 				if err == nil || !strings.Contains(err.Error(), "rerun with --force") {
 					t.Fatalf("expected unsafe cleanup retry to require --force, got %v", err)
 				}
@@ -727,7 +727,7 @@ func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
 
 	t.Run("dirty decline keeps plain retry guidance", func(t *testing.T) {
 		cleaner := declinedCleanup(workspace.ManagedStatusDirty, "worktree has uncommitted changes")
-		err := (Service{Git: verifiedSquashGit(), Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
+		err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: verifiedSquashGit(), Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{})
 		if err == nil || strings.Contains(err.Error(), "rerun with --force") {
 			t.Fatalf("dirty decline is retryable after committing/stashing; got %v", err)
 		}
@@ -735,7 +735,7 @@ func TestRecordedMergeCleanupRetrySaysForceForUnmergedBranch(t *testing.T) {
 
 	t.Run("force retry cleans the unmerged branch", func(t *testing.T) {
 		cleaner := declinedCleanup(workspace.ManagedStatusUnmerged, "not merged into main")
-		if err := (Service{Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{Force: true}); err != nil {
+		if err := (Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: cleaner}).Merge(context.Background(), newDetail(), Options{Force: true}); err != nil {
 			t.Fatal(err)
 		}
 		if len(cleaner.cleaned) != 1 || cleaner.cleaned[0].Branch != "tao/plan-a" {
@@ -809,7 +809,8 @@ func TestMergeRecordsExternalMergeWhenWorktreeDirectoryGone(t *testing.T) {
 	detail.State.Workspace.Path = filepath.Join(t.TempDir(), "removed-worktree") // recorded, never created
 	events := &fakeEventAppender{}
 	service := Service{
-		Git: git,
+		RepositoryAdmission: testRepositoryAdmission,
+		Git:                 git,
 		NewGit: func(dir string) GitClient {
 			t.Fatalf("worktree git client must not be constructed for missing directory %q", dir)
 			return nil

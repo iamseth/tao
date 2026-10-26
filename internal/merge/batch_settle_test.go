@@ -315,7 +315,7 @@ func batchSettleFixture() (BatchState, *plan.PlanDetail, Service, *fakeWorkspace
 		ancestors:      map[string]bool{"landed..landed": true, "squash..landed": true},
 		commitMessages: map[string]string{"squash": "source\n\nTao-Plan: plan-a\nTao-Source-Head: source"},
 	}
-	service := Service{Git: git, Cleaner: cleaner, Events: events}
+	service := Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events}
 	state := BatchState{
 		Schema: BatchStateSchema, ID: "batch-settle", Status: BatchStatusLanded, RepoRoot: mergeVerifyRoot,
 		DefaultBranch: "main", DefaultStartSHA: "base", LandedSHA: "landed", IntegrationHead: "landed",

@@ -74,7 +74,7 @@ func TestApprovalEvidenceContinueAndResume(t *testing.T) {
 			providerErr := errors.New("ordinary handoff")
 			calls := 0
 			var events []plan.Event
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner:     interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 				PlanRecordFactory: memoryPlanRecordFactory,
 				EventAppender:     eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil }),
@@ -146,7 +146,7 @@ func TestApprovalEvidenceAdmissionBaselineRegression(t *testing.T) {
 			providerErr := errors.New("provider admitted without observations")
 			calls := 0
 			var events []plan.Event
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner:     interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 				PlanRecordFactory: memoryPlanRecordFactory,
 				EventAppender:     eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil }),
@@ -182,7 +182,7 @@ func TestApprovalEvidenceTransportReload(t *testing.T) {
 	requireApprovalFacts(&reloaded.Slices.Slices[0])
 	calls := 0
 	var events []plan.Event
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{initial, initial, reloaded}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{initial, initial, reloaded}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 		EventAppender:       eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil }),
 		TransportRetryDelay: func(context.Context, time.Duration) error { return nil },
@@ -284,7 +284,7 @@ func TestApprovalEvidencePreservesPostIntentRoute(t *testing.T) {
 	requireApprovalFacts(&detail.Slices.Slices[0])
 	detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Hash: "intent", Policy: "slice"}
 	calls := 0
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 			t.Fatal("post-intent route inspected Git")
 			return nil

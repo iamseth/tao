@@ -12,6 +12,7 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
+	"github.com/iamseth/tao/internal/repoadmission"
 	"github.com/iamseth/tao/internal/testenv"
 )
 
@@ -19,6 +20,9 @@ import (
 // omitted collaborators. Tests of automatic policies or dependency setup keep
 // their explicit literals.
 func testOptions(dependencies RunDependencies, mutators ...func(*Options)) Options {
+	if dependencies.RepositoryAdmission == nil {
+		dependencies.RepositoryAdmission = testRepositoryAdmission
+	}
 	options := Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}},
 		RunDependencies: dependencies,
@@ -33,14 +37,19 @@ func testOptions(dependencies RunDependencies, mutators ...func(*Options)) Optio
 // command runner remain explicit so each test retains its own behavior.
 func testDependencies(executor SliceExecutor, runner CommandRunner, mutators ...func(*RunDependencies)) RunDependencies {
 	dependencies := RunDependencies{
-		SliceExecutor:     executor,
-		PlanRecordFactory: memoryPlanRecordFactory,
-		CommandRunner:     runner,
+		RepositoryAdmission: testRepositoryAdmission,
+		SliceExecutor:       executor,
+		PlanRecordFactory:   memoryPlanRecordFactory,
+		CommandRunner:       runner,
 	}
 	for _, mutate := range mutators {
 		mutate(&dependencies)
 	}
 	return dependencies
+}
+
+func testRepositoryAdmission(ctx context.Context, _ repoadmission.Request, operation func(context.Context) error) error {
+	return operation(ctx)
 }
 
 func (r *memoryRunRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
