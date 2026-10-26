@@ -28,13 +28,9 @@ be registered (`tao init`). `--repo` accepts a unique ID prefix or exact name;
 `get` reports the effective value/source and the selected scope's stored value;
 writing a saved value does not defeat an environment override.
 
-For one release, `tao repo config [<repo-id>]` remains a compatibility adapter
-for repository `--pull-request true|false|unset` and model flags `--model`,
-`--run-model`, `--review-model`, `--merge-review-model`, `--resolver-model`,
-and `--rework-escalation-model`, plus effort flags `--effort`, `--run-effort`,
-`--review-effort`, `--merge-review-effort`, and `--resolver-effort`
-(each accepts a value or `unset`). Prefer
-`tao config` for new scripts. No automatic migration is required.
+For one release, `tao repo config [<repo-id>]` remains a compatibility adapter;
+run `tao repo config` with `--help` for its supported flags. Prefer `tao config`
+for new scripts. No automatic migration is required.
 
 ### Storage and canonical keys
 
@@ -227,7 +223,7 @@ explicitly setting it to an empty value is invalid.
 | `TAO_COMMIT_POLICY` | `slice` | `slice`, `none` | Automatic per-slice commits or manual commits. Historical `plan` metadata remains readable, but new runs reject it. |
 | `TAO_EXECUTION_MODE` | `isolated` | `isolated`, `current` | Use a feature branch/worktree or the launch checkout and branch. |
 | `TAO_AGENT` | `pi` | `pi`, `claude` | Select the agent runtime. |
-| `TAO_REVIEW_AGENT` | empty (inherit) | empty, `pi`, `claude` | Select the plan review runtime independently. Empty/unset inherits the final implementing runtime; repository and invocation selectors override the environment. Model selection remains independent. |
+| `TAO_REVIEW_AGENT` | empty (inherit) | empty, `pi`, `claude` | Select the plan review runtime independently. Empty/unset inherits the final implementing runtime; the environment overrides saved selectors, and an explicit invocation selector wins. Model selection remains independent. |
 | `TAO_SESSION_TIMEOUT` | `20m` | Non-negative Go duration; `0` disables | Wall-clock limit for run-path agent sessions, not interactive planning; Tao-owned slice completion may overrun it by a bounded grace. |
 | `TAO_SESSION_WARN_PERCENT` | `80` | Integer 0–99; `0` disables | Requests one advisory wrap-up notice for implementation/rework sessions. Unsupported runtimes skip delivery; Pi delivers between turns without extending the deadline. |
 | `TAO_MODEL` | Unset (runtime selection) | Model name | Shared base for unset roles, planning generation, PR work, and standalone merge-message generation. |
@@ -313,9 +309,10 @@ tao config unset budget.slice.cost.stop    # inherit global cap again
 
 Automatic rework defaults to five attempts with escalation eligible from attempt four.
 `max_rework_attempts` (non-negative) and `rework_escalation_from_attempt` (at
-least one) are scoped settings; `tao config set` and the compatibility flags
-`tao repo config --max-rework-attempts N|unset` and
-`--rework-escalation-from-attempt N|unset` validate before writing, and
+least one) are scoped settings; `tao config set max_rework_attempts N` and
+`tao config set rework_escalation_from_attempt N` validate before writing.
+Use `tao config unset max_rework_attempts` or
+`tao config unset rework_escalation_from_attempt` to restore inheritance;
 unmentioned settings are preserved. `tao repo config` displays absent values as
 `unset` and explicit zero as `0`; status and Settings show saved numeric values
 with their winning source while retaining captured environment diagnostics.
@@ -339,13 +336,13 @@ tao run --review-agent pi my-plan
 tao review --run --review-agent claude my-plan
 tao rework --from-pr --run --review-agent pi my-plan
 tao config unset review_agent               # remove only this saved value
-tao repo config --review-agent unset        # compatibility adapter, same effect
 ```
 
 `review` and `rework` require `--run` with this flag. Explicit selection survives
 rework handoffs and automatic rounds; PR triage keeps its existing runtime.
 `note run` inherits review configuration but has no new selector flag.
-`--no-review` does not require the unused reviewer runtime to be available.
+`--no-review` leaves the unused reviewer unstarted and does not require its runtime
+to be available.
 Invalid selectors are rejected before execution or reopening work.
 
 Runtime and model selection are independent: `TAO_REVIEW_MODEL` and repository
@@ -363,8 +360,12 @@ if repository lookup is unavailable, it says so. Only role settings are consumed
 unrelated malformed model, timeout, or budget settings do not prevent collection.
 Missing selected executables get setup guidance; an unused second runtime is not
 required. Pi's bounded passive readiness probe runs once when either role selects
-Pi; Claude retains executable and prompt checks. These checks do not authenticate
-remotely or prove provider availability or compatibility with the review model.
+Pi, using the shared merge probe; Claude retains executable and prompt checks.
+These checks do not authenticate remotely or prove provider availability or
+compatibility with the review model. Diagnostics never authorize approval,
+completion, or Git mutation. Review approval still requires Tao's exact-diff
+proposal validation; runtime selection grants no lifecycle authority.
+
 ## Prompt installation
 
 `install-prompts` and `install-prompts --check` cover every installed supported
@@ -401,9 +402,19 @@ tao config set models.rework_escalation_model provider/stronger-model
 ```
 For a one-invocation override of every role, use `tao run --model NAME <plan>`,
 `tao review --run --model NAME <plan>`, or `tao merge --model NAME <plan>`
-(including `tao merge --all --model NAME`). See the
+(including `tao merge --all --model NAME`). The [runtime settings table](#runtime-settings)
+lists role coverage: planning generation, PR work, and standalone merge-message
+generation use the base rather than a role override.
+
+Defaults resolve per invocation, not once per plan, so later invocations can
+choose different models. Names are opaque and passed unchanged to `pi --model`
+or `claude --model`; they must be non-empty and whitespace-free after trimming
+surrounding whitespace. Unset an environment variable rather than assigning an
+empty string. An unknown model fails the session with the runtime's message;
+Tao never retries or falls back to another model on runtime rejection. Model
+selection grants no recovery, approval, commit, PR, or merge authority. See the
 [model selection guide](usage-guide.md#choose-models-for-agent-sessions)
-for precedence and runtime rejection behavior.
+for advice on choosing role models and exact Pi model identifiers.
 
 Escalation is opt-in and separate from role selection: use
 `tao run --rework-escalation-model NAME <plan>` for a one-run policy override.
@@ -417,8 +428,8 @@ for attempt counting and durable selection.
 Reasoning effort follows the same scoped precedence and role fallback as models.
 Values are opaque, non-empty, whitespace-free level strings (surrounding whitespace
 is trimmed), passed to Pi as `--thinking` or Claude as `--effort`. Unset effort
-leaves launch arguments unchanged; runtime rejection never triggers a retry or
-fallback. There is no escalation effort setting: rework escalation rounds keep
+leaves launch arguments unchanged, including when Pi derives effort from a model
+suffix; runtime rejection never triggers a retry or fallback. There is no escalation effort setting: rework escalation rounds keep
 the run-role effort. Override the base and every role for one invocation with
 `tao run --effort NAME <plan>`, `tao review --run --effort NAME <plan>`,
 `tao merge --effort NAME <plan>`, or `tao merge --all --effort NAME`.

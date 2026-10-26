@@ -277,7 +277,32 @@ See [repository-owned safe entrypoints](usage-guide.md#repository-owned-safe-ver
 for the wrapper contract. This guidance changes no schema, adds no
 verification-command amendment API, does not automatically repair existing plans,
 and does not permit hand-editing frozen artifacts. Frozen-intent recovery remains
-exact recovery without rerunning gates.
+exact recovery without rerunning gates. PLAN mode stays read-only and validation
+stays passive, not a gate dry run. Passing tests do not authorize changes to the
+worktree, index, identity, or verification declaration. Safe wrappers cannot
+protect against every concurrent writer or bypass boundary checks; unconditional
+resets and skipped tests are not remedies. Without a safe command, retain an
+explicit prerequisite or unresolved planning task, and block execution when no
+safe in-scope remedy exists. Tao adds no automatic restoration, allowlist,
+language detection, `TAO.md`, or settings mechanism.
+
+Tao-owned slice, final, baseline, and merge gates override inherited
+`GOLANGCI_LINT_CACHE` with a private versioned namespace beneath
+`.tao/cache/golangci-lint` in the actual execution worktree (the integration
+worktree for batch merges). Bounded dispatch-time probes of `go env GOVERSION`
+and `golangci-lint version` select a deterministic namespace: equal Go and linter
+version/build identities reuse it; changed identities isolate entries. Unavailable
+or invalid identities select a fresh private namespace per dispatch, never a
+shared unknown cache. Legacy entries and other version directories are retained;
+these caches disappear when their worktrees are removed. Probes reflect the
+dispatch-time cwd and environment, not inline shell overrides, wrappers, or later
+directory changes. Lint remains mandatory where declared. Standalone
+Makefile/global lint caches, manual commands, and explicit cache overrides inside
+commands or build scripts are outside this guarantee. The same gates default
+`PYTHONDONTWRITEBYTECODE=1` to prevent Python test runs leaving `__pycache__`;
+an explicit environment value or in-command override wins (for example,
+`PYTHONDONTWRITEBYTECODE= python3 ...`, which Python treats as unset).
+Manual commands are outside this bytecode guarantee too.
 
 `verification_results` retains its historical `command`, `cwd`, `result`, and `details` fields. Optional additions are `source`, one-based `command_index`, `original_command`, nullable `exit_code` and `duration_milliseconds`, `output_digest`, `output_truncated`, and `failure_kind` (the final-verification classification). Absent source stays absent; unknown exits/durations stay absent, while measured zero values are emitted. Legacy result JSON, intent hashes, and exact messages are not upgraded or reformatted.
 

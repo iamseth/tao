@@ -548,19 +548,15 @@ minimal in-session repair, including earlier slices' files. Other or unresolved
 failures use `slice-blocked` with command/path evidence, not another repair session.
 After intent, preserve original inputs and recover without edits or rerunning gates.
 Tao owns the declared gates: no duplicate sequence or results file is required,
-and agent claims are advisory. Commands run locally, without sandboxing or attestation,
-with a fixed ten-minute bound even if session timeout is disabled.
-A managed `tao slice-complete` live at the session deadline gets at most ten minutes per declared gate command past it (minimum one-command allowance), without extending agent turns or granting authority; a slice completed in that window settles normally from durable state while `session_timeout` is still journaled best-effort.
-Tao reports failures and supported mechanical corrections; final
-repository verification is unchanged. See [observed verification](plan-format.md#observed-slice-verification).
+and agent claims are advisory. Gates run locally with a fixed ten-minute bound;
+see [observed verification](plan-format.md#observed-slice-verification) for
+completion grace, failure reporting, and supported mechanical corrections.
 
 #### Repository-owned safe verification entrypoints
 
 When planning verification, prefer existing project entrypoints documented in
 `AGENTS.md`, then relevant `CLAUDE.md`, `README.md`, local guidance, and build or
-CI configuration. Record the source in `verification.source`; repository guidance
-selects commands, never weakens required checks or Tao's completion boundary.
-PLAN mode stays read-only and validation stays passive, not a gate dry run.
+CI configuration. Record the source in `verification.source`.
 
 For any language or build system, a repository-owned wrapper for known verification
 side effects must:
@@ -571,40 +567,10 @@ side effects must:
 - Remain repeatable, including after a failed invocation, and fail safely when
   cleanup cannot preserve work.
 
-Authoritative gates execute inside `tao slice-complete`. Side-effect handling must
-therefore be inside the declared command, not an agent cleanup step before or after
-completion. Passing tests do not authorize a changed worktree, index, identity, or
-verification declaration. A drift report is an observation, not proof that the gate
-caused the change: inspect reported paths and preserve intentional work before
-retrying. A safe wrapper does not protect against every concurrent writer or bypass
-boundary checks. Do not use unconditional resets or skip tests to make a gate pass.
-
-If no safe command exists, keep that as an explicit prerequisite or unresolved
-planning task; during execution, block when no safe in-scope remedy exists. Tao adds
-no automatic restoration, allowlist, language detection, `TAO.md`, or settings
-mechanism. Existing plans are not automatically repaired, and this guidance grants
-no permission to hand-edit frozen artifacts or amend verification commands through
-a new API. See the [unchanged verification contract](plan-format.md#observed-slice-verification).
-
-Tao-owned slice, final, baseline, and merge gates override inherited
-`GOLANGCI_LINT_CACHE` with a private versioned namespace beneath
-`.tao/cache/golangci-lint` in the actual execution worktree (the integration
-worktree for batch merges). Bounded probes of `go env GOVERSION` and
-`golangci-lint version` select a deterministic namespace: equal Go and linter
-version/build identities reuse it; changed identities isolate entries. Unavailable
-or invalid identities select a fresh private namespace for each dispatch, never a
-shared unknown cache. Existing legacy entries and other version directories are
-retained. These caches disappear when their worktrees are removed.
-
-Probes reflect the dispatch-time cwd and environment, not arbitrary inline shell
-overrides, wrappers, or later directory changes. Lint remains mandatory where
-declared; only its cache is isolated. Standalone Makefile/global lint caches,
-manual commands, and explicit cache overrides inside commands or build scripts
-are outside this guarantee. The same gates default `PYTHONDONTWRITEBYTECODE=1` so
-Python test runs do not leave `__pycache__` in the worktree; an explicit environment
-value or an override inside the command wins (for example,
-`PYTHONDONTWRITEBYTECODE= python3 ...`, which Python treats as unset).
-Manual commands are outside this bytecode guarantee too.
+See the [verification contract](plan-format.md#observed-slice-verification) for
+gate authority, boundary checks, side-effect handling, and environment guarantees.
+A drift report is an observation, not proof that the gate caused the change:
+inspect reported paths and preserve intentional work before retrying.
 
 **Choose the run size:**
 
@@ -639,18 +605,11 @@ it never clears blockers or bypasses approval. See [slice edits](plan-format.md#
 for append/replace semantics. Continue, restart, and explicit verification repair
 are single-shot: later automatic rework rounds in that invocation run as ordinary runs.
 
-**Supply later observations separately from approval.** Approval authorizes a
-choice or overwrite; it does not deliver facts, and approved decisions need no
-reconfirmation. An unfilled observation template remains missing information.
-Tao conservatively detects some approval-as-data wording before agent launch and
-refuses it with the implicated requirement and amendment guidance. Repeating
-approval cannot fix missing facts; repeating `--continue` on this refusal leaves
-the blocked state unchanged. This is a narrow heuristic, not a completeness check.
-Put observations in the slice contract or a concrete `required_inputs` file with
-real content available in the execution worktree, not only the control checkout.
-File existence alone does not prove content. A missing external file still fails
-whole-plan validation unless an exact direct producer contract exists; do not
-invent an agent producer for human observations.
+**Supply later observations separately from approval.** Put facts in the slice
+contract or a concrete `required_inputs` file available in the execution worktree.
+If Tao refuses approval-as-data wording, amend the contract rather than repeating
+approval or `--continue`; see [Required inputs](plan-format.md#required-inputs)
+for the input, approval, and amendment contracts.
 
 If the refused slice is interrupted and still `in_progress`, amendment is not
 yet allowed. Confirm no run is active, write a blocker reason describing the
@@ -662,11 +621,8 @@ tao slice-blocked --plan-dir /absolute/path/to/plan --slice-id <slice-id> \
   --reason-file /tmp/missing-observations.txt
 ```
 
-This preserves the recorded execution boundary and worktree changes; do not reset
-or commit interrupted automatic work. Then amend the blocked slice as below and
-use `tao run --continue <plan-id>`. Amendment locking and ordinary exact-boundary
-recovery checks still apply; blocking and amendment do not make unsafe recovery
-eligible.
+Do not reset or commit interrupted automatic work. Then amend the blocked slice
+as below and use `tao run --continue <plan-id>`.
 
 For a pending or blocked slice, record later facts with a contract amendment:
 
@@ -678,14 +634,9 @@ tao edit amend <plan-id> <slice-id> --reason-file /tmp/observation-reason.txt \
 The reason file explains why the contract changes. Put the actual observations
 in `--add-task`, or use `--goal-file /tmp/observed-goal.txt` containing the full
 replacement goal and facts; facts recorded only in the amendment reason are not
-a contract change. Only recorded goal/tasks amendments lift the approval-as-data
-heuristic; reason-only, file-scope, and manual-check changes do not. Neither an
-amendment nor file existence proves factual completeness. These flags do not add
-or waive `required_inputs`: declared inputs still undergo execution-worktree
-checks, and the amended plan must still validate. After remediation, use ordinary
-`tao run <plan-id>` for pending work or `tao run --continue <plan-id>` for blocked
-work. Amendments neither clear blockers nor grant or bypass approval; satisfy any
-outstanding approval gate separately.
+a contract change. After remediation, use ordinary `tao run <plan-id>` for pending
+work or `tao run --continue <plan-id>` for blocked work. Satisfy any outstanding
+approval gate separately.
 
 Under `--commit-policy none`, a successful same-head reverification does not by
 itself prove that permitted uncommitted work was committed.
@@ -733,18 +684,15 @@ generate fix slices, run them, and review again. Stops are checked in this order
   multiple rounds; inspect the named metric, observed/threshold values, and findings.
 
 Stops preserve the latest review and never approve or merge. Configure the cap
-with `TAO_MAX_REWORK_ATTEMPTS`, `tao repo config --max-rework-attempts N|unset`,
+with `TAO_MAX_REWORK_ATTEMPTS`, `tao config set max_rework_attempts N`,
 or `tao run --max-rework-attempts N <plan-id>`; zero disables the loop.
-Environment/defaults → repository → explicit invocation is the precedence order,
-including explicit zero. Use repository `unset` to restore inheritance.
+Follow [settings precedence](configuration.md#how-settings-resolve), including
+explicit zero. Use `tao config unset max_rework_attempts` to restore inheritance.
 Disabling review with `--no-review` or `TAO_REVIEW=false` makes the effective cap
 zero, with one explanatory warning if the resolved count was positive.
 `--reverify` also executes and presents zero attempts.
 
-**Migration:** replace `TAO_AUTO_REWORK=false` or `--auto-rework=false` with the
-corresponding numeric count of zero; `true` maps to five. These deprecated boolean
-inputs remain accepted for one release and warn whenever supplied. A canonical
-count wins over the boolean in the same layer; higher-precedence layers still win.
+See [configuration](configuration.md) for deprecated boolean rework migration.
 Merge-batch review is independent: `TAO_MERGE_REVIEW_MAX_ATTEMPTS` defaults to five
 and is not affected by run rework settings.
 Repeated locations alone do **not** stop new rework. After successful reopening,
@@ -825,9 +773,8 @@ Use `tao config set <key> <value> --global` for your usual preferences across
 repositories; omit `--global` for a registered checkout's defaults, or select
 one explicitly with `--repo ID`. Use `unset` to inherit again. Keep these
 local-only preferences out of Git. Use flags for a single run, or environment
-variables for a shell/CI job. Resolution is
-**built-in → global → repository → environment → flags**: an old shell export
-can mask a newly saved value. `tao config get` and `tao status` show both stored
+variables for a shell/CI job. Check [settings precedence](configuration.md#how-settings-resolve)
+when an old shell export masks a newly saved value. `tao config get` and `tao status` show both stored
 values and effective sources, so inspect those before changing more defaults.
 
 For example, save `tao config set session_timeout 30m`, then use
@@ -863,21 +810,13 @@ tao rework --run --review-agent claude <plan>
 ```
 
 For a persistent choice, set `TAO_REVIEW_AGENT` or use
-`tao config set review_agent claude` (or `--global`). Resolution follows the
-scoped precedence above: a `TAO_REVIEW_AGENT` export masks a saved value, and an
-explicit flag wins over both. `tao config unset review_agent` removes only that
-saved value. With no selector, reviews inherit the implementing
-runtime, preserving existing behavior. `review` and `rework` accept the flag only
-with `--run`; ordinary and `--from-pr` handoffs and automatic rounds retain it.
-PR feedback triage itself stays on the implementing runtime.
+`tao config set review_agent claude` (or `--global`). Use
+`tao config unset review_agent` to inherit again.
 
 Choose a compatible review model separately with `TAO_REVIEW_MODEL` or
-`tao repo config --review-model NAME`; selecting a runtime does not translate
-model names or reset model precedence. Rejection is surfaced without fallback.
-Review approval still requires Tao's exact-diff proposal validation; selecting a
-runtime grants no lifecycle authority. `--no-review` leaves the unused reviewer
-unstarted. Merge reviews, resolvers, and all other merge-owned sessions are
-unaffected, and `tao merge` does not accept `--review-agent`.
+`tao config set models.review_model NAME`. See
+[review runtime selection](configuration.md#review-runtime-selection) for
+precedence, handoffs, runtime boundaries, and rejection behavior.
 
 Before using mixed runtimes, run `tao doctor --verbose` in the registered checkout.
 It identifies the implementation and effective plan reviewer using environment and
@@ -893,80 +832,34 @@ Claude checks remain executable/prompt diagnostics. Neither proves remote
 credentials, service availability, or compatibility with your review model. If a
 review fails, correct the selected runtime's setup or review-model configuration,
 then explicitly retry with `tao review --run <plan>` (repeat any invocation-only
-selector). Tao does not silently switch runtimes or models, and diagnostics never
-authorize approval, completion, or Git mutation.
+selector).
 
 #### Choose models for agent sessions
 
 Use `TAO_MODEL` as a shared base and role settings when implementation, review,
-or merge work benefits from a different model. `TAO_RUN_MODEL` covers
-implementation and rework slices; `TAO_REVIEW_MODEL` covers plan review and its
-proposal correction; `TAO_MERGE_REVIEW_MODEL` covers aggregate merge review;
-`TAO_RESOLVER_MODEL` covers merge conflict and rework resolution. Planning
-generation, pull-request work, and standalone merge-message generation use the
-base model, not a role override.
+or merge work benefits from a different model. Keep a shared base when those
+sessions do not need separate choices. See [model selection](configuration.md#model-selection)
+for role coverage, precedence, inheritance, invocation overrides, and optional
+reasoning-effort settings. A [recorded rework escalation model](#escalate-late-automatic-rework)
+is the exception to choosing models afresh on each invocation.
 
-Each model field follows built-in → global → repository → environment → flags.
-An explicit per-invocation `--model` overrides the base and every role. After
-resolution, each unset role falls back to the base. Thus a repository base does
-not erase an explicit environment role setting; remove that role setting to use
-the base. `tao config unset models.run_model`, for example, removes only that
-repository's stored role default, restoring inheritance.
-With no effective model setting, launch arguments remain unchanged and the
-runtime chooses. Defaults are resolved for each invocation, not pinned to a
-plan, so a later invocation can use a different model. The exception is a
-[recorded rework escalation model](#escalate-late-automatic-rework), which stays
-in force for that round's slices. See the
-[configuration reference](configuration.md) for flags.
-
-Names are opaque to Tao and passed to `pi --model` or `claude --model`; supplied
-values must be non-empty and whitespace-free. Unset an environment variable
-rather than assigning an empty string. Pi model patterns are fuzzy: prefer an
-exact `provider/id` from `pi --list-models` rather than a short name that may
-match another catalog entry. An unknown model fails the session with the
-runtime's message; Tao does not retry or fall back to another model. Correct the
-setting before trying again under the ordinary recovery rules. Model selection
-never authorizes recovery, approval, commit, PR, or merge.
-
-Optional reasoning effort uses the same precedence and role fallback: `TAO_EFFORT`
-is the base, with `TAO_RUN_EFFORT`, `TAO_REVIEW_EFFORT`,
-`TAO_MERGE_REVIEW_EFFORT`, and `TAO_RESOLVER_EFFORT` for roles. On `tao run`,
-`tao review --run`, and `tao merge` (including `--all`), `--effort NAME` overrides
-the base and every role. Values are opaque, non-empty, whitespace-free strings
-passed to `pi --thinking` or `claude --effort`; runtime rejection fails the session
-without retry or fallback. Unset effort adds no launch argument (including when
-Pi derives effort from a model suffix). Escalation rounds keep the run-role effort;
-there is no escalation-effort setting.
+Pi model patterns are fuzzy: prefer an exact `provider/id` from `pi --list-models`
+rather than a short name that may match another catalog entry. Unset an environment
+variable rather than assigning an empty string. If the runtime rejects a model,
+correct the setting before trying again under the ordinary recovery rules; see
+[model selection](configuration.md#model-selection) for rejection behavior.
 
 #### Check which defaults apply
 
 Use `tao status` to inspect defaults and their sources, not to infer that every
-setting is active everywhere. The [six-path applicability matrix and diagnostic
-contract](configuration.md#command-applicability) covers `run`, `note run`,
-`rework --run`, `review --run`, `merge`, and `prompt run`. Full execution shares
-run settings; fresh review consumes review-session settings, while merge consumes
-merge-session settings, never the run-only PR or slice-commit preferences.
+setting is active everywhere. Check the [command applicability matrix](configuration.md#command-applicability)
+before changing a global setting to address a command-specific problem, and use
+[settings precedence](configuration.md#how-settings-resolve) to understand which
+value wins.
 
-Precedence remains built-ins, captured environment, repository defaults, then
-explicit registered invocation flags. Explicit `false` and same-as-default values
-still override; omitted flags do not. Conflicts report winning sources and remain
-errors: fix an incompatible PR/workspace or PR/commit preference rather than
-expecting Tao to silently drop PR creation. Malformed consumed environment values
-must be fixed even when overridden; unrelated settings are not admitted. Disabling
-review normalizes positive automatic-rework attempts to zero with a warning,
-including explicitly requested attempts.
-
-Direct note execution inherits automatic-rework limits, escalation, header,
-models, permissions and timeout preferences; execution settings are validated
-before durable promotion. Both normal and PR-thread `rework --run` validate and
-carry their full-run options before persisting rework. These handoffs preserve
-ordinary recovery and approval safeguards; planning routing remains separate.
-
-For standalone rendering, `tao prompt run` uses only commit policy and execution
-mode, without repository registration or repository-default lookup. Other prompts
-consume neither. Existing prompt flag registration remains compatible, including
-`--commit=false`; rendering is not execution admission. See the matrix before
-changing a global setting to address a command-specific problem.
+Fix an incompatible PR/workspace or PR/commit preference rather than expecting
+Tao to silently drop PR creation. The applicability reference explains conflict
+diagnostics, validation, and handoff behavior.
 
 #### Recover an interrupted slice
 
@@ -1076,10 +969,12 @@ round events and sessions are unchanged. See the
 per-run overrides.
 
 `TAO_REWORK_ESCALATION_FROM_ATTEMPT` defaults to 4 and requires at least 1.
-Override it with `tao repo config --rework-escalation-from-attempt N|unset` or
-`tao run --rework-escalation-from-attempt N <plan-id>`, in the same environment →
-repository → invocation order. A threshold above the attempt cap is valid and
-leaves no escalation-eligible attempt in that window. Under the default cap of
+Override it with `tao config set rework_escalation_from_attempt N` or
+`tao run --rework-escalation-from-attempt N <plan-id>`, following
+[settings precedence](configuration.md#how-settings-resolve). Use
+`tao config unset rework_escalation_from_attempt` to restore inheritance.
+A threshold above the attempt cap is valid and leaves no escalation-eligible
+attempt in that window. Under the default cap of
 five attempts, attempts 4 and 5 are eligible. Counting is one-based within the
 current automatic-rework window, not the absolute round number or slice count.
 `--rework-restart` and a successful pull-request reopen establish fresh

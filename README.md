@@ -212,8 +212,8 @@ recommended next action.
 Select a plan reviewer independently with `tao run --review-agent claude <plan>`,
 `tao review --run --review-agent pi <plan>`, or
 `tao rework --run --review-agent claude <plan>`. The default inherits `TAO_AGENT`;
-`TAO_REVIEW_AGENT` and `tao repo config --review-agent pi|claude|unset` supply
-inherited defaults. Review models are configured separately; rejection never
+`TAO_REVIEW_AGENT` and `tao config set review_agent pi|claude` supply
+inherited defaults; `tao config unset review_agent` restores inheritance. Review models are configured separately; rejection never
 falls back to another runtime. Merge sessions are unchanged. See
 [review runtime configuration](docs/configuration.md#review-runtime-selection).
 
