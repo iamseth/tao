@@ -49,6 +49,58 @@ func TestChangedFilesExactPreservesQuotedPaths(t *testing.T) {
 	}
 }
 
+func TestStatusPorcelainAllUntrackedStagedMove(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := t.TempDir()
+	runGitCommand(t, root, "init", "-b", "main")
+	runGitCommand(t, root, "config", "status.renames", "true")
+	writeRepoFile(t, root, "old.txt", "identical bytes\n")
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "initial")
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "old.txt"), filepath.Join(root, "nested/new.txt")); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, root, "add", "-A")
+	status, err := NewClient(root, nil).StatusPorcelainAllUntracked(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "A  nested/new.txt\nD  old.txt\n" || strings.Contains(status, " -> ") {
+		t.Fatalf("status = %q", status)
+	}
+}
+
+func TestStatusHelpersStagedMove(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := t.TempDir()
+	runGitCommand(t, root, "init", "-b", "main")
+	runGitCommand(t, root, "config", "status.renames", "true")
+	writeRepoFile(t, root, "old.txt", "identical bytes\n")
+	runGitCommand(t, root, "add", ".")
+	runGitCommand(t, root, "commit", "-m", "initial")
+	runGitCommand(t, root, "mv", "old.txt", "new.txt")
+	var observed strings.Builder
+	client := NewClient(root, func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		if slices.Contains(args, "status") {
+			stdout = io.MultiWriter(stdout, &observed)
+		}
+		return defaultRunner(ctx, cwd, name, args, stdout, stderr)
+	})
+	const want = "A  new.txt\nD  old.txt\n"
+	status, err := client.StatusPorcelain(context.Background())
+	if err != nil || status != want {
+		t.Fatalf("StatusPorcelain = %q, %v", status, err)
+	}
+	observed.Reset()
+	worktree, err := client.WorktreeStatus(context.Background(), root)
+	if err != nil || !worktree.Dirty || observed.String() != want {
+		t.Fatalf("WorktreeStatus = %+v, %v; porcelain = %q", worktree, err, observed.String())
+	}
+}
+
 func TestWorktreeFingerprintParts(t *testing.T) {
 	testenv.SkipIfShort(t)
 	t.Parallel()
@@ -463,9 +515,9 @@ func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
-			key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"): "?? nested/a.go\n",
-			key("-C", "/repo", "diff", "HEAD", "--", "a.go"):                     "diff-a\n",
-			key("-C", "/repo", "log", "--oneline", "-12"):                        "abc feat(a): change\n",
+			key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"): "?? nested/a.go\n",
+			key("-C", "/repo", "diff", "HEAD", "--", "a.go"):                                     "diff-a\n",
+			key("-C", "/repo", "log", "--oneline", "-12"):                                        "abc feat(a): change\n",
 		},
 		stderr:   map[string]string{},
 		failures: map[string]error{},
@@ -482,7 +534,7 @@ func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
 		t.Fatalf("RecentLog() = %q, %v", log, err)
 	}
 	want := []call{
-		{cwd: "", name: "git", args: []string{"-C", "/repo", "status", "--porcelain", "--untracked-files=all"}},
+		{cwd: "", name: "git", args: []string{"-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"}},
 		{cwd: "", name: "git", args: []string{"-C", "/repo", "diff", "HEAD", "--", "a.go"}},
 		{cwd: "", name: "git", args: []string{"-C", "/repo", "log", "--oneline", "-12"}},
 	}
@@ -573,10 +625,10 @@ func TestOutputTrimmingAndRawOutput(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
-			key("-C", "/repo", "branch", "--show-current"):      " feature \n",
-			key("-C", "/repo", "status", "--porcelain"):         " M a.go\n?? b.go\n",
-			key("-C", "/repo", "diff", "main...HEAD"):           "diff --git a/a.go b/a.go\n+line\n",
-			key("-C", "/repo", "diff", "--stat", "main...HEAD"): " a.go | 1 +\n",
+			key("-C", "/repo", "branch", "--show-current"):              " feature \n",
+			key("-C", "/repo", "status", "--porcelain", "--no-renames"): " M a.go\n?? b.go\n",
+			key("-C", "/repo", "diff", "main...HEAD"):                   "diff --git a/a.go b/a.go\n+line\n",
+			key("-C", "/repo", "diff", "--stat", "main...HEAD"):         " a.go | 1 +\n",
 		},
 		stderr:   map[string]string{},
 		failures: map[string]error{},
@@ -618,8 +670,8 @@ func TestErrorFormattingIncludesGitCommandAndStderr(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs:  map[string]string{},
-		stderr:   map[string]string{key("-C", "/repo", "status", "--porcelain"): "fatal: not a git repository\n"},
-		failures: map[string]error{key("-C", "/repo", "status", "--porcelain"): errors.New("exit status 128")},
+		stderr:   map[string]string{key("-C", "/repo", "status", "--porcelain", "--no-renames"): "fatal: not a git repository\n"},
+		failures: map[string]error{key("-C", "/repo", "status", "--porcelain", "--no-renames"): errors.New("exit status 128")},
 	}
 	client := NewClient("/repo", runner.run)
 
@@ -627,7 +679,7 @@ func TestErrorFormattingIncludesGitCommandAndStderr(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got, want := err.Error(), "git status --porcelain: exit status 128: fatal: not a git repository"; got != want {
+	if got, want := err.Error(), "git status --porcelain --no-renames: exit status 128: fatal: not a git repository"; got != want {
 		t.Fatalf("error mismatch\nwant %q\n got %q", want, got)
 	}
 }

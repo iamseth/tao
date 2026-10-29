@@ -1106,7 +1106,7 @@ func TestFinalizerCommitPolicyNoneSkipsReviewCleanlinessGate(t *testing.T) {
 		}
 		if name == "git" {
 			gitCalls = append(gitCalls, runGitKey(args))
-			if runGitKey(args) == "status --porcelain" {
+			if runGitKey(args) == "status --porcelain --no-renames" {
 				_, _ = io.WriteString(stdout, "?? internal/run/finalize.go\n")
 			}
 		}
@@ -1163,7 +1163,7 @@ func TestFinalizerReviewCleanlinessGateRunsBeforeReview(t *testing.T) {
 	if !complete {
 		t.Fatal("expected completed plan")
 	}
-	requireStringOrder(t, order, "git status --porcelain", "review")
+	requireStringOrder(t, order, "git status --porcelain --no-renames", "review")
 }
 
 func TestFinalizerVerifiesExecutionRootBeforeReview(t *testing.T) {
@@ -1198,7 +1198,7 @@ func TestFinalizerVerifiesExecutionRootBeforeReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifyCall := "verify " + root + " -c make verify"
-	requireStringOrder(t, order, "git status --porcelain", verifyCall)
+	requireStringOrder(t, order, "git status --porcelain --no-renames", verifyCall)
 	requireStringOrder(t, order, verifyCall, "review")
 	if got := detail.State.Plan.FinalVerification; got == nil || got.Command != "make verify" || got.CWD != root || got.Result != finalVerificationPassed {
 		t.Fatalf("unexpected final verification: %+v", got)

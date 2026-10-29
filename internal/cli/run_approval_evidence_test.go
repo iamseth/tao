@@ -253,7 +253,7 @@ func interruptedApprovalEvidenceApp(t *testing.T, calls *int, liveHead func() st
 				cwd = args[1]
 			}
 			_, _ = io.WriteString(stdout, cwd+"\n")
-		case "status --porcelain", "status --porcelain --untracked-files=all", "ls-files --stage -z", "ls-files --others --exclude-standard -z", "diff HEAD", "diff --name-only HEAD":
+		case "status --porcelain --no-renames", "status --porcelain --untracked-files=all --no-renames", "ls-files --stage -z", "ls-files --others --exclude-standard -z", "diff HEAD", "diff --name-only HEAD":
 		default:
 			t.Fatalf("unexpected git command %q", key)
 		}

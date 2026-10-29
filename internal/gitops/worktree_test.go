@@ -142,9 +142,9 @@ func TestWorktreeStatusCommandConstructionAndDirtyParsing(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
-			key("-C", "/worktree", "branch", "--show-current"): "tao/plan-a\n",
-			key("-C", "/worktree", "rev-parse", "HEAD"):        "abc123\n",
-			key("-C", "/worktree", "status", "--porcelain"):    " M a.go\n",
+			key("-C", "/worktree", "branch", "--show-current"):              "tao/plan-a\n",
+			key("-C", "/worktree", "rev-parse", "HEAD"):                     "abc123\n",
+			key("-C", "/worktree", "status", "--porcelain", "--no-renames"): " M a.go\n",
 		},
 		stderr:   map[string]string{},
 		failures: map[string]error{},
@@ -162,7 +162,7 @@ func TestWorktreeStatusCommandConstructionAndDirtyParsing(t *testing.T) {
 	wantArgs := [][]string{
 		{"-C", "/worktree", "branch", "--show-current"},
 		{"-C", "/worktree", "rev-parse", "HEAD"},
-		{"-C", "/worktree", "status", "--porcelain"},
+		{"-C", "/worktree", "status", "--porcelain", "--no-renames"},
 	}
 	for i, args := range wantArgs {
 		if !reflect.DeepEqual(runner.calls[i].args, args) {

@@ -99,7 +99,7 @@ func TestReviewAgentUnavailableDoesNotFallback(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 	calls := 0
 	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
-	app.CommandRunner = reviewFakeRunner(map[string]string{"status --porcelain": "", "rev-parse HEAD": "head123\n"}, nil)
+	app.CommandRunner = reviewFakeRunner(map[string]string{"status --porcelain --no-renames": "", "rev-parse HEAD": "head123\n"}, nil)
 	app.ProcessStarter = func(_ context.Context, _, name string, _ []string) (agent.Process, error) {
 		calls++
 		if name != "claude" {
@@ -383,7 +383,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 					return nil
 				}
 				switch reviewCommandKey(args) {
-				case "status --porcelain":
+				case "status --porcelain --no-renames":
 					return nil
 				case "rev-parse HEAD":
 					_, _ = io.WriteString(stdout, "head123\n")

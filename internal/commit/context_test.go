@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 type contextGitStub struct {
@@ -99,6 +102,29 @@ func TestBuildStandaloneContextFiltersBeforeExposureAndBindsCompleteDiff(t *test
 	}
 	if drifted.Fingerprint == firstFingerprint {
 		t.Fatal("allowed diff drift did not change context fingerprint")
+	}
+}
+
+func TestBuildStandaloneContextStagedMove(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := newStandaloneRepo(t)
+	runStandaloneGit(t, root, "config", "status.renames", "true")
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "README.md"), filepath.Join(root, "nested/README.md")); err != nil {
+		t.Fatal(err)
+	}
+	runStandaloneGit(t, root, "add", "-A")
+	got, err := BuildStandaloneContext(context.Background(), gitops.NewClient(root, nil), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RejectedPaths) != 0 {
+		t.Fatalf("rejected paths = %+v", got.RejectedPaths)
+	}
+	if paths := strings.Join(got.AllowedPaths, ","); paths != "README.md,nested/README.md" {
+		t.Fatalf("candidate paths = %q", paths)
 	}
 }
 

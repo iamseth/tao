@@ -94,7 +94,7 @@ func TestPrepareDetectsStaleRecordedBaseWithFakeGitOutput(t *testing.T) {
 			_, _ = io.WriteString(stdout, "tao/plan-a\n")
 		case "rev-parse HEAD":
 			_, _ = io.WriteString(stdout, "head123\n")
-		case "status --porcelain":
+		case "status --porcelain --no-renames":
 		}
 		return nil
 	}
@@ -125,7 +125,7 @@ func TestPrepareCurrentStrategyFallbackRecordsGitMetadata(t *testing.T) {
 			_, _ = io.WriteString(stdout, "head123\n")
 		case "rev-parse main":
 			_, _ = io.WriteString(stdout, "newbase\n")
-		case "status --porcelain":
+		case "status --porcelain --no-renames":
 		}
 		return nil
 	}

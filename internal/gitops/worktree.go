@@ -57,6 +57,7 @@ func (c Client) RebaseAbortWorktree(ctx context.Context, path string) error {
 }
 
 // WorktreeStatus returns branch, HEAD, and dirty state for a worktree path.
+// Its porcelain status reports staged moves as a deletion plus an addition.
 func (c Client) WorktreeStatus(ctx context.Context, path string) (WorktreeStatus, error) {
 	branch, err := c.outputAt(ctx, path, "branch", "--show-current")
 	if err != nil {
@@ -66,7 +67,7 @@ func (c Client) WorktreeStatus(ctx context.Context, path string) (WorktreeStatus
 	if err != nil {
 		return WorktreeStatus{}, err
 	}
-	porcelain, err := c.outputAt(ctx, path, "status", "--porcelain")
+	porcelain, err := c.outputAt(ctx, path, "status", "--porcelain", "--no-renames")
 	if err != nil {
 		return WorktreeStatus{}, err
 	}

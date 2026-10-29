@@ -350,7 +350,7 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 							_, _ = io.WriteString(stdout, tt.liveHead+"\n")
 							return nil
 						}
-					case "status --porcelain":
+					case "status --porcelain --no-renames":
 						if tt.liveStatus != "" {
 							_, _ = io.WriteString(stdout, tt.liveStatus)
 							return nil

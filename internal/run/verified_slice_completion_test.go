@@ -387,6 +387,38 @@ func TestCompleteVerifiedFailedAttemptDoesNotMutateGit(t *testing.T) {
 	}
 }
 
+func TestCompleteVerifiedMovedFile(t *testing.T) {
+	testenv.SkipIfShort(t)
+	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
+	if err := os.WriteFile(filepath.Join(root, "old.txt"), []byte("move these identical bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", "old.txt")
+	runCommitTestGitCommand(t, root, "commit", "-m", "move baseline")
+	parent := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	rewriteVerifiedSliceFixture(t, request, func(slice *plan.Slice) { slice.ExecutionStart.Head = parent })
+	runCommitTestGitCommand(t, root, "config", "status.renames", "true")
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "old.txt"), filepath.Join(root, "nested/new.txt")); err != nil {
+		t.Fatal(err)
+	}
+	service := SliceCompletionService{}
+	if err := service.Complete(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	slice := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]
+	if slice.Completion == nil || slice.Completion.Outcome != plan.SliceCompletionCommitted {
+		t.Fatalf("completion = %+v", slice.Completion)
+	}
+	output := runCommitTestGitOutput(t, root, "show", "--format=", "--name-status", "--no-renames", "HEAD")
+	if got := strings.TrimSpace(output); got != "A\tnested/new.txt\nD\told.txt" {
+		t.Fatalf("committed paths = %q", got)
+	}
+}
+
 func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 	testenv.SkipIfShort(t)
 	for _, outcome := range []string{plan.SliceCompletionCommitted, plan.SliceCompletionNoChanges, plan.SliceCompletionManualUncommitted} {
@@ -440,12 +472,18 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
-	for _, point := range []string{"before stage", "after stage", "after commit"} {
+	for _, point := range []string{"before stage", "after stage", "after commit", "staged move"} {
 		t.Run(point, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, `printf cache > "$GOLANGCI_LINT_CACHE/entry"`)
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
 			if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0o600); err != nil {
 				t.Fatal(err)
+			}
+			if point == "staged move" {
+				runCommitTestGitCommand(t, root, "config", "status.renames", "true")
+				if err := os.Rename(filepath.Join(root, "binary.dat"), filepath.Join(root, "moved.dat")); err != nil {
+					t.Fatal(err)
+				}
 			}
 			gates := 0
 			interrupted := false
@@ -457,9 +495,9 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 				if name == "git" && len(args) > 2 {
 					operation = args[2]
 				}
-				if !interrupted && ((point != "after commit" && operation == "add") || (point == "after commit" && operation == "commit")) {
+				if !interrupted && ((point != "after commit" && point != "staged move" && operation == "add") || ((point == "after commit" || point == "staged move") && operation == "commit")) {
 					interrupted = true
-					if point != "before stage" {
+					if point != "before stage" && point != "staged move" {
 						if err := commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr); err != nil {
 							return err
 						}
@@ -475,6 +513,12 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 			intent := record.Detail().Slices.Slices[0].CommitIntent
 			if intent == nil || intent.Verification == nil {
 				t.Fatal("no frozen intent")
+			}
+			if point == "staged move" {
+				staged := runCommitTestGitOutput(t, root, "diff", "--cached", "--name-status", "--no-renames")
+				if !strings.Contains(staged, "D\tbinary.dat\n") || !strings.Contains(staged, "A\tmoved.dat\n") {
+					t.Fatalf("move not fully staged: %q", staged)
+				}
 			}
 			exactMessage, exactHash := intent.Message, intent.Hash
 			// Cache changes cannot invalidate the frozen worktree fingerprint, and
@@ -506,6 +550,12 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 			}
 			if message := strings.TrimRight(runCommitTestGitOutput(t, root, "log", "-1", "--format=%B"), "\n"); message != exactMessage {
 				t.Fatal("commit message differs from intent")
+			}
+			if point == "staged move" {
+				changes := runCommitTestGitOutput(t, root, "show", "--format=", "--name-status", "--no-renames", "HEAD")
+				if !strings.Contains(changes, "D\tbinary.dat\n") || !strings.Contains(changes, "A\tmoved.dat\n") {
+					t.Fatalf("committed move = %q", changes)
+				}
 			}
 			request.Notes = "different notes"
 			if err := service.Complete(context.Background(), request); err == nil {

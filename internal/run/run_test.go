@@ -348,7 +348,7 @@ func TestRunDoesNotFinalizeWhenMaxSlicesStopsBeforeCompletion(t *testing.T) {
 
 func TestAutomaticSliceRequiresCleanBoundaryWhileNoneIsExempt(t *testing.T) {
 	t.Parallel()
-	runner := (&scriptedGitRunner{Outputs: map[string]string{"status --porcelain": " M README.md\n"}}).Run
+	runner := (&scriptedGitRunner{Outputs: map[string]string{"status --porcelain --no-renames": " M README.md\n"}}).Run
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}}, RunDependencies{CommandRunner: runner})
 	if err := requireCleanAutomaticSliceStart(context.Background(), execution, "."); err == nil || !strings.Contains(err.Error(), "commit or stash") || !strings.Contains(err.Error(), "commit policy none") {
 		t.Fatalf("expected actionable dirty-start refusal, got %v", err)
@@ -428,9 +428,9 @@ func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
 				tt.mutate(detail)
 			}
 			runner := (&scriptedGitRunner{Outputs: map[string]string{
-				"branch --show-current": tt.branch,
-				"rev-parse HEAD":        tt.head,
-				"status --porcelain":    tt.status,
+				"branch --show-current":           tt.branch,
+				"rev-parse HEAD":                  tt.head,
+				"status --porcelain --no-renames": tt.status,
 			}}).Run
 			execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}}, RunDependencies{CommandRunner: runner})
 			err := (SelectedSliceRunner{execution: execution}).validateAutomaticSliceBoundary(context.Background(), detail, "001-a", ".")
@@ -1990,7 +1990,7 @@ func TestServiceExecuteDoesNotRebaseCurrentMode(t *testing.T) {
 		switch key {
 		case "branch --show-current":
 			_, _ = io.WriteString(stdout, "feature\n")
-		case "status --porcelain":
+		case "status --porcelain --no-renames":
 		default:
 			t.Fatalf("unexpected git command %q", key)
 		}
@@ -2904,7 +2904,7 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 				t.Fatalf("expected status cwd %q, got %q", workspacePath, actualCWD)
 			}
 			_, _ = io.WriteString(stdout, "head123\n")
-		case "status --porcelain":
+		case "status --porcelain --no-renames":
 			if actualCWD != workspacePath {
 				t.Fatalf("expected status cwd %q, got %q", workspacePath, actualCWD)
 			}

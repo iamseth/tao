@@ -16,11 +16,11 @@ import (
 func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{
-		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"):   " M dirty.go\n?? new.txt\n",
-		key("-C", "/repo", "diff", "HEAD"):                                     "diff --git a/dirty.go b/dirty.go\n-old\n+new\n",
-		key("-C", "/repo", "ls-files", "--stage", "-z"):                        "100644 abcdef 0\tdirty.go\x00",
-		key("-C", "/repo", "diff", "--name-only", "HEAD"):                      "dirty.go\n",
-		key("-C", "/repo", "ls-files", "--others", "--exclude-standard", "-z"): "",
+		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"): " M dirty.go\n?? new.txt\n",
+		key("-C", "/repo", "diff", "HEAD"):                                                   "diff --git a/dirty.go b/dirty.go\n-old\n+new\n",
+		key("-C", "/repo", "ls-files", "--stage", "-z"):                                      "100644 abcdef 0\tdirty.go\x00",
+		key("-C", "/repo", "diff", "--name-only", "HEAD"):                                    "dirty.go\n",
+		key("-C", "/repo", "ls-files", "--others", "--exclude-standard", "-z"):               "",
 	}, stderr: map[string]string{}, failures: map[string]error{}}
 
 	fingerprint, err := NewClient("/repo", runner.run).DirtyFingerprint(context.Background())
@@ -28,7 +28,7 @@ func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := sha256.New()
-	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain", "--untracked-files=all")]))
+	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames")]))
 	writeFingerprintField(h, "diff-head", []byte(runner.outputs[key("-C", "/repo", "diff", "HEAD")]))
 	writeFingerprintField(h, "index", []byte(runner.outputs[key("-C", "/repo", "ls-files", "--stage", "-z")]))
 	if fingerprint.Hash != hex.EncodeToString(h.Sum(nil)) {
@@ -117,7 +117,7 @@ func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 			t.Fatalf("unexpected command %q", name)
 		}
 		switch strings.Join(args, "\x00") {
-		case key("-C", "/repo", "status", "--porcelain", "--untracked-files=all"):
+		case key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"):
 			_, _ = io.WriteString(stdout, " M dirty.go\n")
 		case key("-C", "/repo", "diff", "HEAD"):
 			calls++
@@ -235,7 +235,7 @@ func TestDirtyFingerprintIncludesUntrackedBytesAndMode(t *testing.T) {
 	}
 	runner := func(_ context.Context, _ string, _ string, args []string, stdout io.Writer, _ io.Writer) error {
 		switch strings.Join(args, "\x00") {
-		case key("-C", root, "status", "--porcelain", "--untracked-files=all"):
+		case key("-C", root, "status", "--porcelain", "--untracked-files=all", "--no-renames"):
 			_, _ = io.WriteString(stdout, "?? scratch.txt\n")
 		case key("-C", root, "diff", "HEAD"), key("-C", root, "diff", "--name-only", "HEAD"):
 		case key("-C", root, "ls-files", "--stage", "-z"):

@@ -1636,7 +1636,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 		// through a worktree-bound git client (git -C <worktree> status). Accept
 		// that probe and report a clean worktree.
 		if dir == repoRoot+"/.tao/workspaces/plan-a" {
-			if command != "status --porcelain" {
+			if command != "status --porcelain --no-renames" {
 				t.Fatalf("unexpected plan-worktree git command %q", command)
 			}
 			return nil
@@ -1645,7 +1645,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 			t.Fatalf("unexpected git args %#v, want -C %q or the plan worktree", args, repoRoot)
 		}
 		switch command {
-		case "status --porcelain", "status --porcelain=v1 -z --untracked-files=all":
+		case "status --porcelain --no-renames", "status --porcelain=v1 -z --untracked-files=all":
 			return nil
 		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
 			_, _ = io.WriteString(stdout, "origin/main\n")

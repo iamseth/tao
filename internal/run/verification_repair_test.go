@@ -186,7 +186,7 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 					return nil
 				}
 				switch runGitKey(args) {
-				case "status --porcelain":
+				case "status --porcelain --no-renames":
 					_, _ = io.WriteString(stdout, test.status)
 				case "branch --show-current":
 					_, _ = io.WriteString(stdout, test.liveBranch+"\n")

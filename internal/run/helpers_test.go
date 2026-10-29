@@ -337,7 +337,7 @@ func (r *scriptedGitRunner) Run(ctx context.Context, cwd, name string, args []st
 		if r.Origin != "" {
 			_, _ = io.WriteString(stdout, r.Origin+"\n")
 		}
-	case "status --porcelain", "status --porcelain --untracked-files=all":
+	case "status --porcelain --no-renames", "status --porcelain --untracked-files=all --no-renames":
 		if r.statusIdx < len(r.Statuses) {
 			_, _ = io.WriteString(stdout, r.Statuses[r.statusIdx])
 			r.statusIdx++
@@ -457,7 +457,7 @@ func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, sta
 				t.Fatalf("HEAD cwd = %q, want immutable root %q", actualCWD, root)
 			}
 			_, _ = io.WriteString(stdout, head+"\n")
-		case "status --porcelain", "status --porcelain --untracked-files=all":
+		case "status --porcelain --no-renames", "status --porcelain --untracked-files=all --no-renames":
 			if actualCWD != root {
 				t.Fatalf("status cwd = %q, want immutable root %q", actualCWD, root)
 			}
