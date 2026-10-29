@@ -210,7 +210,16 @@ func TestRenderRunPromptAuthorizesPlanOwnedGateRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Plan-Owned Files", "treat the fix as in scope", "make the minimal change", "rerun", "do not block for that reason", `--gate-command "<failed command>"`, "--failing-path <path>"} {
+	for _, want := range []string{"Plan-Owned Files", "treat the fix as in scope", "make the minimal change", "rerun", "do not block for that reason", `--gate-command "<failed command>"`, "--failing-path <path>",
+		"repair every in-scope failure first",
+		"this slice's expected_files or the packet's Plan-Owned Files",
+		"rerun `tao slice-complete` so remaining failures come from the declared gates",
+		"Targeted or `-short` runs are for diagnosis only and must not decide scope",
+		"every remaining out-of-scope failing path (source, test, and fixture files) from that authoritative run",
+		"in one `slice-blocked` call rather than one blocker per discovered file",
+		"`slice-blocked` refuses a gate-evidence blocker whose every path is in scope",
+		"pass `--contract-conflict` only when the slice contract itself cannot be satisfied and explain the conflict in the reason file",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered run prompt missing plan-owned gate repair guidance %q", want)
 		}
@@ -348,7 +357,7 @@ func TestRunDelegatesAuthoritativeGatesWithoutDuplicateSequence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"test-first development and targeted diagnosis", "Do not routinely run a duplicate full declared-gate sequence", "No verification results file is required", "Tao alone validates and executes", "Before intent only", "same active implementation session", "outside Plan-Owned Files", "--gate-command", "--failing-path", "never repair or reinterpret a recorded intent", "Final Tao-observed", "ten-minute timeout", "ten minutes per declared gate command",
+		for _, want := range []string{"test-first development and targeted diagnosis", "Do not routinely run a duplicate full declared-gate sequence", "No verification results file is required", "Tao alone validates and executes", "Before intent only", "same active implementation session", "remaining out-of-scope verification failures", "--gate-command", "--failing-path", "never repair or reinterpret a recorded intent", "Final Tao-observed", "ten-minute timeout", "ten minutes per declared gate command",
 			"An in-session `internal/run` test failure confirmed to result solely from inherited `TAO_SLICE_COMPLETION_OWNER` is not by itself a blocker",
 			"invoke `tao slice-complete`, whose authoritative gates strip that variable and must still pass",
 			"Tao executes every selected slice `verification.commands` entry in order before intent",

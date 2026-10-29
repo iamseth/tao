@@ -69,6 +69,35 @@ func ClassifyBlockerPaths(failing []string, planOwned []string) bool {
 	return true
 }
 
+// BlockerPathsWithinSliceScope is presentation/refusal input only; it never sets
+// BlockerClassification. A nil planOwned checks expected_files coverage alone.
+func BlockerPathsWithinSliceScope(failing []string, expectedFiles []string, planOwned []string) bool {
+	if len(failing) == 0 {
+		return false
+	}
+	owned := make(map[string]struct{}, len(planOwned))
+	for _, value := range planOwned {
+		if normalized := normalizeBlockerPath(value); normalized != "" {
+			owned[normalized] = struct{}{}
+		}
+	}
+	for _, value := range failing {
+		normalized := normalizeBlockerPath(value)
+		if normalized == "" {
+			return false
+		}
+		if _, ok := owned[normalized]; ok {
+			continue
+		}
+		if !slices.ContainsFunc(expectedFiles, func(expected string) bool {
+			return PathsOverlap(normalized, expected)
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
 // WorktreeFingerprint hashes ordered, NUL-separated caller-provided evidence.
 // It does not inspect Git or the filesystem and conveys no ownership itself.
 func WorktreeFingerprint(parts ...string) string {

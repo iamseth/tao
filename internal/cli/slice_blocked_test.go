@@ -24,6 +24,119 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestSliceBlockedScopeRefusal(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, mode := range []string{"owned", "expected unverified", "mixed", "contract conflict", "no evidence"} {
+		t.Run(mode, func(t *testing.T) {
+			home, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TAO_DATA_HOME", home)
+			fixture := newStartedSliceBlockedFixture(t)
+			detail := resolveSliceBlockedDetail(t, fixture.dir)
+			if mode == "expected unverified" {
+				detail.Slices.Slices[0].ExpectedFiles = []string{"owned.go"}
+				detail.Slices.Slices[0].ExecutionRoot = t.TempDir()
+			} else {
+				root := initTestGitRepo(t)
+				runCLICommitGit(t, root, "commit", "--allow-empty", "-m", "base")
+				detail.State.Repo.BaseCommit = runCLICommitGit(t, root, "rev-parse", "HEAD")
+				if err := os.WriteFile(filepath.Join(root, "owned.go"), []byte("owned\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runCLICommitGit(t, root, "add", ".")
+				runCLICommitGit(t, root, "commit", "-m", "plan work")
+				detail.Slices.Slices[0].ExecutionRoot = root
+			}
+			for name, value := range map[string]any{"state.json": detail.State, "slices.json": detail.Slices} {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(fixture.dir, name), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "waiting")}
+			refusal := mode == "owned" || mode == "expected unverified"
+			// Seed an actual resume cache through the unchanged evidence-free flow.
+			if refusal {
+				if err := app.Run(context.Background(), append(append([]string{}, args...), "--resume-note-file", writeSliceBlockedReason(t, "last action: inspect"))); err != nil {
+					t.Fatal(err)
+				}
+				store := run.ResumeNoteStore{}
+				if text, err := store.Load(resolveSliceBlockedDetail(t, fixture.dir), "001-a"); err != nil || text != "last action: inspect" {
+					t.Fatalf("seeded resume note = %q, %v", text, err)
+				}
+			}
+			snapshot := func() map[string]string {
+				files := map[string]string{}
+				for _, root := range []string{fixture.dir, home} {
+					err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+						if err != nil {
+							return err
+						}
+						if entry.IsDir() {
+							return nil
+						}
+						data, err := os.ReadFile(path) //nolint:gosec // Snapshot only files under this test's private fixture and cache directories.
+						files[path] = string(data)
+						return err
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				return files
+			}
+			before := snapshot()
+			if mode != "no evidence" {
+				args = append(args, "--gate-command", "go test ./...", "--failing-path", "owned.go")
+			}
+			if mode == "mixed" {
+				args = append(args, "--failing-path", "outside.go")
+			}
+			if mode == "contract conflict" {
+				args = append(args, "--contract-conflict")
+			}
+			args = append(args, "--invalid-command", "go test ./missing", "--invalid-reason", "missing package", "--resume-note-file", writeSliceBlockedReason(t, "replacement"))
+			err = app.Run(context.Background(), args)
+			if refusal {
+				if err == nil || !strings.Contains(err.Error(), "owned.go") || !strings.Contains(err.Error(), "tao slice-complete") || !strings.Contains(err.Error(), "--contract-conflict") {
+					t.Fatalf("scope refusal = %v", err)
+				}
+				if !reflect.DeepEqual(before, snapshot()) {
+					t.Fatal("refusal mutated plan or resume cache")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event plan.Event
+			for _, candidate := range resolveSliceBlockedDetail(t, fixture.dir).Events {
+				if candidate.Type == plan.EventTypeSliceBlocked && candidate.SliceID == "001-a" && (event.Type == "" || candidate.Timestamp.After(event.Timestamp)) {
+					event = candidate
+				}
+			}
+			if event.Type == "" {
+				t.Fatal("block event missing")
+			}
+			if mode == "mixed" && !reflect.DeepEqual(event.Paths, []string{"outside.go", "owned.go"}) {
+				t.Fatalf("mixed paths = %v", event.Paths)
+			}
+			if mode == "no evidence" && (event.Command != "" || len(event.Paths) != 0) {
+				t.Fatalf("evidence-free event = %#v", event)
+			}
+			if (event.BlockerClassification == plan.BlockerClassificationPlanOwned) != (mode == "contract conflict") {
+				t.Fatalf("classification = %q", event.BlockerClassification)
+			}
+		})
+	}
+}
+
 func TestSliceBlockedGateEvidence(t *testing.T) {
 	testenv.SkipIfShort(t)
 	for _, mode := range []string{"owned", "outside path", "empty root", "missing root", "file root", "empty base", "bad base", "not git", "fingerprint error", "both groups"} {
@@ -66,6 +179,9 @@ func TestSliceBlockedGateEvidence(t *testing.T) {
 			}
 			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "lint failed"), "--gate-command", " go test ./... ", "--failing-path", ` .\owned.go `}
 			wantPaths := []string{"owned.go"}
+			if mode != "outside path" {
+				args = append(args, "--contract-conflict")
+			}
 			if mode == "outside path" {
 				args = append(args, "--failing-path", "outside.go")
 				wantPaths = []string{"outside.go", "owned.go"}
@@ -114,6 +230,7 @@ func TestSliceBlockedGateEvidence(t *testing.T) {
 }
 
 func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
+	testenv.SkipIfShort(t)
 	clearTaoEnv(t)
 	ctx := context.Background()
 	root := initTestGitRepo(t)
@@ -156,7 +273,7 @@ func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
 		t.Error("unchanged blocker must not start an agent")
 		return nil, errors.New("unexpected agent handoff")
 	}}
-	if err := app.Run(ctx, []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "lint failed"), "--gate-command", "go test ./...", "--failing-path", path}); err != nil {
+	if err := app.Run(ctx, []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "lint failed"), "--gate-command", "go test ./...", "--failing-path", path, "--contract-conflict"}); err != nil {
 		t.Fatal(err)
 	}
 	blocked := resolveSliceBlockedDetail(t, fixture.dir)

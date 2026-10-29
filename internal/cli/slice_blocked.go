@@ -17,13 +17,13 @@ import (
 	"github.com/iamseth/tao/internal/run"
 )
 
-const sliceBlockedUsage = "slice-blocked --plan-dir DIR --slice-id ID --reason-file FILE [--resume-note-file FILE] [--gate-command COMMAND --failing-path PATH ...] [--invalid-command COMMAND --invalid-reason REASON [--corrected-command COMMAND]]"
+const sliceBlockedUsage = "slice-blocked --plan-dir DIR --slice-id ID --reason-file FILE [--resume-note-file FILE] [--gate-command COMMAND --failing-path PATH ...] [--contract-conflict] [--invalid-command COMMAND --invalid-reason REASON [--corrected-command COMMAND]]"
 
 var sliceBlockedCommand = commandMetadata{
 	name:                  "slice-blocked",
 	usageLines:            []string{sliceBlockedUsage},
 	completionDescription: "Block a slice after an exceptional stop",
-	long:                  "Record an exceptional agent stop for a Tao plan slice. Pair --gate-command with repeatable --failing-path (up to 64 repository-relative paths) to record a failing gate; Tao verifies plan ownership from Git and fingerprints the slice's recorded execution worktree when available. Optional invalid-command evidence records a command that failed before tests loaded and a mechanically equivalent correction when available. Both evidence groups may be supplied together.",
+	long:                  "Record an exceptional agent stop for a Tao plan slice. Pair --gate-command with repeatable --failing-path (up to 64 repository-relative paths) to record a failing gate; Tao verifies plan ownership from Git and fingerprints the slice's recorded execution worktree when available. Optional invalid-command evidence records a command that failed before tests loaded and a mechanically equivalent correction when available. Both evidence groups may be supplied together. In-scope gate failures must be repaired in the active session unless --contract-conflict records that the slice contract cannot be satisfied.",
 	examples:              "  tao slice-blocked --plan-dir /path/to/plan --slice-id 001-example --reason-file /tmp/reason.txt\n  tao slice-blocked --plan-dir /path/to/plan --slice-id 001-example --reason-file /tmp/reason.txt --invalid-command 'go test ./missing' --invalid-reason 'package path does not exist' --corrected-command 'go test ./internal/cli'\n  tao slice-blocked --plan-dir /path/to/plan --slice-id 002-example --reason-file /tmp/reason.txt --gate-command 'go test ./...' --failing-path internal/cli/example.go",
 	registerFlags:         registerSliceBlockedFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
@@ -48,6 +48,7 @@ func registerSliceBlockedFlags(fs *flag.FlagSet) {
 	fs.String("reason-file", "", "file containing the blocker reason")
 	fs.String("resume-note-file", "", "optional private file containing untrusted advisory continuation context")
 	fs.String("gate-command", "", "failing verification gate command")
+	fs.Bool("contract-conflict", false, "record the blocker even though every failing path is in slice scope because the slice contract cannot be satisfied")
 	fs.Var(new(stringListFlag), "failing-path", "repository-relative failing path (repeatable)")
 	fs.String("invalid-command", "", "verification command that failed before tests loaded")
 	fs.String("invalid-reason", "", "reason the verification command was invalid")
@@ -114,7 +115,7 @@ func parseSliceBlockedGateEvidence(fs *flag.FlagSet) (*plan.SliceBlockedEvidence
 	return &plan.SliceBlockedEvidence{GateCommand: command, FailingPaths: paths}, nil
 }
 
-func (a App) verifySliceBlockedOwnership(ctx context.Context, detail *plan.PlanDetail, sliceID string, evidence *plan.SliceBlockedEvidence) {
+func (a App) verifySliceBlockedOwnership(ctx context.Context, detail *plan.PlanDetail, sliceID string, evidence *plan.SliceBlockedEvidence) (verifiedOwned []string) {
 	var root string
 	for _, slice := range detail.Slices.Slices {
 		if slice.ID == sliceID {
@@ -151,6 +152,7 @@ func (a App) verifySliceBlockedOwnership(ctx context.Context, detail *plan.PlanD
 	evidence.HeadSHA = head
 	evidence.WorktreeFingerprint = plan.WorktreeFingerprint(append([]string{head}, parts...)...)
 	verified = true
+	return owned
 }
 
 func (a App) sliceBlocked(ctx context.Context, args []string) error {
@@ -204,7 +206,15 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 		}
 	}
 	if gateEvidence != nil {
-		a.verifySliceBlockedOwnership(ctx, record.Detail(), sliceID, gateEvidence)
+		owned := a.verifySliceBlockedOwnership(ctx, record.Detail(), sliceID, gateEvidence)
+		if !flagBoolValue(fs, "contract-conflict") {
+			for _, slice := range record.Detail().Slices.Slices {
+				if slice.ID == sliceID && plan.BlockerPathsWithinSliceScope(gateEvidence.FailingPaths, slice.ExpectedFiles, owned) {
+					paths := agentinput.CapRunes(strings.Join(gateEvidence.FailingPaths, ", "), 2048)
+					return fmt.Errorf("failing paths are in slice scope (paths capped at 2048 runes): %s; repair them in this active session and rerun tao slice-complete; use --contract-conflict only when the slice contract cannot be satisfied", paths)
+				}
+			}
+		}
 		err = record.BlockSliceWithEvidence(sliceID, reason, gateEvidence, now)
 	} else {
 		err = record.BlockSlice(sliceID, reason, now)

@@ -53,6 +53,36 @@ func TestPlanOwnershipBase(t *testing.T) {
 	}
 }
 
+func TestBlockerPathsWithinSliceScope(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name                     string
+		failing, expected, owned []string
+		want                     bool
+	}{
+		{name: "all expected", failing: []string{"a.go", "b.go"}, expected: []string{"a.go", "b.go"}, want: true},
+		{name: "directory", failing: []string{"internal/plan/nested/a.go"}, expected: []string{"internal/plan"}, want: true},
+		{name: "trailing slash", failing: []string{"internal/plan/nested/a.go"}, expected: []string{"internal/plan/"}, want: true},
+		{name: "owned only", failing: []string{"a.go"}, owned: []string{"./a.go"}, want: true},
+		{name: "combined coverage", failing: []string{"a.go", "b.go"}, expected: []string{"a.go"}, owned: []string{"b.go"}, want: true},
+		{name: "mixed scope", failing: []string{"a.go", "b.go"}, expected: []string{"a.go"}},
+		{name: "empty failing"},
+		{name: "empty path", failing: []string{"a.go", " "}, expected: []string{"a.go"}},
+		{name: "absolute", failing: []string{"/a.go"}, expected: []string{"/a.go"}},
+		{name: "parent", failing: []string{"../a.go"}, owned: []string{"../a.go"}},
+		{name: "nil owned", failing: []string{"b.go"}, expected: []string{"a.go"}},
+		{name: "backslash", failing: []string{` ./internal\plan/a.go `}, expected: []string{"internal/plan/a.go"}, want: true},
+		{name: "owned backslash", failing: []string{"internal/plan/a.go"}, owned: []string{`internal\plan\a.go`}, want: true},
+		{name: "owned is exact", failing: []string{"internal/plan/a.go"}, owned: []string{"internal/plan"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BlockerPathsWithinSliceScope(tt.failing, tt.expected, tt.owned); got != tt.want {
+				t.Fatalf("BlockerPathsWithinSliceScope() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyBlockerPaths(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {

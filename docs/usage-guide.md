@@ -551,9 +551,16 @@ and bookkeeping. Blockers and failed verification stop work. Single-line `Ruling
 notes may settle only ambiguities already resolved by plan intent, not missing or
 contradictory contracts.
 
-Before intent, a gate failure confined to Git-derived **Plan-Owned Files** permits
-minimal in-session repair, including earlier slices' files. Other or unresolved
-failures use `slice-blocked` with command/path evidence, not another repair session.
+Before intent, a gate failure confined to the slice's `expected_files` or Git-derived
+**Plan-Owned Files** permits minimal in-session repair, including earlier slices'
+files. `tao slice-blocked` refuses gate-evidence blockers when every failing path
+is in that scope: repair in session and rerun `tao slice-complete`. Use
+`--contract-conflict` only when the slice contract cannot be satisfied.
+For scope blockers, list every remaining out-of-scope path from the authoritative
+gate run in one call, using `--gate-command` and repeatable `--failing-path`.
+`tao show` then offers one `tao edit amend` command with every uncovered path;
+this guidance does not itself amend scope. Evidence-free operator blocks, such as
+the missing-facts flow below, are unaffected. Do not start another repair session.
 After intent, preserve original inputs and recover without edits or rerunning gates.
 Tao owns the declared gates: no duplicate sequence or results file is required,
 and agent claims are advisory. Gates run locally with a fixed ten-minute bound;

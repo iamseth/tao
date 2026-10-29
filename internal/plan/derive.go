@@ -331,6 +331,14 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 					}
 				}
 				if len(uncovered) > 0 {
+					cmd := "tao edit amend " + shellQuoteActionArg(id) + " " + shellQuoteActionArg(slice.ID) + " --reason-file FILE"
+					for _, path := range uncovered {
+						cmd += " --allow-file " + shellQuoteActionArg(path)
+					}
+					alternatives = append(alternatives, PlanAction{
+						Kind: PlanActionAmendScope, Class: PlanActionClassRecovery, Command: cmd,
+						Reason: "authorize the blocker's paths outside expected_files before tao run --continue",
+					})
 					paths := strings.Join(uncovered[:min(5, len(uncovered))], ", ")
 					if len(uncovered) > 5 {
 						paths += ", +" + strconv.Itoa(len(uncovered)-5) + " more"

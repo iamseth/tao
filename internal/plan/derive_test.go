@@ -1169,6 +1169,7 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 			expectedFiles: []string{"internal/merge/"},
 			want:          original,
 		},
+		{name: "space quoted", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"a file.go"}}}, want: guidance("a file.go")},
 		{name: "outside paths", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"outside.go"}}}, want: guidance("outside.go")},
 		{name: "plan owned", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"owned.go"}, BlockerClassification: BlockerClassificationPlanOwned}}, want: original},
 		{name: "prose only", events: []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a"}}, want: original},
@@ -1190,7 +1191,38 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 				Slices: SlicesFile{Slices: []Slice{{ID: "001-a", Status: StatusBlocked, ExpectedFiles: tt.expectedFiles}}},
 				Events: tt.events,
 			}
-			action := DeriveNextAction(detail).Primary
+			next := DeriveNextAction(detail)
+			var wantCommand string
+			if tt.want != original {
+				wantCommand = "tao edit amend plan-a 001-a --reason-file FILE"
+				event := LatestSliceBlockedEvent(detail, "001-a")
+				for _, path := range event.Paths {
+					if path == "owned.go" || path == "also-owned.go" {
+						continue
+					}
+					if path == "a file.go" {
+						wantCommand += " --allow-file 'a file.go'"
+					} else {
+						wantCommand += " --allow-file " + path
+					}
+				}
+			}
+			if wantCommand == "" && len(next.Alternatives) != 0 {
+				t.Fatalf("unexpected alternatives: %+v", next.Alternatives)
+			}
+			if wantCommand != "" {
+				if len(next.Alternatives) != 1 {
+					t.Fatalf("missing amend alternative: %+v", next)
+				}
+				amend := next.Alternatives[0]
+				if amend.Kind != PlanActionAmendScope || amend.Class != PlanActionClassRecovery || amend.Command != wantCommand {
+					t.Fatalf("amend = %+v, want command %q", amend, wantCommand)
+				}
+			}
+			action := next.Primary
+			if action.Command != "tao run --continue plan-a" {
+				t.Fatalf("primary command = %q", action.Command)
+			}
 			if action.Kind != PlanActionContinue || action.Reason != tt.want {
 				t.Fatalf("action = %+v; want continue with reason %q", action, tt.want)
 			}

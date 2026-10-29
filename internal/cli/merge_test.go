@@ -467,7 +467,7 @@ func TestMergeCommandReloadsUnderLockBeforeSquashOrNoSquashMutation(t *testing.T
 			service := &fakeCLIMergeService{}
 			stubMergeServiceRunner(t, service)
 			var mergeOut bytes.Buffer
-			app := App{Out: &mergeOut, Err: &mergeOut}
+			app := App{RepositoryAdmission: testRepositoryAdmission, Out: &mergeOut, Err: &mergeOut}
 			mergeDone := make(chan error, 1)
 			go func() {
 				mergeDone <- app.merge(context.Background(), repo, append(test.args, fixture.id))
