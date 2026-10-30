@@ -32,7 +32,7 @@ func TestListAppliesLimitAndShowsShortIDAndSlug(t *testing.T) {
 		Build())
 
 	var out bytes.Buffer
-	err := App{Out: &out, Err: &out}.list(context.Background(), repo, []string{"--limit", "1"})
+	err := newTestApp(App{Out: &out, Err: &out}).list(context.Background(), repo, []string{"--limit", "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestListAppliesLimitAndShowsShortIDAndSlug(t *testing.T) {
 
 func TestListRejectsNegativeLimit(t *testing.T) {
 	var out bytes.Buffer
-	err := App{Out: &out, Err: &out}.list(context.Background(), plantest.NewRepository(), []string{"--limit", "-1"})
+	err := newTestApp(App{Out: &out, Err: &out}).list(context.Background(), plantest.NewRepository(), []string{"--limit", "-1"})
 	if err == nil || !strings.Contains(err.Error(), "--limit") {
 		t.Fatalf("expected limit error, got %v", err)
 	}
@@ -63,7 +63,7 @@ func TestListAllowsZeroLimitAndPropagatesRepoErrors(t *testing.T) {
 		WithStatus(plan.StatusPlanned).
 		Build())
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).list(context.Background(), repo, []string{"--limit", "0"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).list(context.Background(), repo, []string{"--limit", "0"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "example") {
@@ -71,7 +71,7 @@ func TestListAllowsZeroLimitAndPropagatesRepoErrors(t *testing.T) {
 	}
 
 	// Error propagation from repository is still tested with fakeRepository.
-	err := (App{Out: &out, Err: &out}).list(context.Background(), fakeRepository{err: errors.New("boom")}, nil)
+	err := (newTestApp(App{Out: &out, Err: &out})).list(context.Background(), fakeRepository{err: errors.New("boom")}, nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected repository error, got %v", err)
 	}
@@ -85,7 +85,7 @@ func TestListFallsBackToTitleForUnparsablePlanID(t *testing.T) {
 		Build())
 
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).list(context.Background(), repo, nil); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).list(context.Background(), repo, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Legacy Plan") {
@@ -96,7 +96,7 @@ func TestListFallsBackToTitleForUnparsablePlanID(t *testing.T) {
 func TestRenderPlanListOmitsCurrentSliceColumn(t *testing.T) {
 	var out bytes.Buffer
 
-	err := (App{}).renderPlanList(&out, []plan.PlanSummary{
+	err := (newTestApp(App{})).renderPlanList(&out, []plan.PlanSummary{
 		{ID: "20260525-1100-active", Status: plan.StatusInProgress, CurrentSliceID: "001-a", PendingCount: 1, TotalCount: 1},
 	}, time.Now())
 	if err != nil {
@@ -115,7 +115,7 @@ func TestRenderPlanListPreservesExactASCIIOutput(t *testing.T) {
 	updated := now.Add(-42 * time.Minute)
 	var out bytes.Buffer
 
-	err := (App{}).renderPlanList(&out, []plan.PlanSummary{{
+	err := (newTestApp(App{})).renderPlanList(&out, []plan.PlanSummary{{
 		ID: "20260810-2142-first-plan", Status: plan.StatusPlanned,
 		CompletedCount: 1, TotalCount: 2, LastActivityAt: &updated,
 	}}, now)
@@ -132,7 +132,7 @@ func TestRenderPlanListPreservesExactASCIIOutput(t *testing.T) {
 func TestRenderPlanListUsesCellWidthsForUnicode(t *testing.T) {
 	var out bytes.Buffer
 
-	err := (App{}).renderPlanList(&out, []plan.PlanSummary{{
+	err := (newTestApp(App{})).renderPlanList(&out, []plan.PlanSummary{{
 		ID: "20260810-2142-café", Status: plan.StatusPlanned,
 	}}, time.Date(2026, 8, 10, 22, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -150,7 +150,7 @@ func TestRenderPlanListShowsSafeCompactAbandonmentEvidence(t *testing.T) {
 	abandonedAt := now.Add(-30 * time.Minute)
 	var out bytes.Buffer
 
-	err := (App{}).renderPlanList(&out, []plan.PlanSummary{{
+	err := (newTestApp(App{})).renderPlanList(&out, []plan.PlanSummary{{
 		ID: "20260901-1700-abandoned", Status: plan.StatusAbandoned,
 		Abandonment: &plan.AbandonmentEvidence{
 			AbandonedAt: abandonedAt,
@@ -179,7 +179,7 @@ func TestRenderPlanListUsesHumanUpdatedTime(t *testing.T) {
 	old := now.Add(-25 * time.Hour)
 	var out bytes.Buffer
 
-	err := (App{}).renderPlanList(&out, []plan.PlanSummary{
+	err := (newTestApp(App{})).renderPlanList(&out, []plan.PlanSummary{
 		{ID: "20260525-1100-recent", Status: plan.StatusInProgress, PendingCount: 1, TotalCount: 1, LastActivityAt: &recent},
 		{ID: "20260524-1100-old", Status: plan.StatusCompleted, CompletedCount: 1, TotalCount: 1, LastActivityAt: &old},
 	}, now)

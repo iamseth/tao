@@ -66,7 +66,7 @@ func TestRestartSingleMergeInterruptedRestartMatrix(t *testing.T) {
 			runRealGit(t, fixture.repoRoot, "commit", "--allow-empty", "-m", "advance default")
 			advanced := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 			planDir, intent := persistSingleMergeRestartPlan(t, fixture, parent, sourceHead)
-			service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}
+			service := newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})
 
 			detail, err := plan.NewFileRepository(filepath.Dir(planDir)).ResolvePlan(context.Background(), planDir)
 			if err != nil {
@@ -162,7 +162,7 @@ func TestMergeRecoversInterruptedSingleResolutionRollbackSettlement(t *testing.T
 		State: plan.State{Status: plan.StatusReviewed, Repo: plan.Repo{Root: fixture.RepoRoot}, Plan: plan.PlanState{ID: "plan-crash", MergeCommitIntent: &intent}, Workspace: &plan.Workspace{Branch: crashfixture.SourceBranch, BaseBranch: crashfixture.DefaultBranch}},
 	}
 	events := &fakeEventAppender{}
-	service := Service{Git: fixture.Git, Events: events, Now: func() time.Time { return createdAt.Add(4 * time.Minute) }}
+	service := newTestService(Service{Git: fixture.Git, Events: events, Now: func() time.Time { return createdAt.Add(4 * time.Minute) }})
 
 	err := service.Merge(context.Background(), detail, Options{NoVerify: true})
 	if !errors.Is(err, ErrSingleResolutionRolledBack) {
@@ -216,7 +216,7 @@ func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.
 			defaultBefore := crashRev(t, fixture, crashfixture.DefaultBranch)
 			sourceBefore := crashRev(t, fixture, crashfixture.SourceBranch)
 			events := &fakeEventAppender{}
-			service := Service{
+			service := newTestService(Service{
 				Git: fixture.Git,
 				NewGit: func(dir string) GitClient {
 					if dir != fixture.SourceWorktree {
@@ -225,7 +225,7 @@ func TestMergeNoSquashRefusesActiveSingleResolutionBeforeRefMutation(t *testing.
 					return fixture.SourceGit
 				},
 				Cleaner: successfulCleanup(), Events: events,
-			}
+			})
 
 			err := service.Merge(context.Background(), detail, Options{Force: true, NoSquash: true, NoVerify: true})
 			if !errors.Is(err, ErrSingleResolutionRejected) || !strings.Contains(err.Error(), "--no-squash") {

@@ -13,6 +13,82 @@ import (
 	"github.com/iamseth/tao/internal/repoadmission"
 )
 
+func TestOrdinaryServiceAdmissionDefaults(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := t.TempDir()
+	if out, err := exec.Command("git", "init", root).CombinedOutput(); err != nil { // #nosec G204 -- test-owned temporary repository.
+		t.Fatalf("init: %s: %v", out, err)
+	}
+	detail := &plan.PlanDetail{Dir: t.TempDir()}
+	detail.State.Repo.Root = root
+	detail.State.Plan.ID = "fixture"
+	sentinel := errors.New("operation result")
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "caller")
+	err := repoadmission.With(context.Background(), repoadmission.Request{Root: root, Mode: repoadmission.Merge}, func(context.Context) error {
+		for _, fixture := range []struct {
+			name    string
+			options Options
+		}{
+			{"bare", Options{}},
+			{"options", testOptions(RunDependencies{})},
+			{"dependencies", Options{RunDependencies: testDependencies(nil, nil)}},
+		} {
+			t.Run(fixture.name, func(t *testing.T) {
+				service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, fixture.options)
+				called := false
+				err := service.WithPlanRunLock(ctx, Request{Input: detail.Dir}, func(got context.Context) error {
+					called = true
+					if got.Value(contextKey{}) != "caller" {
+						t.Fatal("lost caller context")
+					}
+					return sentinel
+				})
+				if !called || !errors.Is(err, sentinel) {
+					t.Fatalf("called=%v, err=%v", called, err)
+				}
+			})
+		}
+		// Production remains fail-closed under the very same lease, with an independent owner.
+		service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{})
+		err := service.WithPlanRunLock(ctx, Request{Input: detail.Dir}, func(context.Context) error { t.Fatal("production entered"); return nil })
+		var busy *repoadmission.ContentionError
+		if !errors.As(err, &busy) {
+			t.Fatalf("production: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOrdinaryServicePreservesRecordingGuard(t *testing.T) {
+	type contextKey struct{}
+	detail := &plan.PlanDetail{Dir: t.TempDir()}
+	detail.State.Repo.Root = "recorded-root"
+	ctx := context.WithValue(context.Background(), contextKey{}, "caller")
+	sentinel := errors.New("callback result")
+	calls := 0
+	guard := func(got context.Context, request repoadmission.Request, operation func(context.Context) error) error {
+		calls++
+		if got.Value(contextKey{}) != "caller" || request.Root != detail.State.Repo.Root || request.Mode != repoadmission.Run {
+			t.Fatalf("guard input: %v %+v", got, request)
+		}
+		return operation(context.WithValue(got, contextKey{}, "guard"))
+	}
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: guard}})
+	err := service.WithPlanRunLock(ctx, Request{Input: detail.Dir}, func(got context.Context) error {
+		if got.Value(contextKey{}) != "guard" {
+			t.Fatal("lost guard context")
+		}
+		return sentinel
+	})
+	if calls != 1 || !errors.Is(err, sentinel) {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
 func TestRepositoryAdmissionRefusesRunEntries(t *testing.T) {
 	testenv.SkipIfShort(t)
 	root := t.TempDir()
@@ -113,7 +189,7 @@ func TestRepositoryAdmissionGuardErrors(t *testing.T) {
 			return sentinel
 		}
 		repo := &memoryRunRepository{details: []*plan.PlanDetail{detail}}
-		service := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: guard}})
+		service := newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: guard}})
 		var err error
 		if outer {
 			err = service.WithPlanRunLock(context.Background(), Request{Input: detail.Dir}, func(context.Context) error { t.Fatal("entered"); return nil })

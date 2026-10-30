@@ -26,7 +26,7 @@ import (
 
 func TestPromptMaintenanceSuccessIsQuiet(t *testing.T) {
 	var out, errOut bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out: &out,
 		Err: &errOut,
 		PromptMaintenance: func() ([]promptinstall.Result, error) {
@@ -38,7 +38,7 @@ func TestPromptMaintenanceSuccessIsQuiet(t *testing.T) {
 				{Agent: runtimeconfig.AgentClaude, Status: "stale"},
 			}, nil
 		},
-	}
+	})
 
 	if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
 		t.Fatal(err)
@@ -56,13 +56,13 @@ func TestPromptMaintenanceFailuresDoNotBlockCommand(t *testing.T) {
 	for _, failure := range []string{"executable lookup", "prompt directory", "Pi extension inspection"} {
 		t.Run(failure, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			app := App{
+			app := newTestApp(App{
 				Out: &out,
 				Err: &errOut,
 				PromptMaintenance: func() ([]promptinstall.Result, error) {
 					return nil, errors.New(failure)
 				},
-			}
+			})
 			if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
 				t.Fatalf("requested command failed: %v", err)
 			}
@@ -100,7 +100,7 @@ func TestPromptMaintenanceSkipsDirectStatusAndNonCommandPaths(t *testing.T) {
 		{"unknown"},
 	} {
 		var out, errOut bytes.Buffer
-		_ = (App{Out: &out, Err: &errOut, PromptMaintenance: check}).Run(context.Background(), args)
+		_ = (newTestApp(App{Out: &out, Err: &errOut, PromptMaintenance: check})).Run(context.Background(), args)
 		if errOut.Len() != 0 {
 			t.Fatalf("%v emitted maintenance diagnostic: %q", args, errOut.String())
 		}
@@ -115,13 +115,13 @@ func TestPromptMaintenanceNilWriterAndBoundedFailure(t *testing.T) {
 		return nil, errors.New(strings.Repeat("bad\n\x1b", 2000))
 	}
 	var baseline bytes.Buffer
-	if err := (App{Out: &baseline}).Run(context.Background(), []string{"prompt", "plan"}); err != nil {
+	if err := (newTestApp(App{Out: &baseline})).Run(context.Background(), []string{"prompt", "plan"}); err != nil {
 		t.Fatal(err)
 	}
 	var out, diagnostics bytes.Buffer
 	for _, app := range []App{
-		{Out: &out, PromptMaintenance: maintain},
-		{Out: &out, Err: &diagnostics, PromptMaintenance: maintain},
+		newTestApp(App{Out: &out, PromptMaintenance: maintain}),
+		newTestApp(App{Out: &out, Err: &diagnostics, PromptMaintenance: maintain}),
 	} {
 		out.Reset()
 		if err := app.Run(context.Background(), []string{"prompt", "plan"}); err != nil {
@@ -143,7 +143,7 @@ func TestPromptMaintenanceDetectedRuntimes(t *testing.T) {
 	t.Setenv("HOME", home)
 	setPathExecutables(t, "pi", "claude")
 	var out, diagnostics bytes.Buffer
-	app := App{Out: &out, Err: &diagnostics, PromptMaintenance: maintainInstalledPrompts}
+	app := newTestApp(App{Out: &out, Err: &diagnostics, PromptMaintenance: maintainInstalledPrompts})
 	run := func() {
 		t.Helper()
 		out.Reset()
@@ -203,7 +203,7 @@ func TestPromptArgumentsStdinHandlesShellMetacharacters(t *testing.T) {
 	raw := "build a new \"export\" flow with `backticks` and $VARS and a \\ slash\n"
 	want := "build a new \"export\" flow with `backticks` and $VARS and a \\ slash"
 	var out bytes.Buffer
-	app := App{In: strings.NewReader(raw), Out: &out, Err: &out}
+	app := newTestApp(App{In: strings.NewReader(raw), Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"prompt", "plan", "--arguments-stdin"}); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestPromptCatchMeUpPreservesPeriodAndFocus(t *testing.T) {
 			} else if test.arguments != "" {
 				args = append(args, "--arguments", test.arguments)
 			}
-			app := App{In: strings.NewReader(test.arguments + "\n"), Out: &out, Err: &out}
+			app := newTestApp(App{In: strings.NewReader(test.arguments + "\n"), Out: &out, Err: &out})
 			if err := app.Run(context.Background(), args); err != nil {
 				t.Fatal(err)
 			}
@@ -249,7 +249,7 @@ func TestPromptCatchMeUpPreservesPeriodAndFocus(t *testing.T) {
 func TestPromptRendersCanonicalPrompts(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"prompt", "plan", "--arguments", "add export flow"}); err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestPromptTaoInsightsReviewRequiresCanonicalTaoModule(t *testing.T) {
 			}
 			withWorkingDir(t, root, func() {
 				var out bytes.Buffer
-				err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"prompt", "insights-review", "--arguments", "focus on docs"})
+				err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"prompt", "insights-review", "--arguments", "focus on docs"})
 				if test.wantErr {
 					if err == nil || err.Error() != "not in a tao repo" {
 						t.Fatalf("prompt error = %v, want exact identity error", err)
@@ -406,7 +406,7 @@ func TestPromptGroomNotesRendersWithoutTaoModule(t *testing.T) {
 	t.Chdir(t.TempDir()) // Rendering is portable; the prompt performs the identity gate.
 	focus := "dependencies; --repo elsewhere --plans-dir /elsewhere; apply now `touch sentinel`"
 	var out bytes.Buffer
-	app := App{In: strings.NewReader(focus), Out: &out, Err: &out}
+	app := newTestApp(App{In: strings.NewReader(focus), Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"prompt", "groom-notes", "--arguments-stdin"}); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestGroomNotesEvidenceCommandsAreReadOnly(t *testing.T) {
 			}
 			beforeRoot, beforeData := groomingSnapshot(t, root), groomingSnapshot(t, dataHome)
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, PromptMaintenance: func() ([]promptinstall.Result, error) { return nil, nil }}
+			app := newTestApp(App{Out: &out, Err: &out, PromptMaintenance: func() ([]promptinstall.Result, error) { return nil, nil }})
 			read := func(args ...string) (string, error) {
 				out.Reset()
 				err := app.Run(context.Background(), args)
@@ -589,7 +589,7 @@ func groomingSnapshot(t *testing.T, root string) map[string]string {
 func TestPromptRunExecutionMode(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	planDir := writeRunPlan(t, t.TempDir(), "20260430-1200-prompt", plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	if err := app.Run(context.Background(), []string{"prompt", "run", "--plan-dir", planDir, "--execution-mode", "current"}); err != nil {
 		t.Fatal(err)
@@ -615,7 +615,7 @@ func TestInstallPromptsWritesAndChecksPiPrompts(t *testing.T) {
 	t.Setenv("HOME", home)
 	root := filepath.Join(home, ".pi", "agent", "prompts")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +663,7 @@ func TestInstallPromptsRefusesUnmanagedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"install-prompts"})
+	err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"install-prompts"})
 	if err == nil || !strings.Contains(err.Error(), "not tao-managed") {
 		t.Fatalf("expected unmanaged file error, got %v", err)
 	}
@@ -675,7 +675,7 @@ func TestDoctorVerboseReportsWrapperStatus(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +701,7 @@ func TestDoctorVerboseReportsWrapperStatus(t *testing.T) {
 			t.Fatalf("expected %q in doctor output, got %q", want, out.String())
 		}
 	}
-	if !strings.Contains(out.String(), (App{}).outputPalette(&out).Paint(theme.RoleSuccess, "✓ current  ")) {
+	if !strings.Contains(out.String(), (newTestApp(App{})).outputPalette(&out).Paint(theme.RoleSuccess, "✓ current  ")) {
 		t.Fatalf("expected current wrappers, got %q", text)
 	}
 	verboseOutput := out.String()
@@ -734,7 +734,7 @@ func TestDoctorReportsMissingAndValidatesUsage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +767,7 @@ func TestDoctorCompactReportsStaleAndUnmanagedPrompts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	setPathExecutables(t, "claude")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
@@ -879,7 +879,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 	t.Setenv("TAO_AGENT", "pi")
 	setPathExecutables(t, "pi")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
@@ -944,7 +944,7 @@ func TestInstallPromptsAndDoctorManageEveryInstalledAgent(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	setPathExecutables(t, "claude", "pi")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
@@ -1004,7 +1004,7 @@ func TestInstallPromptsReportsNoSupportedAgents(t *testing.T) {
 	t.Setenv("HOME", home)
 	setPathExecutables(t)
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"install-prompts"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"install-prompts"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "no supported agents found in PATH") {
@@ -1034,7 +1034,7 @@ func TestDoctorPiReadinessReportsPassiveCapabilitiesWithoutRemoteClaim(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			probeDoctorPiReadiness = func(context.Context, string) error { return tc.probeErr }
 			var out bytes.Buffer
-			if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
+			if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 				t.Fatal(err)
 			}
 			text := stripANSIGreen(out.String())
@@ -1066,7 +1066,7 @@ func TestDoctorReportsToolCategoriesAndMissingWarnings(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", t.TempDir())
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"doctor"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1100,7 @@ func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
 	}
 	t.Setenv("PATH", bin)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"doctor", "--verbose"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1116,7 +1116,7 @@ func TestDoctorReportsPresentToolsAndFdfindAlias(t *testing.T) {
 			t.Fatalf("expected %q in doctor output, got %q", want, text)
 		}
 	}
-	if !strings.Contains(out.String(), (App{}).outputPalette(&out).Paint(theme.RoleSuccess, "✓ ok     ")+" pi (pi)") {
+	if !strings.Contains(out.String(), (newTestApp(App{})).outputPalette(&out).Paint(theme.RoleSuccess, "✓ ok     ")+" pi (pi)") {
 		t.Fatalf("expected green ok tool status, got %q", out.String())
 	}
 
@@ -1165,10 +1165,10 @@ func TestPromptApplicableOptionsStandalone(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			app := App{Out: &out, RuntimeEnv: snapshotWith(map[string]string{
+			app := newTestApp(App{Out: &out, RuntimeEnv: snapshotWith(map[string]string{
 				runtimeconfig.EnvCommitPolicy: "none", runtimeconfig.EnvExecutionMode: "current",
 				runtimeconfig.EnvPullRequest: "invalid", runtimeconfig.EnvSessionTimeout: "invalid",
-			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 			// A real packet exposes both option values, unlike mode-independent prose.
 			root := t.TempDir()
 			dir := writeRunPlan(t, root, "20260430-1200-options", plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
@@ -1190,7 +1190,7 @@ func TestPromptUsesEnvPolicyDefaults(t *testing.T) {
 	t.Setenv("TAO_COMMIT_POLICY", "slice")
 	t.Setenv("TAO_EXECUTION_MODE", "current")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"prompt", "run", "--plan-dir", "/tmp/plan"}); err != nil {
 		t.Fatal(err)
@@ -1227,9 +1227,9 @@ func TestDoctorReviewRoles(t *testing.T) {
 			calls := 0
 			probeDoctorPiReadiness = func(context.Context, string) error { calls++; return nil }
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, RuntimeEnv: snapshotWith(map[string]string{
+			app := newTestApp(App{Out: &out, Err: &out, RuntimeEnv: snapshotWith(map[string]string{
 				runtimeconfig.EnvAgent: tc.implementation, runtimeconfig.EnvReviewAgent: tc.reviewer,
-			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 			report, err := app.collectDoctorReport()
 			if err != nil {
 				t.Fatal(err)

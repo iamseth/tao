@@ -34,7 +34,7 @@ func TestComposedRunFlagDefaultsAreNotOverrides(t *testing.T) {
 		if explicit {
 			args = append(args, "--max-slices=0", "--no-review=false", "--dangerously-skip-permissions=false", "--auto-rework=false", "--agent=pi", "--session-timeout=0")
 		}
-		app := App{Err: io.Discard, RuntimeEnv: &base}
+		app := newTestApp(App{Err: io.Discard, RuntimeEnv: &base})
 		fs, _, err := app.parseArgs("run", args, app.registerRunFlags)
 		if err != nil {
 			t.Fatal(err)
@@ -70,7 +70,7 @@ func TestComposedRunFlagDefaultsAreNotOverrides(t *testing.T) {
 		}
 	}
 	invalid := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"max_slices": []byte(`-1`)}, runtimeconfig.LoadEnv(nil))
-	if _, err := (App{RuntimeEnv: &invalid}).runEnvDefaults(); err == nil {
+	if _, err := (newTestApp(App{RuntimeEnv: &invalid})).runEnvDefaults(); err == nil {
 		t.Fatal("invalid saved max_slices admitted")
 	}
 }
@@ -96,9 +96,9 @@ func TestRunScopedSettingsHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := snapshotWith(map[string]string{runtimeconfig.EnvRunModel: "env", runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "3m"})
-	app := (App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, *environment), Registry: func() NoteRegistry {
+	app := (newTestApp(App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, *environment), Registry: func() NoteRegistry {
 		return &fakeNoteRegistry{current: taodata.Repo{ID: "wrong"}, repos: []taodata.Repo{registered}}
-	}}).initializeSettings(ctx)
+	}})).initializeSettings(ctx)
 	old := executeSinglePlan
 	defer func() { executeSinglePlan = old }()
 	calls := 0
@@ -144,7 +144,7 @@ func TestDiagnosticCollectorsShareSnapshotAcrossRefreshes(t *testing.T) {
 	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
 	persistStatusRepository(t, registered)
 	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
-	app := App{RuntimeEnv: &snapshot, Registry: func() NoteRegistry { return registry }, RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
+	app := newTestApp(App{RuntimeEnv: &snapshot, Registry: func() NoteRegistry { return registry }, RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }})
 	settings := newUISettingsService(app)
 	debug := newUIDebugCollector(app, "tao")
 	for range 3 {
@@ -210,9 +210,9 @@ func TestModelConsumersComposeSelectedRepository(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
 				t.Fatal(err)
 			}
-			app := (App{Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(environment)), Registry: func() NoteRegistry {
+			app := (newTestApp(App{Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(environment)), Registry: func() NoteRegistry {
 				return &fakeNoteRegistry{current: taodata.Repo{ID: "wrong-checkout"}, repos: []taodata.Repo{registered}}
-			}}).initializeSettings(ctx)
+			}})).initializeSettings(ctx)
 			app, err := app.settingsForPlanRoot(ctx, registered.Root)
 			if err != nil {
 				t.Fatal(err)
@@ -245,7 +245,7 @@ func TestMergeModelsAndConstructorsUseInvocationSnapshot(t *testing.T) {
 		runtimeconfig.EnvMergeVerifyCommand: "captured-gate",
 	})
 	registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Resolver: "repo-resolver"}}}}
-	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }})
 	t.Setenv(runtimeconfig.EnvModel, "invalid later model")
 	t.Setenv(runtimeconfig.EnvMergeVerifyCommand, "later-gate")
 	for _, override := range []string{"", "explicit"} {
@@ -287,7 +287,7 @@ func TestInvocationSnapshotFreezesDefaultsUntilNextRun(t *testing.T) {
 	updater := &snapshotMutatingUpdater{mutate: func() {
 		t.Setenv(runtimeconfig.EnvExecutionMode, "isolated")
 	}}
-	app := App{Out: &out, Err: io.Discard, SelfUpdater: updater}
+	app := newTestApp(App{Out: &out, Err: io.Discard, SelfUpdater: updater})
 	for _, want := range []string{"current", "isolated"} {
 		out.Reset()
 		if err := app.Run(context.Background(), []string{"run", "--help"}); err != nil {
@@ -320,7 +320,7 @@ func TestSnapshotHelpRetainsValidDefaultsBesideInvalidFields(t *testing.T) {
 	for _, command := range []string{"run", "prompt", "note"} {
 		t.Run(command, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{command, "--help"}); err != nil {
+			if err := (newTestApp(App{Out: &out, Err: io.Discard})).Run(context.Background(), []string{command, "--help"}); err != nil {
 				t.Fatal(err)
 			}
 			wants := []string{"execution mode: isolated or current (default current)", "commit policy: slice or none (default slice)"}
@@ -357,7 +357,7 @@ func TestInjectedSnapshotIsSharedWithoutReloading(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvUpdate, "invalid")
 	var out bytes.Buffer
 	updater := &fakeSelfUpdater{}
-	app := App{Out: &out, Err: io.Discard, RuntimeEnv: &snapshot, SelfUpdater: updater}
+	app := newTestApp(App{Out: &out, Err: io.Discard, RuntimeEnv: &snapshot, SelfUpdater: updater})
 	for _, command := range []string{"run", "prompt", "note"} {
 		out.Reset()
 		if err := app.Run(context.Background(), []string{command, "--help"}); err != nil {
@@ -405,11 +405,11 @@ func TestInvocationLookupCountsAcrossHelpExecutionAndDiagnostics(t *testing.T) {
 					counts[key]++
 					return model, key == runtimeconfig.EnvModel
 				})
-				app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: &snapshot,
+				app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: &snapshot,
 					SelfUpdater: &fakeSelfUpdater{},
 					Repository:  func(string) Repository { return fakeRepository{} },
 					Registry:    func() NoteRegistry { return &fakeNoteRegistry{} },
-				}
+				})
 				// Ambient mutation cannot trigger hidden reloads in any path.
 				t.Setenv(runtimeconfig.EnvModel, "invalid later model")
 				if err := app.Run(context.Background(), args); err != nil {
@@ -437,7 +437,7 @@ func TestLowerLevelSnapshotDefaultsAndConsumption(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvExecutionMode, "current")
 	t.Setenv(runtimeconfig.EnvTheme, "gruvbox")
 	t.Setenv(runtimeconfig.EnvUpdate, "invalid")
-	app := App{}
+	app := newTestApp(App{})
 	if !reflect.DeepEqual(app.flagDefaults(), runtimeconfig.LoadEnv(nil).Defaults()) {
 		t.Fatal("lower-level defaults loaded process environment")
 	}
@@ -466,7 +466,7 @@ func TestPresentationDiagnosticsDoNotRejectExecutionDefaults(t *testing.T) {
 	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
 		return "invalid", key == runtimeconfig.EnvTheme || key == runtimeconfig.EnvRunHeader
 	})
-	app := App{RuntimeEnv: &snapshot}
+	app := newTestApp(App{RuntimeEnv: &snapshot})
 	defaults, err := app.envDefaultsFor(runtimeconfig.EnvTheme, runtimeconfig.EnvRunHeader)
 	if err != nil || !defaults.RunHeader || !reflect.DeepEqual(defaults.Theme, theme.Default()) {
 		t.Fatalf("presentation failures did not retain built-ins: %+v, %v", defaults, err)
@@ -490,7 +490,7 @@ func TestReviewAgentUnregisteredAndMissingRepository(t *testing.T) {
 	root := initTestGitRepo(t)
 	t.Chdir(root)
 	registry := taodata.Registry{DataHome: t.TempDir()}
-	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "claude"}), Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "claude"}), Registry: func() NoteRegistry { return registry }})
 	repository, err := app.currentRepositoryRunOptions(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -512,7 +512,7 @@ func TestReviewAgentUnregisteredAndMissingRepository(t *testing.T) {
 func TestReviewAgentSnapshotAdmission(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 	repo := plan.NewFileRepository(fixture.root)
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "invalid"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "invalid"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 	for _, command := range []string{"run", "review", "rework"} {
 		var err error
 		switch command {
@@ -533,7 +533,7 @@ func TestReviewAgentSnapshotAdmission(t *testing.T) {
 }
 
 func TestReviewAgentFlagPrecedence(t *testing.T) {
-	app := App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi", runtimeconfig.EnvReviewAgent: "pi"})}
+	app := newTestApp(App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi", runtimeconfig.EnvReviewAgent: "pi"})})
 	repository := repositoryRunOptions((taodata.Repo{}).WithReviewAgentDefault("claude"))
 	for _, test := range []struct{ arg, want string }{{"", "claude"}, {"--review-agent=pi", "pi"}, {"--review-agent=claude", "claude"}} {
 		args := []string{}
@@ -566,7 +566,7 @@ func TestOperationSnapshotAdmission(t *testing.T) {
 			if command == "prompt" {
 				key = runtimeconfig.EnvExecutionMode
 			}
-			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"})}
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"})})
 			var err error
 			switch command {
 			case "run":
@@ -592,11 +592,11 @@ func TestReviewSnapshotApplicability(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 			before := readText(t, filepath.Join(fixture.dir, "state.json"))
-			app := App{Out: io.Discard, Err: io.Discard,
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard,
 				RuntimeEnv:     snapshotWith(map[string]string{key: "invalid value"}),
 				Registry:       func() NoteRegistry { return &fakeNoteRegistry{} },
 				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Fatal("provider called after rejected admission") }),
-			}
+			})
 			repo := plan.NewFileRepository(fixture.root)
 			if err := app.review(context.Background(), repo, []string{fixture.id}); err != nil {
 				t.Fatalf("persisted review admitted execution settings: %v", err)
@@ -614,7 +614,7 @@ func TestReviewSnapshotApplicability(t *testing.T) {
 func TestPromptSnapshotApplicability(t *testing.T) {
 	for _, key := range []string{runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode} {
 		t.Run(key, func(t *testing.T) {
-			app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}), Registry: func() NoteRegistry { t.Fatal("rendering looked up repository"); return nil }}
+			app := newTestApp(App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}), Registry: func() NoteRegistry { t.Fatal("rendering looked up repository"); return nil }})
 			if err := app.prompt(context.Background(), nil, []string{"plan", "--commit-policy=invalid", "--execution-mode=invalid"}); err != nil {
 				t.Fatalf("non-run prompt consumed run settings: %v", err)
 			}
@@ -630,7 +630,7 @@ func TestPromptAndTriageIgnoreUnrelatedEnvironment(t *testing.T) {
 	for _, key := range []string{runtimeconfig.EnvSessionWarnPercent, runtimeconfig.EnvUpdate, runtimeconfig.EnvAutoRework, runtimeconfig.EnvMergeReviewModel, runtimeconfig.EnvAggregateReviewConvergenceWindow, runtimeconfig.EnvPlannerRoutingArms, runtimeconfig.EnvMaxSliceCostDeprecated} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "invalid value")
-			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})})
 			if err := app.prompt(context.Background(), nil, []string{"plan"}); err != nil {
 				t.Fatalf("prompt rejected unused setting: %v", err)
 			}
@@ -648,12 +648,12 @@ func TestAppRunRejectsConsumedSettingsBeforeExecution(t *testing.T) {
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 			before := readText(t, filepath.Join(fixture.dir, "state.json"))
 			slicesBefore := readText(t, filepath.Join(fixture.dir, "slices.json"))
-			app := App{
+			app := newTestApp(App{
 				Out: io.Discard, Err: io.Discard,
 				RuntimeEnv:     snapshotWith(map[string]string{runtimeconfig.EnvSessionTimeout: "invalid"}),
 				Repository:     func(string) Repository { return plan.NewFileRepository(fixture.root) },
 				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Fatal("provider called after rejected admission") }),
-			}
+			})
 			err := app.Run(context.Background(), append(args, fixture.id))
 			if err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvSessionTimeout) {
 				t.Fatalf("consumed setting not rejected: %v", err)
@@ -680,9 +680,9 @@ func TestRunIgnoresSettingsOwnedByOtherConsumers(t *testing.T) {
 				return nil
 			}
 			t.Cleanup(func() { executeSinglePlan = old })
-			app := App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return &fakeNoteRegistry{} }, RuntimeEnv: snapshotWith(map[string]string{
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return &fakeNoteRegistry{} }, RuntimeEnv: snapshotWith(map[string]string{
 				key: "invalid value", runtimeconfig.EnvPullRequest: "yes", runtimeconfig.EnvSessionTimeout: "0",
-			})}
+			})})
 			// Direct admission excludes startup update and lower-level budget policy.
 			err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--no-review", "--pull-request=false", "--max-slices=0", fixture.id})
 			if err != nil || calls != 1 {
@@ -709,7 +709,7 @@ func TestBudgetRenderConsumersUseCapturedValuesAndIgnoreUnusedSettings(t *testin
 	for _, command := range []string{"show", "validate"} {
 		t.Run(command, func(t *testing.T) {
 			var out bytes.Buffer
-			app := App{Out: &out, Err: io.Discard, RuntimeEnv: snapshot}
+			app := newTestApp(App{Out: &out, Err: io.Discard, RuntimeEnv: snapshot})
 			var err error
 			if command == "show" {
 				err = app.show(context.Background(), repo, []string{"example"})
@@ -726,7 +726,7 @@ func TestBudgetRenderConsumersUseCapturedValuesAndIgnoreUnusedSettings(t *testin
 			}
 		})
 	}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvBudgetSliceCostDeprecated: "invalid"})}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvBudgetSliceCostDeprecated: "invalid"})})
 	if err := app.show(context.Background(), repo, []string{"--json", "example"}); err != nil {
 		t.Fatalf("JSON show consumed unused budgets: %v", err)
 	}
@@ -754,9 +754,9 @@ func TestReadOnlyBudgetConsumersUseSelectedRepository(t *testing.T) {
 		}
 		for _, command := range []string{"show", "validate"} {
 			var out bytes.Buffer
-			app := (App{Out: &out, Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid-unrelated"})), Registry: func() NoteRegistry {
+			app := (newTestApp(App{Out: &out, Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid-unrelated"})), Registry: func() NoteRegistry {
 				return &fakeNoteRegistry{current: taodata.Repo{ID: "wrong-checkout"}, repos: []taodata.Repo{registered}}
-			}}).initializeSettings(ctx)
+			}})).initializeSettings(ctx)
 			repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
 			var err error
 			if command == "show" {
@@ -780,13 +780,13 @@ func TestBudgetConsumersRejectInvalidThresholds(t *testing.T) {
 	for _, command := range []string{"show", "validate", "run", "review"} {
 		t.Run(command, func(t *testing.T) {
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-			app := App{Out: io.Discard, Err: io.Discard,
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard,
 				RuntimeEnv:     snapshotWith(map[string]string{runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid"}),
 				Repository:     func(string) Repository { return plan.NewFileRepository(fixture.root) },
 				Registry:       func() NoteRegistry { return &fakeNoteRegistry{} },
 				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) { t.Error("provider called after rejected budget") }),
 				CommandRunner:  func(context.Context, string, string, []string, io.Writer, io.Writer) error { return context.Canceled },
-			}
+			})
 			args := []string{command, fixture.id}
 			if command == "review" {
 				args = []string{command, "--run", fixture.id}
@@ -819,14 +819,14 @@ func TestRunReworkRestartRejectsInvalidHardCapsBeforeReopening(t *testing.T) {
 			}
 			repo := newRecordingAutoReworkRepository(planID, detail)
 			providerCalls := 0
-			app := App{
+			app := newTestApp(App{
 				Out: io.Discard, Err: io.Discard, Now: func() time.Time { return now },
 				RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
 				Registry:   func() NoteRegistry { return &fakeNoteRegistry{} },
 				ProcessStarter: fakeCLIProcessStarter(t, "", func(string) {
 					providerCalls++
 				}),
-			}
+			})
 			// The captured error must win even if the live environment is repaired.
 			t.Setenv(key, "0")
 			err = app.run(context.Background(), repo, []string{"--rework-restart", planID})
@@ -877,11 +877,11 @@ func TestRunNonSlicePathsIgnoreInvalidHardCaps(t *testing.T) {
 					return nil
 				}
 				t.Cleanup(func() { executeSinglePlan = old })
-				app := App{Out: io.Discard, Err: io.Discard,
+				app := newTestApp(App{Out: io.Discard, Err: io.Discard,
 					RepositoryAdmission: testRepositoryAdmission,
 					RuntimeEnv:          snapshotWith(map[string]string{key: "invalid"}),
 					Registry:            func() NoteRegistry { return &fakeNoteRegistry{} },
-				}
+				})
 				err := app.run(context.Background(), repo, append(args, planID))
 				if tc.rejected {
 					if err == nil || !strings.Contains(err.Error(), key) || calls != 0 {
@@ -913,7 +913,7 @@ func TestDoctorUsesCapturedReviewRolesAndRepositoryDefaults(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvAgent, "invalid")
 	t.Setenv(runtimeconfig.EnvReviewAgent, "invalid")
 	registry := &fakeNoteRegistry{}
-	app := App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{RuntimeEnv: snapshot, Registry: func() NoteRegistry { return registry }})
 	for _, tc := range []struct {
 		name, override, env string
 		want                runtimeconfig.AgentKind
@@ -952,9 +952,9 @@ func TestPromptManagementConsumesOnlySelectedAgent(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv(runtimeconfig.EnvAgent, "invalid")
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
 		runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "invalid",
-	})}
+	})})
 	report, err := app.collectDoctorReport()
 	if err != nil || report.selectedAgent != runtimeconfig.AgentClaude {
 		t.Fatalf("doctor did not use captured agent independently of session settings: %+v, %v", report, err)
@@ -1069,9 +1069,9 @@ func TestNoteRunInheritsCapturedReworkSettings(t *testing.T) {
 }
 
 func TestAutoReworkUsesTypedSnapshotNotRegisteredDisplayDefaults(t *testing.T) {
-	app := App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+	app := newTestApp(App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
 		runtimeconfig.EnvAutoRework: "off", runtimeconfig.EnvMaxReworkAttempts: "0",
-	})}
+	})})
 	fs, _, err := app.parseArgs("run", nil, registerRunFlags)
 	if err != nil {
 		t.Fatal(err)
@@ -1092,7 +1092,7 @@ func TestInvalidUpdateAllowsDiagnosticEntryWithoutUpdater(t *testing.T) {
 			updater := &fakeSelfUpdater{}
 			registry := taodata.NewRegistry(t.TempDir())
 			repositoryCalls := 0
-			app := App{
+			app := newTestApp(App{
 				In: strings.NewReader("q"), Out: &out, Err: io.Discard,
 				SelfUpdater: updater,
 				Repository: func(string) Repository {
@@ -1104,7 +1104,7 @@ func TestInvalidUpdateAllowsDiagnosticEntryWithoutUpdater(t *testing.T) {
 					return &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
 				},
 				UITerminal: &uiTerminalStub{size: term.Size{Width: 160, Height: 60}},
-			}
+			})
 			err := app.Run(context.Background(), args)
 			if err != nil {
 				t.Fatal(err)

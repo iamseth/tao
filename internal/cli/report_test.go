@@ -236,12 +236,12 @@ func TestReportWriteFailureIsNonSensitiveAndLeavesPlanArtifactsUnchanged(t *test
 }
 
 func reportTestApp(root string, out, errOut *bytes.Buffer) App {
-	return App{
+	return newTestApp(App{
 		Out: out,
 		Err: errOut,
 		Now: func() time.Time { return time.Date(2026, 8, 4, 16, 30, 0, 0, time.UTC) },
 		Repository: func(string) Repository {
 			return plan.NewFileRepository(root)
 		},
-	}
+	})
 }

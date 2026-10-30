@@ -89,7 +89,7 @@ func TestSliceCompleteObservedGatesAndOptionalClaims(t *testing.T) {
 				args = append(args, "--verification-results-file", claims)
 			}
 			var out bytes.Buffer
-			if err := (App{Out: &out, Err: &out}).Run(context.Background(), args); err != nil {
+			if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), args); err != nil {
 				t.Fatal(err)
 			}
 			d := reloadCLICompletion(t, record)
@@ -143,7 +143,7 @@ func TestSliceCompleteRejectsInputsBeforeGates(t *testing.T) {
 			writeCLICommitFile(t, filepath.Dir(claims), "claims", tc.claims)
 			args = append(args, "--verification-results-file", claims)
 			var out bytes.Buffer
-			err := (App{Out: &out, Err: &out}).Run(context.Background(), args)
+			err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), args)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %s", err, tc.want)
 			}
@@ -162,7 +162,7 @@ func TestSliceCompleteFailureRepairAndRecovery(t *testing.T) {
 	record, args := newVerifiedCLICompletion(t, "slice", "test -f repaired.go")
 	root := record.Detail().Slices.Slices[0].ExecutionRoot
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	err := app.Run(context.Background(), args)
 	for _, want := range []string{"No intent recorded", "Plan-Owned Files", "--gate-command", "--failing-path", "--invalid-command", "--corrected-command"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -206,7 +206,7 @@ func TestSliceCompleteMechanicalCorrection(t *testing.T) {
 	}
 	var out bytes.Buffer
 	calls := 0
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
 		if name != "sh" {
 			return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
 		}
@@ -219,7 +219,7 @@ func TestSliceCompleteMechanicalCorrection(t *testing.T) {
 			t.Fatalf("unsafe correction %v", argv)
 		}
 		return nil
-	}}
+	}})
 	if err := app.Run(context.Background(), args); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestSliceCompleteCommandSignalCancelsGate(t *testing.T) {
 	}
 	t.Cleanup(func() { newCommandSignalContext = old })
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
 		if name != "sh" {
 			return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
 		}
@@ -251,7 +251,7 @@ func TestSliceCompleteCommandSignalCancelsGate(t *testing.T) {
 			t.Fatal("gate ignored signal")
 			return nil
 		}
-	}}
+	}})
 	if err := app.Run(context.Background(), args); !errors.Is(err, context.Canceled) {
 		t.Fatalf("signal: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestSliceCompleteHistoricalInputsRecoverVerbatim(t *testing.T) {
 	}
 	args = args[:7] // Historical intent, not a fresh proposal.
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), args); err == nil || !strings.Contains(err.Error(), "original --verification-results-file") {
 		t.Fatalf("missing historical input: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestSliceCompleteHistoricalInputsRecoverVerbatim(t *testing.T) {
 
 func TestSliceCompleteHelpAndCompletion(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"slice-complete", "--help"}); err != nil {
 		t.Fatal(err)
 	}

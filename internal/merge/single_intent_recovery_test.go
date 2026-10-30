@@ -116,7 +116,7 @@ func resolvedExactEditsFixture(t *testing.T) (realGitWorktree, *plan.PlanDetail,
 	if err := detail.State.Plan.MergeCommitIntent.Validate(); err != nil {
 		t.Fatalf("resolved intent fixture is invalid: %v", err)
 	}
-	return fixture, detail, Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}
+	return fixture, detail, newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})
 }
 
 // TestInspectSingleMergeIntentRecoveryRefusesUnrelatedPlanWorktreeDirt guards
@@ -204,7 +204,7 @@ func TestRestartSingleMergeClearsOnlyObservedStaleIntent(t *testing.T) {
 	advanced := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 
 	planDir, intent := persistSingleMergeRestartPlan(t, fixture, parent, sourceHead)
-	result, err := (Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}).RestartSingleMerge(context.Background(), planDir)
+	result, err := (newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})).RestartSingleMerge(context.Background(), planDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestRestartSingleMergeIsIdempotentAfterSuccessfulClear(t *testing.T) {
 	sourceHead := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.planBranch)
 	runRealGit(t, fixture.repoRoot, "commit", "--allow-empty", "-m", "advance default")
 	planDir, _ := persistSingleMergeRestartPlan(t, fixture, parent, sourceHead)
-	service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}
+	service := newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})
 
 	if _, err := service.RestartSingleMerge(context.Background(), planDir); err != nil {
 		t.Fatal(err)
@@ -282,7 +282,7 @@ func TestRestartSingleMergeInterruptedSettlementCannotRecommendOrPerformOrdinary
 	}
 	writeMergeRestartJournal(t, planDir, settled, event)
 
-	service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}
+	service := newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})
 	result, err := service.RestartSingleMerge(context.Background(), planDir)
 	if err != nil {
 		t.Fatalf("restart after interrupted settlement: %v", err)
@@ -313,10 +313,10 @@ func TestMergeAfterRestartRejectsChangedReviewedHeadStillBasedOnStaleParent(t *t
 	advanced := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 	planDir, _ := persistSingleMergeRestartPlan(t, fixture, parent, sourceHead)
 	restartedAt := time.Date(2026, 9, 4, 22, 0, 0, 0, time.UTC)
-	service := Service{
+	service := newTestService(Service{
 		Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) },
 		Now: func() time.Time { return restartedAt },
-	}
+	})
 	if _, err := service.RestartSingleMerge(context.Background(), planDir); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestRestartSingleMergeRecoversLegacyIntentWithoutResolution(t *testing.T) {
 	if got := detail.State.Plan.MergeCommitIntent; got == nil || got.Resolution != nil || *got != intent {
 		t.Fatalf("decoded legacy intent = %#v", got)
 	}
-	service := Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}
+	service := newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})
 	recovery, err := service.InspectSingleMergeIntentRecovery(context.Background(), detail)
 	if err != nil {
 		t.Fatalf("classify legacy intent: %v", err)
@@ -403,7 +403,7 @@ func TestRestartSingleMergeConflictStillRequiresRebaseAndReview(t *testing.T) {
 	runRealGit(t, fixture.repoRoot, "commit", "-am", "default conflict")
 	planDir, _ := persistSingleMergeRestartPlan(t, fixture, parent, sourceHead)
 
-	result, err := (Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}).RestartSingleMerge(context.Background(), planDir)
+	result, err := (newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})).RestartSingleMerge(context.Background(), planDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestRestartSingleMergeRecordsExactIntendedSquashInsteadOfClearing(t *testin
 	runRealGit(t, fixture.repoRoot, "commit", "-F", messageFile)
 	landed := realGitOutput(t, fixture.repoRoot, "rev-parse", fixture.defaultBranch)
 
-	result, err := (Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }}).RestartSingleMerge(context.Background(), planDir)
+	result, err := (newTestService(Service{Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }})).RestartSingleMerge(context.Background(), planDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestRestartSingleMergeExactLandingVerificationFailureDoesNotRecordMerge(t *
 	}
 	events := &fakeEventAppender{}
 	cleaner := successfulCleanup()
-	service := Service{RuntimeEnv: mergeTestRuntimeEnv(), Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }, Runner: runner, Events: events, Cleaner: cleaner}
+	service := newTestService(Service{RuntimeEnv: mergeTestRuntimeEnv(), Git: gitops.NewClient(fixture.repoRoot, nil), NewGit: func(dir string) GitClient { return gitops.NewClient(dir, nil) }, Runner: runner, Events: events, Cleaner: cleaner})
 	result, err := service.RestartSingleMerge(context.Background(), planDir)
 	if !errors.Is(err, verifyErr) || !errors.Is(err, ErrVerifyFailed) {
 		t.Fatalf("restart verification error = %v, want verification failure", err)

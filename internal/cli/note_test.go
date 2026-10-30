@@ -72,7 +72,7 @@ func noteTestApp(t *testing.T, in any, repos ...taodata.Repo) (App, *bytes.Buffe
 			t.Fatal(err)
 		}
 	}
-	app := App{
+	app := newTestApp(App{
 		RepositoryAdmission: testRepositoryAdmission,
 		Out:                 out,
 		Err:                 errOut,
@@ -86,7 +86,7 @@ func noteTestApp(t *testing.T, in any, repos ...taodata.Repo) (App, *bytes.Buffe
 		RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth {
 			return taodata.RepoHealth{Status: taodata.RepoHealthOK}
 		},
-	}
+	})
 	if reader, ok := in.(interface{ Read([]byte) (int, error) }); ok {
 		app.In = reader
 	}
@@ -97,7 +97,7 @@ func noteArchiveTestApp(t *testing.T, registered taodata.Repo) (App, *bytes.Buff
 	t.Helper()
 	out := new(bytes.Buffer)
 	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}, dir: t.TempDir()}
-	app := App{
+	app := newTestApp(App{
 		In:       strings.NewReader(""),
 		Out:      out,
 		Err:      io.Discard,
@@ -106,7 +106,7 @@ func noteArchiveTestApp(t *testing.T, registered taodata.Repo) (App, *bytes.Buff
 			return note.NewRepository(dir, ref)
 		},
 		Repository: func(dir string) Repository { return plan.NewFileRepository(dir) },
-	}
+	})
 	return app, out, registry
 }
 
@@ -529,7 +529,7 @@ func TestNoteRunRejectsConcurrentSourceMutations(t *testing.T) {
 func TestNoteRequiresRegistrationAndValidatesInput(t *testing.T) {
 	current := taodata.Repo{ID: "missing", Name: "missing", Root: "/missing"}
 	missingRegistry := &fakeNoteRegistry{current: current, dir: t.TempDir()}
-	app := App{In: strings.NewReader("text"), Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return missingRegistry }}
+	app := newTestApp(App{In: strings.NewReader("text"), Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return missingRegistry }})
 	if err := app.Run(context.Background(), []string{"note", "create"}); err == nil || !strings.Contains(err.Error(), "tao init") {
 		t.Fatalf("expected init guidance, got %v", err)
 	}

@@ -50,7 +50,7 @@ func TestLifecycleReviewReworkRebase(t *testing.T) {
 		review:     plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictChangesRequested, Summary: "rework", FindingsCount: 1, Findings: []plan.ReviewFinding{finding}, Base: newBase, Head: rebasedHead, ReviewedAt: fixture.now.Add(3 * time.Minute)},
 		serialized: &reviewSerialized,
 	}
-	reviewService := NewService(plan.NewFileRepository(fixture.plansRoot), io.Discard, Options{
+	reviewService := newTestService(plan.NewFileRepository(fixture.plansRoot), io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeIsolated, ReviewEnabled: true}},
 		RunDependencies: RunDependencies{
 			ReviewCreator: reviewer,
@@ -108,7 +108,7 @@ func TestLifecycleReviewReworkRebaseRecoveryVariants(t *testing.T) {
 			}
 
 			executor := &lifecycleRecoveryExecutor{err: errors.New("stop after recovery")}
-			service := NewService(plan.NewFileRepository(fixture.plansRoot), io.Discard, Options{
+			service := newTestService(plan.NewFileRepository(fixture.plansRoot), io.Discard, Options{
 				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, MaxSlices: 1, ReviewEnabled: false}},
 				RunDependencies: RunDependencies{SliceExecutor: executor},
 			})

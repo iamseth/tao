@@ -54,7 +54,7 @@ func TestRunHeaderSnapshotDefaults(t *testing.T) {
 			snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
 				return value, key == runtimeconfig.EnvRunHeader
 			})
-			app := App{Err: io.Discard, RuntimeEnv: &snapshot}
+			app := newTestApp(App{Err: io.Discard, RuntimeEnv: &snapshot})
 			fs, _, err := app.parseArgsFor(&runCommand, nil)
 			if err != nil {
 				t.Fatal(err)

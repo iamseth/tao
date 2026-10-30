@@ -15,7 +15,7 @@ func TestUIHistoryCollectorLoadsOldAndUndatedPlansWithoutChangingMonitorDefault(
 	old := now.AddDate(-1, 0, 0)
 	recent := now.Add(-time.Hour)
 	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: t.TempDir(), RuntimeStatusDir: t.TempDir()}
-	app := App{
+	app := newTestApp(App{
 		Now:      func() time.Time { return now },
 		Registry: func() NoteRegistry { return monitorRegistryStub{entries: []taodata.RepoInventoryEntry{entry}} },
 		Repository: func(string) Repository {
@@ -26,7 +26,7 @@ func TestUIHistoryCollectorLoadsOldAndUndatedPlansWithoutChangingMonitorDefault(
 				{ID: "undated", Status: plan.StatusCompleted},
 			}}
 		},
-	}
+	})
 	for _, tt := range []struct {
 		name   string
 		all    bool

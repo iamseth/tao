@@ -33,7 +33,7 @@ func TestSettingsRelativeDataHomePreservesEnvironment(t *testing.T) {
 				runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "1m", "TAO_UPDATE": "off",
 				"TAO_BUDGET_SLICE_COST_WARN": "0", "TAO_BUDGET_SLICE_COST_STOP": "0",
 			}
-			app := (App{RuntimeEnv: snapshotWith(values)}).initializeSettings(context.Background())
+			app := (newTestApp(App{RuntimeEnv: snapshotWith(values)})).initializeSettings(context.Background())
 			for setting, want := range map[string]string{"agent": "claude", "session_timeout": "1m0s", "update": "off", "budget.slice.cost.stop": "0"} {
 				found := false
 				for _, row := range app.envSnapshot().SettingsStatus() {
@@ -56,7 +56,7 @@ func TestSettingsRelativeDataHomePreservesEnvironment(t *testing.T) {
 				t.Fatalf("relative config update: %v", err)
 			}
 			values[runtimeconfig.EnvSessionTimeout] = "invalid"
-			invalid := (App{RuntimeEnv: snapshotWith(values)}).initializeSettings(context.Background())
+			invalid := (newTestApp(App{RuntimeEnv: snapshotWith(values)})).initializeSettings(context.Background())
 			if _, err := invalid.envDefaultsFor(runtimeconfig.EnvSessionTimeout); err == nil {
 				t.Fatal("invalid environment admitted")
 			}
@@ -68,7 +68,7 @@ func TestSettingsInvocationFrozenAndRefresh(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
 	writeGlobalSettings(t, home, `{"models":{"model":"first"}}`)
-	app := App{SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}
+	app := newTestApp(App{SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})
 	first := app.initializeSettings(ctx)
 	if got := first.flagDefaults().Base; got != "first" {
 		t.Fatalf("model = %q", got)
@@ -89,7 +89,7 @@ func TestSettingsInvocationFrozenAndRefresh(t *testing.T) {
 
 func TestSettingsHelpAndCompletionDoNotCreateConfiguration(t *testing.T) {
 	home := t.TempDir()
-	app := App{Out: io.Discard, Err: io.Discard, SelfUpdater: &fakeSelfUpdater{}, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil)), Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, SelfUpdater: &fakeSelfUpdater{}, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil)), Repository: func(string) Repository { return fakeRepository{} }})
 	for _, args := range [][]string{{"help"}, {"run", "--help"}, {"complete", "plan-ids"}} {
 		if err := app.Run(context.Background(), args); err != nil {
 			t.Fatal(err)
@@ -106,7 +106,7 @@ func TestSettingsGlobalPresentationAndStartup(t *testing.T) {
 	home := t.TempDir()
 	writeGlobalSettings(t, home, `{"theme":"gruvbox","update":"off"}`)
 	updater := &fakeSelfUpdater{}
-	app := App{Out: io.Discard, Err: io.Discard, SelfUpdater: updater, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, SelfUpdater: updater, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})
 	selected := app.initializeSettings(ctx).withRuntimeTheme()
 	if selected.outputTheme().Name() != "gruvbox" {
 		t.Fatal("global theme ignored")
@@ -141,7 +141,7 @@ func TestSettingsDiagnosticsRemainAvailable(t *testing.T) {
 				var out testTerminalBuffer
 				var warnings bytes.Buffer
 				updater := &fakeSelfUpdater{}
-				app := App{In: strings.NewReader("q"), Out: &out, Err: &warnings, SelfUpdater: updater,
+				app := newTestApp(App{In: strings.NewReader("q"), Out: &out, Err: &warnings, SelfUpdater: updater,
 					SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil)),
 					Repository:      func(string) Repository { return fakeRepository{} },
 					Registry:        func() NoteRegistry { return taodata.NewRegistry(home) },
@@ -149,7 +149,7 @@ func TestSettingsDiagnosticsRemainAvailable(t *testing.T) {
 						return &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
 					},
 					UITerminal: &uiTerminalStub{size: term.Size{Width: 160, Height: 60}},
-				}
+				})
 				if err := app.Run(context.Background(), args); err != nil {
 					t.Fatal(err)
 				}
@@ -162,7 +162,7 @@ func TestSettingsDiagnosticsRemainAvailable(t *testing.T) {
 }
 
 func TestSettingsEarlyFailureStopsExecution(t *testing.T) {
-	app := (App{SettingsService: settings.NewService("", runtimeconfig.LoadEnv(nil))}).initializeSettings(context.Background())
+	app := (newTestApp(App{SettingsService: settings.NewService("", runtimeconfig.LoadEnv(nil))})).initializeSettings(context.Background())
 	if _, err := app.runEnvDefaults(); err == nil {
 		t.Fatal("invalid settings location admitted")
 	}
@@ -173,7 +173,7 @@ func TestSettingsStructuralFailureStopsExecution(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app := (App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}).initializeSettings(context.Background())
+	app := (newTestApp(App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})).initializeSettings(context.Background())
 	if _, err := app.runEnvDefaults(); err == nil {
 		t.Fatal("corrupt settings admitted")
 	}
@@ -184,7 +184,7 @@ func TestSettingsFieldAdmissionAndFrozenEnvironment(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", home)
 	t.Setenv(runtimeconfig.EnvModel, "captured")
 	writeGlobalSettings(t, home, `{"agent":"bad","models":{"model":"saved"},"update":"off"}`)
-	base := App{Out: io.Discard, Err: io.Discard}
+	base := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	if err := base.Run(context.Background(), []string{"version"}); err != nil {
 		t.Fatalf("unrelated invalid field blocked command: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestSettingsRepositoryCopies(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	app := (App{SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}).initializeSettings(ctx)
+	app := (newTestApp(App{SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})).initializeSettings(ctx)
 	writeGlobalSettings(t, home, `{"models":{"model":"later"}}`)
 	one, err := app.settingsForRepository(ctx, taodata.Repo{ID: "one"})
 	if err != nil {

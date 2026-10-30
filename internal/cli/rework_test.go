@@ -35,7 +35,7 @@ func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
 	planDir := t.TempDir()
 	var rendered string
 	snapshot := runtimeconfig.RuntimeEnv()
-	app := App{RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(_ context.Context, _ string, _ string, _ []string) (runpkg.Process, error) {
+	app := newTestApp(App{RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(_ context.Context, _ string, _ string, _ []string) (runpkg.Process, error) {
 		proc := newFakeCLIClaudeProcess(t)
 		go func() {
 			defer proc.finish()
@@ -47,7 +47,7 @@ func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
 			proc.writeEvent(`{"type":"result","result":"{\"classifications\":[{\"thread_node_id\":\"thread-a\",\"kind\":\"change\",\"rationale\":\"Requests a fix.\"}]}"}`)
 		}()
 		return proc, nil
-	}}
+	}})
 	var observed agentsession.Result
 	got, err := classifyReworkPRThreads(context.Background(), app, root, planDir, []forge.ReviewThread{{NodeID: "thread-a"}}, func(result agentsession.Result, _ string, _ error) { observed = result })
 	if err != nil || len(got) != 1 {
@@ -80,7 +80,7 @@ func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.
 	planDir := writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{finding}))
 	fixed := time.Date(2026, 6, 28, 12, 30, 0, 0, time.UTC)
 	var out bytes.Buffer
-	app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Now: func() time.Time { return fixed }}
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Now: func() time.Time { return fixed }})
 
 	if err := app.Run(context.Background(), []string{"--plans-dir", root, "rew", "rework"}); err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestReworkFromPullRequestRefusesPlanWithoutRecordedPullRequest(t *testing.T
 	planID := "20260628-1200-no-pr"
 	writeCLIReworkPlan(t, root, planID, plan.StatusCompleted, reworkReview(plan.ReviewVerdictApprove, nil))
 
-	err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
+	err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
 	if err == nil || !strings.Contains(err.Error(), "requires plan "+planID+" to have a recorded pull request") {
 		t.Fatalf("rework --from-pr error = %v, want missing recorded pull request", err)
 	}
@@ -187,7 +187,7 @@ func TestReworkFromPullRequestRunPreservesReviewAgent(t *testing.T) {
 		}
 		return stop
 	}
-	app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--from-pr", "--run", "--review-agent=claude", id})
 	if !errors.Is(err, stop) {
 		t.Fatalf("handoff: %v", err)
@@ -220,7 +220,7 @@ func TestReworkFromPullRequestEffortAdmissionWithoutRun(t *testing.T) {
 				snapshot := runtimeconfig.ResolveSettings(nil, tc.saved, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: provider, runtimeconfig.EnvEffort: tc.effort}))
 				calls := 0
 				starter := reworkMetricsProcessStarter(t, provider, "reported", nil, &calls)
-				app := App{RepositoryAdmission: testRepositoryAdmission, RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (runpkg.Process, error) {
+				app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (runpkg.Process, error) {
 					if tc.wantError != "" {
 						t.Error("session launched before effort admission")
 					}
@@ -232,7 +232,7 @@ func TestReworkFromPullRequestEffortAdmissionWithoutRun(t *testing.T) {
 						t.Errorf("effort missing from runtime args: %v", args)
 					}
 					return starter(ctx, cwd, name, args)
-				}}
+				}})
 				repo := plan.NewFileRepository(root)
 				err := app.rework(context.Background(), repo, []string{"--from-pr", "--dry-run", id})
 				if tc.wantError != "" {
@@ -279,7 +279,7 @@ func TestReworkFromPullRequestDryRunPersistsAndPrintsTriageWithoutSlices(t *test
 	var out bytes.Buffer
 	fixed := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
 
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return fixed }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", "--dry-run", planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return fixed }})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", "--dry-run", planID}); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := plan.NewFileRepository(root).ResolvePlan(context.Background(), planID)
@@ -310,7 +310,7 @@ func TestReworkFromPullRequestDoesNotReconvertConsumedThreadAfterCompletedCycle(
 	stubCLIReworkPRPipeline(t, []forge.ReviewThread{original}, []reworkpkg.PRThreadClassification{originalClassification})
 	firstAt := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
 
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt }})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID}); err != nil {
 		t.Fatal(err)
 	}
 	repo := plan.NewFileRepository(root)
@@ -344,7 +344,7 @@ func TestReworkFromPullRequestDoesNotReconvertConsumedThreadAfterCompletedCycle(
 	}
 
 	stubCLIReworkPRPipeline(t, []forge.ReviewThread{original}, []reworkpkg.PRThreadClassification{originalClassification})
-	err = (App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt.Add(5 * time.Minute) }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
+	err = (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt.Add(5 * time.Minute) }})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID})
 	if err == nil || !strings.Contains(err.Error(), "no change-request threads to convert") {
 		t.Fatalf("second --from-pr error = %v, want consumed-thread refusal", err)
 	}
@@ -361,7 +361,7 @@ func TestReworkFromPullRequestDoesNotReconvertConsumedThreadAfterCompletedCycle(
 		originalClassification,
 		{ThreadNodeID: newThread.NodeID, Kind: reworkpkg.PRThreadKindChange, Rationale: "A newly arrived request."},
 	})
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt.Add(6 * time.Minute) }}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}, Now: func() time.Time { return firstAt.Add(6 * time.Minute) }})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", planID}); err != nil {
 		t.Fatalf("new thread --from-pr: %v", err)
 	}
 	detail, err = repo.ResolvePlan(context.Background(), planID)
@@ -388,7 +388,7 @@ func TestReworkFromPullRequestAllQuestionsProducesNoSlices(t *testing.T) {
 	})
 	var out bytes.Buffer
 
-	err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", "--from-authors", "all", planID})
+	err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--from-pr", "--from-authors", "all", planID})
 	if err == nil || !strings.Contains(err.Error(), "no change-request threads to convert") {
 		t.Fatalf("all-question rework error = %v", err)
 	}
@@ -426,7 +426,7 @@ func TestReworkReviewAgentAdmissionBeforeMutation(t *testing.T) {
 				}
 				repository := persistRepositorySettings(t, (taodata.Repo{ID: "admission-repo", Root: cliReworkPlanRepoRoot(t, dir)}).WithReviewAgentDefault(test.repository))
 				registry := &fakeNoteRegistry{current: repository, repos: []taodata.Repo{repository}}
-				app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+				app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }})
 				args := append([]string{id}, test.flags...)
 				if fromPR {
 					args = append(args, "--from-pr")
@@ -465,7 +465,7 @@ func TestReworkRunRetainsLockOwnershipForNestedRun(t *testing.T) {
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}}).Run(context.Background(), []string{"--plans-dir", root, "rework", "--run", "--review-agent=claude", planID})
+	err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &bytes.Buffer{}})).Run(context.Background(), []string{"--plans-dir", root, "rework", "--run", "--review-agent=claude", planID})
 	if !errors.Is(err, nestedErr) {
 		t.Fatalf("rework --run error = %v, want nested sentinel", err)
 	}
@@ -506,7 +506,7 @@ func TestReworkCommandRejectsAbandonedPlanAcrossAuthorityArmsWithoutSideEffects(
 			args := append([]string{"--plans-dir", root, "rework"}, test.args...)
 			args = append(args, planID)
 
-			err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out}).Run(context.Background(), args)
+			err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out})).Run(context.Background(), args)
 			if err == nil || !strings.Contains(err.Error(), "plan "+planID+" is abandoned") {
 				t.Fatalf("rework error = %v", err)
 			}
@@ -544,7 +544,7 @@ func TestReworkCommandRefusesWithoutMutating(t *testing.T) {
 			planDir := writeCLIReworkPlan(t, root, planID, test.status, test.review)
 			before := readReworkArtifacts(t, planDir)
 			var out bytes.Buffer
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out}
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out})
 
 			err := app.Run(context.Background(), []string{"--plans-dir", root, "rework", planID})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -575,7 +575,7 @@ func TestReworkCommandForceBypassesReviewAndFindingGate(t *testing.T) {
 			planID := "20260628-1200-force-" + test.name
 			writeCLIReworkPlan(t, root, planID, test.status, test.review)
 			var out bytes.Buffer
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out}
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out})
 
 			if err := app.Run(context.Background(), []string{"--plans-dir", root, "rework", "--force", planID}); err != nil {
 				t.Fatal(err)
@@ -615,7 +615,7 @@ func TestReworkRunCarriesOptionsThroughBothHandoffs(t *testing.T) {
 				stubCLIReworkPRPipeline(t, []forge.ReviewThread{thread}, []reworkpkg.PRThreadClassification{{ThreadNodeID: "thread", Kind: reworkpkg.PRThreadKindChange, Rationale: "fix"}})
 				args = []string{"--from-pr", "--run", id}
 			}
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}, map[string]string{"models.run_model": `"repo-run"`}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}, map[string]string{"models.run_model": `"repo-run"`}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 			t.Setenv(runtimeconfig.EnvModel, "changed")
 			old := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = old })
@@ -648,12 +648,12 @@ func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
 			const id = "20260628-1200-admission"
 			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 			before := readReworkArtifacts(t, dir)
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
 				ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
 					t.Fatal("provider called after rejected admission")
 					return nil, nil
 				},
-			}
+			})
 			err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
 			if err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("consumed value not rejected: %v", err)
@@ -673,7 +673,7 @@ func TestReworkRunRejectsRepositoryPolicyBeforeReopening(t *testing.T) {
 	negative := -1
 	repository := persistRepositorySettings(t, taodata.Repo{ID: "repo-a", Root: cliReworkPlanRepoRoot(t, dir), RunDefaults: &taodata.RepoRunDefaults{MaxReworkAttempts: &negative}})
 	registry := &fakeNoteRegistry{current: repository, repos: []taodata.Repo{repository}}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }})
 	err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
 	if err == nil || !strings.Contains(err.Error(), "max_rework_attempts") {
 		t.Fatalf("policy not rejected: %v", err)
@@ -688,14 +688,14 @@ func TestReworkWithoutRunIgnoresInvalidExecutionBudgets(t *testing.T) {
 	const id = "20260628-1200-unused-budgets"
 	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 	before := readReworkArtifacts(t, dir)
-	app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{
 		runtimeconfig.EnvSessionTimeout: "invalid", runtimeconfig.EnvAutoRework: "invalid", runtimeconfig.EnvCommitPolicy: "invalid",
 		runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid",
 		runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid", runtimeconfig.EnvBudgetSliceToolCallsDeprecated: "invalid",
 	}), ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
 		t.Fatal("ordinary rework invoked a provider")
 		return nil, nil
-	}}
+	}})
 	if err := app.rework(context.Background(), plan.NewFileRepository(root), []string{id}); err != nil {
 		t.Fatalf("unused budgets rejected: %v", err)
 	}

@@ -38,7 +38,7 @@ func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked)
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }})
 	if err := app.Run(context.Background(), []string{"approve", "--by", "Seth", planID, "--slice", sliceID}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,11 +92,11 @@ func TestApproveCommandSnapshotIdentity(t *testing.T) {
 			const planID, sliceID = "20260430-1200-run-plan", "002-identity-approval"
 			repo := blockedApproveRepo(planID, sliceID, plan.StatusBlocked)
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, RuntimeEnv: snapshotWith(map[string]string{
+			app := newTestApp(App{Out: &out, Err: &out, RuntimeEnv: snapshotWith(map[string]string{
 				runtimeconfig.EnvApprovedBy: " Captured Approver ",
 				runtimeconfig.EnvAgent:      "invalid", runtimeconfig.EnvPlannerRouting: "invalid",
 				runtimeconfig.EnvSessionTimeout: "invalid",
-			}), Repository: func(string) Repository { return repo }}
+			}), Repository: func(string) Repository { return repo }})
 			t.Setenv(runtimeconfig.EnvApprovedBy, "Changed Approver")
 			want := identity.Approver(" Captured Approver ")
 			args := []string{"approve", planID}
@@ -126,7 +126,7 @@ func TestApproveCommandStampsInjectedClock(t *testing.T) {
 
 	fixed := time.Date(2031, 2, 3, 4, 5, 6, 0, time.UTC)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Now: func() time.Time { return fixed }, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: &out, Err: &out, Now: func() time.Time { return fixed }, Repository: func(_ string) Repository { return repo }})
 	if err := app.Run(context.Background(), []string{"approve", "--by", "Seth", planID, "--slice", sliceID}); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestApproveCommandRejectsAbandonedPlanWithoutMutation(t *testing.T) {
 	repo.AddDetail(detail)
 	var out bytes.Buffer
 
-	err = (App{Out: &out, Err: &out}).approve(context.Background(), repo, []string{"--by", "Seth", planID})
+	err = (newTestApp(App{Out: &out, Err: &out})).approve(context.Background(), repo, []string{"--by", "Seth", planID})
 	if err == nil || !strings.Contains(err.Error(), "plan "+planID+" is abandoned: superseded by safer work") {
 		t.Fatalf("approve error = %v", err)
 	}
@@ -186,7 +186,7 @@ func TestApproveCommandRejectsNonGatedSlice(t *testing.T) {
 	repo.AddDetail(detail)
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }})
 	err := app.Run(context.Background(), []string{"approve", "--by", "Seth", planID})
 	if err == nil || !strings.Contains(err.Error(), "does not require approval") {
 		t.Fatalf("expected non-gated rejection, got %v", err)

@@ -968,7 +968,7 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent}},
 		RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: executor, CommandRunner: runGitFake(&[]string{}, nil)},
 	}
-	service := NewService(repository, io.Discard, options)
+	service := newTestService(repository, io.Discard, options)
 	err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})
 	if err == nil {
 		t.Fatal("run error = nil, want blocked telemetry-cap recovery guidance")
@@ -1006,7 +1006,7 @@ func TestSliceBudgetExceededBlocksCompletedSliceAndGuardsContinuation(t *testing
 
 	continueOptions := options
 	continueOptions.Continue = true
-	continueService := NewService(repository, io.Discard, continueOptions)
+	continueService := newTestService(repository, io.Discard, continueOptions)
 	err = continueService.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: continueOptions.ResolvedRunOptions})
 	if err == nil || !strings.Contains(err.Error(), "interrupted post-intent completion transaction") {
 		t.Fatalf("continue error = %v, want guarded completion recovery", err)

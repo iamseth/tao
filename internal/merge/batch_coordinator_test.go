@@ -130,7 +130,7 @@ func TestBatchCoordinatorPlansInitializesAndStartsNewBatch(t *testing.T) {
 			candidateB := BatchCandidate{PlanID: "plan-b"}
 			store := &coordinatorStore{}
 			workspaceOwner := &coordinatorWorkspace{}
-			coordinator := NewBatchCoordinator(BatchCoordinatorSeams{
+			coordinator := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: workspaceOwner,
 				Discovery: coordinatorDiscovery{result: BatchPreflightResult{
@@ -197,7 +197,7 @@ func TestBatchCoordinatorResumeProgress(t *testing.T) {
 	completed := landed
 	completed.Status = BatchStatusCompleted
 	workspaceOwner := &coordinatorWorkspace{}
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: workspaceOwner,
 		Lander:   &coordinatorLander{result: BatchLandResult{State: landed}},
@@ -256,7 +256,7 @@ func TestBatchCoordinatorRestartPlanningAndExecution(t *testing.T) {
 				if mode == "nil progress" {
 					seams.Progress = nil
 				}
-				result, err := NewBatchCoordinator(seams).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: dryRun})
+				result, err := newTestBatchCoordinator(seams).Run(context.Background(), BatchCoordinatorOptions{Restart: true, DryRun: dryRun})
 				wantErr := mode == "no active" || mode == "probe failure" || mode == "landing intent" || (mode == "partial cleanup" && !dryRun)
 				if (err != nil) != wantErr || (result.Restarted == nil) != wantErr {
 					t.Fatalf("result=%+v err=%v", result, err)
@@ -293,7 +293,7 @@ func TestBatchCoordinatorProgressDryRunRestartAndFailure(t *testing.T) {
 			candidates := []BatchCandidate{{PlanID: "plan-b"}, {PlanID: "plan-a"}}
 			workspaceOwner := &coordinatorWorkspace{}
 			integrator := &coordinatorIntegrator{err: tt.err}
-			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: workspaceOwner,
 				Discovery:  coordinatorDiscovery{result: BatchPreflightResult{Candidates: candidates}},
@@ -351,7 +351,7 @@ func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t 
 	}
 	batchesDir := filepath.Join(t.TempDir(), "merge-batches")
 	store := NewBatchStore(batchesDir, filepath.Join(batchesDir, "active.json"))
-	workspaceOwner, err := NewBatchWorkspace(repoRoot, batchesDir, nil)
+	workspaceOwner, err := newTestBatchWorkspace(repoRoot, batchesDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t 
 	}
 	done := make(chan runResult, 1)
 	go func() {
-		result, runErr := NewBatchCoordinator(BatchCoordinatorSeams{
+		result, runErr := newTestBatchCoordinator(BatchCoordinatorSeams{
 			Store: store, Workspace: workspaceOwner, Discovery: discovery,
 			RepositoryAdmission: testRepositoryAdmission,
 			Planner:             coordinatorPlanner{result: BatchPlanningResult{Ordered: []BatchCandidate{candidate}}},
@@ -434,7 +434,7 @@ func TestBatchCoordinatorReportsDiscoveryAndPlanningBlockersWithoutDurableState(
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &coordinatorStore{}
-			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: &coordinatorWorkspace{}, Discovery: coordinatorDiscovery{result: tt.preflight}, Planner: coordinatorPlanner{result: tt.planning},
 			}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -479,7 +479,7 @@ func TestBatchCoordinatorResumesWithOrdinaryEjectionAndPostLandingValidation(t *
 		t.Run(tt.name, func(t *testing.T) {
 			store := &coordinatorStore{activeID: tt.state.ID, loaded: tt.state}
 			workspaceOwner := &coordinatorWorkspace{landingIntent: tt.landingIntent}
-			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: workspaceOwner, Integrator: &coordinatorIntegrator{}, Lander: &coordinatorLander{},
 			}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -509,7 +509,7 @@ func TestBatchCoordinatorRefusesAbandonedSnapshotBeforeResumeOrRestart(t *testin
 			store := &coordinatorStore{activeID: state.ID, loaded: state}
 			workspaceOwner := &coordinatorWorkspace{}
 
-			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: workspaceOwner,
 				Discovery: BatchCandidateDiscovery{Repository: repo},
@@ -529,7 +529,7 @@ func TestBatchCoordinatorRestartRefusesDurableLandingIntent(t *testing.T) {
 	state := coordinatorActiveState(BatchStatusReadyToLand)
 	state.Landing = &BatchLanding{IntegrationHead: "integrated"}
 	workspaceOwner := &coordinatorWorkspace{landingIntent: true}
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: workspaceOwner,
 	}).Run(context.Background(), BatchCoordinatorOptions{Restart: true})
@@ -569,7 +569,7 @@ func TestBatchCoordinatorFreshBatchListsOrphanedIntegrations(t *testing.T) {
 					lister.err = errors.New("listing failed")
 				}
 				candidate := BatchCandidate{PlanID: "plan-a"}
-				result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+				result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 					RepositoryAdmission: testRepositoryAdmission,
 					Store:               &coordinatorStore{}, Workspace: boundary,
 					Discovery: coordinatorDiscovery{result: BatchPreflightResult{
@@ -600,7 +600,7 @@ func TestBatchCoordinatorResumeDoesNotListIntegrations(t *testing.T) {
 		t.Run(fmt.Sprintf("dry-run=%t", dryRun), func(t *testing.T) {
 			state := coordinatorActiveState(BatchStatusIntegrating)
 			lister := &coordinatorIntegrationLister{coordinatorWorkspace: &coordinatorWorkspace{}}
-			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: lister,
 				Integrator: &coordinatorIntegrator{},
@@ -625,7 +625,7 @@ func TestBatchCoordinatorDryRunCleansWorkspaceAndReleasesOwnership(t *testing.T)
 	store := &coordinatorStore{}
 	integrateErr := errors.New("simulation failed")
 	integrator := &coordinatorIntegrator{result: BatchIntegrateResult{State: BatchState{ID: "simulated"}}, err: integrateErr}
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		Store: store, Workspace: workspaceOwner,
 		Discovery:  coordinatorDiscovery{result: BatchPreflightResult{Candidates: []BatchCandidate{stateCandidate}, RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base"}},
 		Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: []BatchCandidate{stateCandidate}}},
@@ -653,7 +653,7 @@ func TestBatchCoordinatorDryRunRemovesWorkspaceAfterCancellation(t *testing.T) {
 	defer cancel()
 	candidate := BatchCandidate{PlanID: "plan-a"}
 	workspaceOwner := &coordinatorWorkspace{}
-	_, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	_, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		Store: &coordinatorStore{}, Workspace: workspaceOwner,
 		Discovery:  coordinatorDiscovery{result: BatchPreflightResult{Candidates: []BatchCandidate{candidate}, RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base"}},
 		Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: []BatchCandidate{candidate}}},
@@ -718,11 +718,11 @@ func TestBatchCoordinatorDryRunCancellationDuringCreation(t *testing.T) {
 				cancel()
 				return ctx.Err()
 			}
-			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), runner)
+			owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), runner)
 			if err != nil {
 				t.Fatal(err)
 			}
-			coordinator := NewBatchCoordinator(BatchCoordinatorSeams{Workspace: owner})
+			coordinator := newTestBatchCoordinator(BatchCoordinatorSeams{Workspace: owner})
 			_, err = coordinator.dryRunIntegration(ctx, state, "")
 			if !interrupted || !errors.Is(err, context.Canceled) || !strings.HasSuffix(err.Error(), ": context canceled") || strings.Contains(err.Error(), "\n") {
 				t.Fatalf("creation cancellation = %v (interrupted=%t), want cancellation without secondary cleanup error", err, interrupted)
@@ -771,11 +771,11 @@ func TestBatchCoordinatorDryRunPreservesExistingNamespaces(t *testing.T) {
 			}
 			beforeTrees := realGitOutput(t, fixture.repoRoot, "worktree", "list", "--porcelain")
 			beforeRefs := realGitOutput(t, fixture.repoRoot, "show-ref")
-			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+			owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = NewBatchCoordinator(BatchCoordinatorSeams{Workspace: owner}).dryRunIntegration(context.Background(), state, "")
+			_, err = newTestBatchCoordinator(BatchCoordinatorSeams{Workspace: owner}).dryRunIntegration(context.Background(), state, "")
 			if err == nil {
 				t.Fatal("dry run accepted a preexisting namespace")
 			}
@@ -825,11 +825,11 @@ func TestBatchCoordinatorDryRunPreservesUnexpectedCreationResources(t *testing.T
 				cancel()
 				return ctx.Err()
 			}
-			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), runner)
+			owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), runner)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = NewBatchCoordinator(BatchCoordinatorSeams{Workspace: owner}).dryRunIntegration(ctx, state, "")
+			_, err = newTestBatchCoordinator(BatchCoordinatorSeams{Workspace: owner}).dryRunIntegration(ctx, state, "")
 			if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "refusing to remove") {
 				t.Fatalf("unsafe cleanup was not refused: %v", err)
 			}
@@ -858,7 +858,7 @@ func TestBatchCoordinatorResumesBlockedPhaseBeforeDispatch(t *testing.T) {
 	store := &coordinatorStore{activeID: state.ID, loaded: state}
 	resolver := &coordinatorResolver{}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               store, Workspace: &coordinatorWorkspace{}, Resolver: resolver, Now: func() time.Time { return now },
 	}).Run(context.Background(), BatchCoordinatorOptions{VerifyCommand: "make verify"})
@@ -884,7 +884,7 @@ func TestBatchCoordinatorRefusesExplicitTerminalBlockRegardlessOfReason(t *testi
 	resolver := &coordinatorResolver{}
 	lander := &coordinatorLander{}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               store, Workspace: &coordinatorWorkspace{}, Resolver: resolver, Lander: lander,
 	}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -905,7 +905,7 @@ func TestBatchCoordinatorPreservesInterruptedEjectionIntent(t *testing.T) {
 	integrator := &coordinatorIntegrator{ejectResult: BatchIntegrateResult{State: interrupted}, ejectErr: errors.New("persisted before reset")}
 	workspaceOwner := &coordinatorWorkspace{}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: workspaceOwner, Integrator: integrator,
 	}).Run(context.Background(), BatchCoordinatorOptions{VerifyCommand: "make verify"})
@@ -941,7 +941,7 @@ func TestBatchCoordinatorPreservesResolvingAndReviewingInterruptions(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := coordinatorActiveState(tt.status)
-			result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: &coordinatorWorkspace{}, Resolver: tt.resolver, Reviewer: tt.reviewer,
 			}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -967,7 +967,7 @@ func TestBatchCoordinatorReentersResolvingAndReviewing(t *testing.T) {
 		{State: blocked},
 	}, calls: &calls}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: &coordinatorWorkspace{}, Resolver: resolver, Reviewer: reviewer,
 	}).Run(context.Background(), BatchCoordinatorOptions{VerifyCommand: "make verify", AutoEject: true})
@@ -993,7 +993,7 @@ func TestBatchCoordinatorResumesApprovedBlockedStateIntoLanding(t *testing.T) {
 	lander := &coordinatorLander{result: BatchLandResult{State: ready}}
 	store := &coordinatorStore{activeID: state.ID, loaded: state}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               store, Workspace: &coordinatorWorkspace{}, Lander: lander,
 	}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -1013,7 +1013,7 @@ func TestBatchCoordinatorReturnsDurableLandingIntentBeforeSettlement(t *testing.
 	lander := &coordinatorLander{result: BatchLandResult{State: intent}, err: errors.New("stopped after landing intent")}
 	settler := &coordinatorSettler{}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: &coordinatorWorkspace{}, Lander: lander, Settler: settler,
 	}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -1036,7 +1036,7 @@ func TestBatchCoordinatorRecoversLandedEvidenceBeforeSettlement(t *testing.T) {
 	lander := &coordinatorLander{result: BatchLandResult{State: state}}
 	settler := &coordinatorSettler{result: BatchSettleResult{State: completed}}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: &coordinatorWorkspace{}, Lander: lander, Settler: settler,
 	}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -1062,7 +1062,7 @@ func TestBatchCoordinatorRetriesSettlementWithoutLandingAgain(t *testing.T) {
 	settler := &coordinatorSettler{result: BatchSettleResult{State: partial}, err: cleanupErr}
 	lander := &coordinatorLander{}
 
-	result, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: state}, Workspace: &coordinatorWorkspace{}, Lander: lander, Settler: settler,
 	}).Run(context.Background(), BatchCoordinatorOptions{})
@@ -1079,7 +1079,7 @@ func TestBatchCoordinatorRetriesSettlementWithoutLandingAgain(t *testing.T) {
 	completed := partial
 	completed.Finalization = &BatchFinalization{IntegrationCleaned: true}
 	settler.result = BatchSettleResult{State: completed}
-	retried, err := NewBatchCoordinator(BatchCoordinatorSeams{
+	retried, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 		RepositoryAdmission: testRepositoryAdmission,
 		Store:               &coordinatorStore{activeID: state.ID, loaded: result.State}, Workspace: &coordinatorWorkspace{}, Lander: lander, Settler: settler,
 	}).Run(context.Background(), BatchCoordinatorOptions{})

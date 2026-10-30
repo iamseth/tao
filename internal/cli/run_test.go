@@ -33,7 +33,7 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 	var gotName string
 	var gotCwd string
 	var prompts []string
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name == "sqlite3" {
 			return errors.New("sqlite unavailable")
 		}
@@ -55,7 +55,7 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 		if calls == 1 {
 			fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 		}
-	})}
+	})})
 
 	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestRunInvokesPiUntilPlanCompletedAndLogsOutput(t *testing.T) {
 }
 
 func TestSnapshotRunDefaultsPreserveBuiltInsWhenUnset(t *testing.T) {
-	defaults, err := (App{}).runEnvDefaults()
+	defaults, err := (newTestApp(App{})).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +105,11 @@ func TestSnapshotRunDefaultsPreserveBuiltInsWhenUnset(t *testing.T) {
 }
 
 func TestSnapshotRunDefaultsAcceptValidValues(t *testing.T) {
-	app := App{RuntimeEnv: snapshotWith(map[string]string{
+	app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{
 		runtimeconfig.EnvCommitPolicy: "slice", runtimeconfig.EnvExecutionMode: "current",
 		runtimeconfig.EnvAgent: "pi", runtimeconfig.EnvPullRequest: "yes",
 		runtimeconfig.EnvSkipPermissions: "on",
-	})}
+	})})
 	defaults, err := app.runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestSnapshotRunDefaultsRejectInvalidValues(t *testing.T) {
 		{name: "skip permissions", key: "TAO_DANGEROUSLY_SKIP_PERMISSIONS", value: "maybe"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			app := App{RuntimeEnv: snapshotWith(map[string]string{test.key: test.value})}
+			app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{test.key: test.value})})
 			_, err := app.runEnvDefaults()
 			if err == nil || !strings.Contains(err.Error(), test.key) {
 				t.Fatalf("expected error naming %s, got %v", test.key, err)
@@ -142,7 +142,7 @@ func TestSnapshotRunDefaultsRejectInvalidValues(t *testing.T) {
 }
 
 func TestSnapshotExecutionModeDefaultsNormalizeRunRequest(t *testing.T) {
-	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvExecutionMode: "current"})}
+	app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvExecutionMode: "current"})})
 	defaults, err := app.runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
@@ -160,11 +160,11 @@ func TestRunExecutionModeFlagReachesRunRequest(t *testing.T) {
 	buildRequest := func(t *testing.T, args []string) run.Request {
 		t.Helper()
 		snapshot := runtimeconfig.RuntimeEnv()
-		defaults, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
+		defaults, err := (newTestApp(App{RuntimeEnv: &snapshot})).runEnvDefaults()
 		if err != nil {
 			t.Fatal(err)
 		}
-		fs := App{Err: io.Discard}.flagSet("run")
+		fs := newTestApp(App{Err: io.Discard}).flagSet("run")
 		executionMode := fs.String("execution-mode", defaults.ExecutionModeValue().String(), "execution mode")
 		flagArgs, positional := splitSubcommandFlags(args, map[string]bool{"--execution-mode": true})
 		if err := fs.Parse(flagArgs); err != nil {
@@ -214,11 +214,11 @@ func TestCLIRunRequestBuilderPreservesEnvDefaultsAndFlagOverrides(t *testing.T) 
 	t.Setenv("TAO_PULL_REQUEST", "true")
 
 	snapshot := runtimeconfig.RuntimeEnv()
-	defaults, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
+	defaults, err := (newTestApp(App{RuntimeEnv: &snapshot})).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := App{Err: io.Discard}.flagSet("run")
+	fs := newTestApp(App{Err: io.Discard}).flagSet("run")
 	maxSlices := fs.Int("max-slices", 0, "maximum slices")
 	commitPolicy := fs.String("commit-policy", defaults.CommitPolicy.String(), "commit policy")
 	executionMode := fs.String("execution-mode", defaults.ExecutionModeValue().String(), "execution mode")
@@ -255,7 +255,7 @@ func TestCLIRunRequestBuilderPreservesEnvDefaultsAndFlagOverrides(t *testing.T) 
 
 func TestRunRejectsMutuallyExclusiveRecoveryModes(t *testing.T) {
 	clearTaoEnv(t)
-	app := App{Out: io.Discard, Err: io.Discard}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	for _, args := range [][]string{
 		{"--continue", "--restart", "plan-a"},
 		{"--repair-verification", "--reverify", "plan-a"},
@@ -269,7 +269,7 @@ func TestRunRejectsMutuallyExclusiveRecoveryModes(t *testing.T) {
 
 func TestRunReviewAgentAdmission(t *testing.T) {
 	for _, value := range []string{"", "invalid", "PI"} {
-		app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil)}
+		app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil)})
 		err := app.run(context.Background(), fakeRepository{}, []string{"--review-agent=" + value, "plan-a"})
 		if err == nil || !strings.Contains(err.Error(), "--review-agent") {
 			t.Fatalf("%q: %v", value, err)
@@ -279,7 +279,7 @@ func TestRunReviewAgentAdmission(t *testing.T) {
 
 func TestRunNoReviewWithUnavailableReviewer(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 	app.CommandRunner = func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
 		if name == "git" {
 			writeRunGitOutput(stdout, args)
@@ -301,11 +301,11 @@ func TestRunNoReviewWithUnavailableReviewer(t *testing.T) {
 }
 
 func TestRunNoReviewFlagOverridesRunRequest(t *testing.T) {
-	defaults, err := (App{}).runEnvDefaults()
+	defaults, err := (newTestApp(App{})).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := App{Err: io.Discard}.flagSet("run")
+	fs := newTestApp(App{Err: io.Discard}).flagSet("run")
 	noReview := fs.Bool("no-review", false, "disable review")
 	flagArgs, _ := splitSubcommandFlags([]string{"--no-review"}, nil)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -332,7 +332,7 @@ func TestEffortFlagsOverrideEveryRole(t *testing.T) {
 			case "merge":
 				register = registerMergeFlags
 			}
-			fs, _, err := (App{Err: io.Discard}).parseArgs(command, []string{"--effort", "opaque-level"}, register)
+			fs, _, err := (newTestApp(App{Err: io.Discard})).parseArgs(command, []string{"--effort", "opaque-level"}, register)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -344,7 +344,7 @@ func TestEffortFlagsOverrideEveryRole(t *testing.T) {
 			if patch.ModelSelection != want.ModelSelection {
 				t.Fatalf("patch = %#v, want %#v", patch, want)
 			}
-			inputs, err := (App{}).resolveRunRequestFlags(fs)
+			inputs, err := (newTestApp(App{})).resolveRunRequestFlags(fs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -362,7 +362,7 @@ func TestEffortFlagsOverrideEveryRole(t *testing.T) {
 			if command == "merge" {
 				profile = runtimeconfig.CommandMerge
 			}
-			options, err := (App{}).resolveCommandOptions(fs, profile)
+			options, err := (newTestApp(App{})).resolveCommandOptions(fs, profile)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -372,7 +372,7 @@ func TestEffortFlagsOverrideEveryRole(t *testing.T) {
 				}
 			}
 			for _, value := range []string{" ", "two levels", "a\tb"} {
-				err := (App{Out: io.Discard, Err: io.Discard}).Run(context.Background(), []string{command, "--effort=" + value, "missing-plan"})
+				err := (newTestApp(App{Out: io.Discard, Err: io.Discard})).Run(context.Background(), []string{command, "--effort=" + value, "missing-plan"})
 				if err == nil || !strings.Contains(err.Error(), "--effort") {
 					t.Fatalf("invalid effort error = %v", err)
 				}
@@ -386,12 +386,12 @@ func TestRunModelFlagOverridesEveryRole(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvModel, "env-base")
 	t.Setenv(runtimeconfig.EnvReviewModel, "env-review")
 	for _, args := range [][]string{{"plan-a"}, {"--model=", "plan-a"}, {"--model", "provider/override", "plan-a"}} {
-		fs, positional, err := (App{Err: io.Discard}).parseArgs("run", args, registerRunFlags)
+		fs, positional, err := (newTestApp(App{Err: io.Discard})).parseArgs("run", args, registerRunFlags)
 		if err != nil {
 			t.Fatal(err)
 		}
 		snapshot := runtimeconfig.RuntimeEnv()
-		inputs, err := (App{RuntimeEnv: &snapshot}).resolveRunRequestFlags(fs)
+		inputs, err := (newTestApp(App{RuntimeEnv: &snapshot})).resolveRunRequestFlags(fs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,12 +442,12 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 			if tt.flag != "" {
 				args = append(args, "--rework-escalation-model", tt.flag)
 			}
-			fs, positional, err := (App{Err: io.Discard}).parseArgs("run", args, registerRunFlags)
+			fs, positional, err := (newTestApp(App{Err: io.Discard})).parseArgs("run", args, registerRunFlags)
 			if err != nil {
 				t.Fatal(err)
 			}
 			snapshot := runtimeconfig.ResolveSettings(nil, repository, runtimeconfig.RuntimeEnv())
-			inputs, err := (App{RuntimeEnv: &snapshot}).resolveRunRequestFlags(fs)
+			inputs, err := (newTestApp(App{RuntimeEnv: &snapshot})).resolveRunRequestFlags(fs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -472,7 +472,7 @@ func TestRunReworkEscalationModelPrecedence(t *testing.T) {
 
 func TestRunReworkEscalationModelRejectsInvalidNames(t *testing.T) {
 	clearTaoEnv(t)
-	app := App{Out: io.Discard, Err: io.Discard}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	for _, value := range []string{"", "two models", " \t", "model\nname"} {
 		err := app.run(context.Background(), nil, []string{"--rework-escalation-model=" + value, "plan-a"})
 		if err == nil || !strings.Contains(err.Error(), "--rework-escalation-model") || !strings.Contains(err.Error(), "model name") {
@@ -483,7 +483,7 @@ func TestRunReworkEscalationModelRejectsInvalidNames(t *testing.T) {
 
 func TestModelFlagsRejectInvalidNames(t *testing.T) {
 	clearTaoEnv(t)
-	app := App{Out: io.Discard, Err: io.Discard}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	for _, model := range []string{"two models", " \t", "model\nname"} {
 		for _, command := range []string{"run", "review"} {
 			var err error
@@ -538,10 +538,10 @@ func TestRunCurrentKeepsRecordedLinkedCheckoutAtHandoff(t *testing.T) {
 			}
 			stopped := errors.New("stop at agent handoff")
 			var gotRoot string
-			app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(_ context.Context, cwd, _ string, _ []string) (run.Process, error) {
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(_ context.Context, cwd, _ string, _ []string) (run.Process, error) {
 				gotRoot = cwd
 				return nil, stopped
-			}}
+			}})
 			err = app.run(context.Background(), repo, []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
 			if err == nil || !strings.Contains(err.Error(), stopped.Error()) || gotRoot != linked {
 				t.Fatalf("handoff root = %q, error = %v; want %q and sentinel", gotRoot, err, linked)
@@ -589,10 +589,10 @@ func TestRunCurrentDoesNotReplaceUnhealthyRecordedRootWithLaunchCheckout(t *test
 			if err := record.PersistArtifacts(); err != nil {
 				t.Fatal(err)
 			}
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
 				t.Fatal("unhealthy recorded repository reached agent handoff")
 				return nil, nil
-			}}
+			}})
 			if err := app.run(context.Background(), repo, []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err == nil || !strings.Contains(err.Error(), "detect starting branch for branch policy current") {
 				t.Fatalf("expected recorded-root Git refusal before handoff, got %v", err)
 			}
@@ -610,7 +610,7 @@ func TestRunCurrentDoesNotReplaceUnhealthyRecordedRootWithLaunchCheckout(t *test
 func TestRunAgentAndTimeoutFlags(t *testing.T) {
 	for _, kind := range []string{"pi", "claude"} {
 		for _, duration := range []string{"0", "3m"} {
-			app := App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "7m"})}
+			app := newTestApp(App{Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvSessionTimeout: "7m"})})
 			fs, _, err := app.parseArgs("run", []string{"--agent=" + kind, "--session-timeout=" + duration}, app.registerRunFlags)
 			if err != nil {
 				t.Fatal(err)
@@ -632,10 +632,10 @@ func TestRunRejectsInvalidAgentAndTimeoutBeforeSession(t *testing.T) {
 	clearTaoEnv(t)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	for _, arg := range []string{"--agent=robot", "--agent=", "--session-timeout=-1s", "--session-timeout=soon", "--session-timeout="} {
-		app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+		app := newTestApp(App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
 			t.Fatal("session started")
 			return nil, nil
-		}}
+		}})
 		err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{arg, fixture.id})
 		if err == nil || !strings.Contains(err.Error(), strings.Split(arg, "=")[0]+":") {
 			t.Fatalf("%s: %v", arg, err)
@@ -644,7 +644,7 @@ func TestRunRejectsInvalidAgentAndTimeoutBeforeSession(t *testing.T) {
 }
 
 func TestRunRejectsRemovedMultiPlanFlags(t *testing.T) {
-	app := App{Out: io.Discard, Err: io.Discard}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	for _, flag := range []string{"--all", "--active"} {
 		err := app.run(context.Background(), nil, []string{flag})
 		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
@@ -658,7 +658,7 @@ func TestRunWiresStatusReporter(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	reporter := newRecordingCLIStatusReporter()
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 		}
@@ -666,7 +666,7 @@ func TestRunWiresStatusReporter(t *testing.T) {
 		return nil
 	}, ProcessStarter: fakeCLIProcessStarter(t, "slice done", func(string) {
 		fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
-	})}
+	})})
 
 	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err != nil {
 		t.Fatal(err)
@@ -684,7 +684,7 @@ func TestRunSignalContextCancelsActiveRun(t *testing.T) {
 		signalCancel = cancel
 		return ctx, cancel
 	})
-	app := App{Out: io.Discard, Err: io.Discard, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name == "git" {
 			writeRunGitOutput(stdout, args)
 		}
@@ -696,7 +696,7 @@ func TestRunSignalContextCancelsActiveRun(t *testing.T) {
 		signalCancel()
 		<-ctx.Done()
 		return nil, ctx.Err()
-	}}
+	}})
 
 	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
 	if !errors.Is(err, context.Canceled) {
@@ -710,13 +710,13 @@ func TestRunApprovalGateShowsUnblockCommands(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	addApprovalGate(t, fixture.dir, "human approval")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 		}
 		writeRunGitOutput(stdout, args)
 		return nil
-	}}
+	}})
 
 	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
 	if err == nil {
@@ -757,7 +757,7 @@ func TestRunPrerequisiteGateRefusesBeforeWorkspaceOrAgentSideEffects(t *testing.
 	commandCalls := 0
 	baselineCalls := 0
 	agentCalls := 0
-	app := App{
+	app := newTestApp(App{
 		Out: io.Discard, Err: io.Discard,
 		CommandRunner: func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
 			if name == "git" && len(args) >= 3 {
@@ -783,7 +783,7 @@ func TestRunPrerequisiteGateRefusesBeforeWorkspaceOrAgentSideEffects(t *testing.
 			agentCalls++
 			return nil, errors.New("agent must not start")
 		},
-	}
+	})
 
 	err = app.run(context.Background(), repo, []string{"--execution-mode", "isolated", "--commit-policy", "none", "--no-review", fixture.id})
 	if err == nil || !strings.Contains(err.Error(), "runtime prerequisite 20260430-1100-required is missing") || !strings.Contains(err.Error(), "next: tao show 20260430-1100-required") {
@@ -827,10 +827,10 @@ func TestRunBlockedPreflightShowsReasonWithoutStartingAgent(t *testing.T) {
 				}
 			}
 			agentCalls := 0
-			app := App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
 				agentCalls++
 				return nil, errors.New("agent must not start")
-			}}
+			}})
 
 			err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id})
 			if err == nil {
@@ -872,7 +872,7 @@ func TestRunAgentPiEnvRoutesSliceRunToPi(t *testing.T) {
 	var out bytes.Buffer
 	piCalls := 0
 	snapshot := runtimeconfig.RuntimeEnv()
-	app := App{RuntimeEnv: &snapshot, Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{RuntimeEnv: &snapshot, Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil
@@ -882,7 +882,7 @@ func TestRunAgentPiEnvRoutesSliceRunToPi(t *testing.T) {
 	}, ProcessStarter: fakeCLIProcessStarter(t, `slice done`, func(prompt string) {
 		piCalls++
 		fixture.write(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
-	})}
+	})})
 
 	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err != nil {
 		t.Fatal(err)
@@ -900,7 +900,7 @@ func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 	claudeCalls := 0
 	var gotArgs []string
 	snapshot := runtimeconfig.RuntimeEnv()
-	app := App{RuntimeEnv: &snapshot, Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{RuntimeEnv: &snapshot, Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		if name != "git" {
 			t.Fatalf("unexpected command %s %v", name, args)
 			return nil
@@ -921,7 +921,7 @@ func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 			proc.writeEvent(`{"type":"result","result":"slice done"}`)
 		}()
 		return proc, nil
-	}}
+	}})
 
 	if err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "current", "--commit-policy", "none", "--no-review", fixture.id}); err != nil {
 		t.Fatal(err)
@@ -952,7 +952,7 @@ func TestRunPullRequestRejectsInvalidCombinations(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			app := App{Out: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+			app := newTestApp(App{Out: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 				if name != "git" {
 					t.Fatalf("unexpected command %s %v", name, args)
 					return nil
@@ -964,7 +964,7 @@ func TestRunPullRequestRejectsInvalidCombinations(t *testing.T) {
 					_, _ = io.WriteString(stdout, "origin/main\n")
 				}
 				return nil
-			}}
+			}})
 
 			args := append(append([]string{}, test.args...), fixture.id)
 			err := app.run(context.Background(), plan.NewFileRepository(fixture.root), args)
@@ -986,10 +986,10 @@ func TestRunPullRequestRejectsInvalidCombinations(t *testing.T) {
 
 func TestRunRejectsInvalidExecutionMode(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	app := App{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		t.Fatalf("unexpected command %s %v", name, args)
 		return nil
-	}}
+	}})
 
 	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--execution-mode", "shared", fixture.id})
 	if err == nil || !strings.Contains(err.Error(), "unsupported execution mode") {
@@ -999,10 +999,10 @@ func TestRunRejectsInvalidExecutionMode(t *testing.T) {
 
 func TestRunRejectsInvalidCommitPolicy(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	app := App{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+	app := newTestApp(App{CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 		t.Fatalf("unexpected command %s %v", name, args)
 		return nil
-	}}
+	}})
 
 	err := app.run(context.Background(), plan.NewFileRepository(fixture.root), []string{"--commit-policy", "always", fixture.id})
 	if err == nil || !strings.Contains(err.Error(), "unsupported commit policy") {
@@ -1049,7 +1049,7 @@ func TestRunAutoReworkPolicyResolution(t *testing.T) {
 				t.Setenv(runtimeconfig.EnvReview, tt.envReview)
 			}
 			snapshot := runtimeconfig.RuntimeEnv()
-			app := App{Err: io.Discard, RuntimeEnv: &snapshot}
+			app := newTestApp(App{Err: io.Discard, RuntimeEnv: &snapshot})
 			fs, _, err := app.parseArgsFor(&runCommand, tt.args)
 			if err != nil {
 				t.Fatal(err)
@@ -1096,7 +1096,7 @@ func TestRunReworkLayeredOptions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) { v, ok := tc.env[key]; return v, ok })
 			var warnings bytes.Buffer
-			app := App{RuntimeEnv: &snapshot, Err: &warnings}
+			app := newTestApp(App{RuntimeEnv: &snapshot, Err: &warnings})
 			fs, _, err := app.parseArgsFor(&runCommand, tc.args)
 			if err != nil {
 				t.Fatal(err)
@@ -1148,7 +1148,7 @@ func TestRunReverifyBypassesAutomaticReworkForChangesRequestedPlan(t *testing.T)
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--reverify", planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }})).run(context.Background(), repo, []string{"--reverify", planID}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -1211,7 +1211,7 @@ func TestRunContinueChainsIntoAutoRework(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{"--no-run-header", "--continue", planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }})).run(context.Background(), repo, []string{"--no-run-header", "--continue", planID}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 {
@@ -1385,7 +1385,7 @@ func TestRunSinglePlanAutoReworkLoop(t *testing.T) {
 			defer func() { executeSinglePlan = oldExecutor }()
 
 			args := append(append([]string{}, tt.args...), planID)
-			err := (App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }}).run(context.Background(), repo, args)
+			err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Now: func() time.Time { return now }})).run(context.Background(), repo, args)
 			if tt.wantError == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -1441,7 +1441,7 @@ func TestRunAutoReworkUsesOneStatusInvocationAndPublishesPhase(t *testing.T) {
 	}
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
-	app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, StatusReporter: reporter, Now: func() time.Time { return now }}
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, StatusReporter: reporter, Now: func() time.Time { return now }})
 	if err := app.run(context.Background(), repo, []string{planID}); err != nil {
 		t.Fatal(err)
 	}
@@ -1482,7 +1482,7 @@ func TestRunReworkRestartStartsFreshRecurringFileWindowBeforeRealServiceExecutio
 
 	workStarts := 0
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out: &out,
 		Now: func() time.Time { return now },
 		CommandRunner: func(_ context.Context, _ string, name string, args []string, stdout io.Writer, _ io.Writer) error {
@@ -1512,7 +1512,7 @@ func TestRunReworkRestartStartsFreshRecurringFileWindowBeforeRealServiceExecutio
 			detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, completedID)
 			detail.State.Plan.Review = reworkReview(plan.ReviewVerdictApprove, nil)
 		}),
-	}
+	})
 
 	err = app.run(context.Background(), repo, []string{"--commit-policy", "none", "--execution-mode", "current", "--max-rework-attempts", "1", "--rework-restart", planID})
 	if err != nil {
@@ -1551,7 +1551,7 @@ func TestRunAutoReworkRestartGuardLeavesPendingPlanUnchanged(t *testing.T) {
 	}
 	defer func() { executeSinglePlan = oldExecutor }()
 
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }}).run(context.Background(), repo, []string{planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }})).run(context.Background(), repo, []string{planID}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -1602,7 +1602,7 @@ func TestRunSinglePlanHoldsLockAcrossReopenBoundary(t *testing.T) {
 	}
 	defer func() { executeSinglePlan = oldExecutor }()
 
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }}).run(ctx, repo, []string{planID}); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return now }})).run(ctx, repo, []string{planID}); err != nil {
 		t.Fatal(err)
 	}
 	if competitorRan {
@@ -1959,10 +1959,10 @@ func TestRunApprovalSliceReturnsNilWhenNoApprovalSliceID(t *testing.T) {
 func TestRunUsesInjectedRepositoryFactory(t *testing.T) {
 	var out bytes.Buffer
 	var gotDir string
-	app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 		gotDir = plansDir
 		return fakeRepository{summaries: []plan.PlanSummary{{ID: "20260427-1810-example", Title: "Example", Status: plan.StatusPlanned}}}
-	}}
+	}})
 
 	if err := app.Run(context.Background(), []string{"--plans-dir", "/tmp/custom-plans", "list"}); err != nil {
 		t.Fatal(err)

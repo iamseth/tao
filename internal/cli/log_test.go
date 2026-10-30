@@ -32,7 +32,7 @@ func TestLogCapturedPrompts(t *testing.T) {
 	var out bytes.Buffer
 	run := func(args ...string) error {
 		out.Reset()
-		return (App{Out: &out, Err: &out}).Run(context.Background(), append([]string{"--plans-dir", fixture.root, "log", fixture.id}, args...))
+		return (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), append([]string{"--plans-dir", fixture.root, "log", fixture.id}, args...))
 	}
 	if err := run("--prompts"); err != nil || out.String() != "No captured prompts for plan "+fixture.id+"\n" {
 		t.Fatalf("empty: %q, %v", out.String(), err)
@@ -85,7 +85,7 @@ func TestLogBatchCapturedPrompts(t *testing.T) {
 	store := mergepkg.NewBatchStore(registry.MergeBatchesDir(registry.current), registry.ActiveMergeBatchPath(registry.current))
 	written := writeLogPrompt(t, store.PromptDir("batch-a"), "batch prompt")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{Out: &out, Err: &out, Registry: func() NoteRegistry { return registry }})
 	if err := app.log(context.Background(), fakeRepository{}, []string{"--batch", "batch-a", "--prompts"}); err != nil || !strings.Contains(out.String(), written.Hash[:12]) {
 		t.Fatalf("batch listing: %q, %v", out.String(), err)
 	}
@@ -106,7 +106,7 @@ func TestLogRendersFramedAgentRunLog(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := App{Out: &out, Err: &out}.Run(context.Background(), []string{"--plans-dir", fixture.root, "log", "20260430-1200"})
+	err := newTestApp(App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", fixture.root, "log", "20260430-1200"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestLogPreservesLegacyUnframedOutput(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", fixture.root, "log", fixture.id}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"--plans-dir", fixture.root, "log", fixture.id}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); got != want {
@@ -156,7 +156,7 @@ func TestLogFollowsAppendedOutput(t *testing.T) {
 	out := newNotifyingBuffer(wantAppended)
 	initialOut := newNotifyingBuffer("assistant: initial\n")
 	var errOut bytes.Buffer
-	app := App{Out: io.MultiWriter(out, initialOut), Err: &errOut}
+	app := newTestApp(App{Out: io.MultiWriter(out, initialOut), Err: &errOut})
 	errCh := make(chan error, 1)
 	finished := make(chan struct{})
 	go func() {
@@ -232,7 +232,7 @@ func TestLogBatch(t *testing.T) {
 	registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo"}}}
 	store := mergepkg.NewBatchStore(registry.MergeBatchesDir(registry.current), registry.ActiveMergeBatchPath(registry.current))
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{Out: &out, Err: &out, Registry: func() NoteRegistry { return registry }})
 	ctx := context.Background()
 	if err := app.log(ctx, fakeRepository{}, []string{"--batch"}); err == nil || !strings.Contains(err.Error(), "no active merge batch") {
 		t.Fatalf("missing active batch error = %v", err)
@@ -269,7 +269,7 @@ func TestLogBatch(t *testing.T) {
 
 func TestLogBatchUsage(t *testing.T) {
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"log", "--help"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"log", "--help"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, usage := range []string{"log (lo) [--follow | --prompts | --prompt VALUE] <plan-id-or-slug>", "log (lo) --batch [--follow | --prompts | --prompt VALUE] [batch-id]"} {
@@ -281,7 +281,7 @@ func TestLogBatchUsage(t *testing.T) {
 
 func TestLogUsageRepoAndMissingLogErrors(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.log(context.Background(), fakeRepository{}, nil); err == nil {
 		t.Fatal("expected log usage error")
 	}

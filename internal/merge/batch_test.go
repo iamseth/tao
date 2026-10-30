@@ -55,7 +55,7 @@ func TestBatchCandidateDiscoveryExcludesAbandonedPlansWithStaleApproval(t *testi
 		details: map[string]*plan.PlanDetail{"plan-b": abandoned},
 	}
 	git := &fakeGitClient{}
-	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: git}}).Discover(context.Background())
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: newTestService(Service{Git: git})}).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestBatchCandidateDiscoveryExcludesLegacyCompletedApprovedPlans(t *testing.
 		}},
 		details: map[string]*plan.PlanDetail{"legacy": legacy},
 	}
-	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: &fakeGitClient{}}}).Discover(context.Background())
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: newTestService(Service{Git: &fakeGitClient{}})}).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestBatchCandidateDiscoveryIncludesPRCompletePlanWithoutMergeEvidence(t *te
 		mergeBase:     "base",
 		revParse:      map[string]string{"main": "default-start", "tao/plan-a": "tip-a", "tao/plan-b": "tip-b"},
 	}
-	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: git}, Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: newTestService(Service{Git: git}), Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestBatchPreflightMixedEligibleAndIneligibleReportsAllBlockers(t *testing.T
 	}
 	discovery := BatchCandidateDiscovery{
 		Repository: repo,
-		Merge:      Service{Git: git},
+		Merge:      newTestService(Service{Git: git}),
 		Health: func(context.Context, plan.Repo) error {
 			return nil
 		},
@@ -214,7 +214,7 @@ func TestBatchCandidateDiscoveryBlocksInvalidApprovedProposalAndKeepsLegacyEligi
 		details: map[string]*plan.PlanDetail{"plan-a": invalid, "plan-b": legacy},
 	}
 	git := &fakeGitClient{root: "/repo", defaultBranch: "main", mergeBase: "base", revParse: map[string]string{"main": "default-start", "tao/plan-a": "tip-a", "tao/plan-b": "tip-b"}}
-	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: Service{Git: git}, Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: newTestService(Service{Git: git}), Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

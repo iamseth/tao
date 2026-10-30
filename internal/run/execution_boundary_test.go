@@ -289,7 +289,7 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 				persistence  int
 			}
 			gitCalls := 0
-			service := NewService(&memoryRunRepository{}, io.Discard, Options{RunDependencies: RunDependencies{
+			service := newTestService(&memoryRunRepository{}, io.Discard, Options{RunDependencies: RunDependencies{
 				CommandRunner: tt.runner(t, root, &gitCalls),
 				RootResolver: ExecutionRootResolverFunc(func(context.Context, *plan.PlanDetail) (string, error) {
 					spy.preparation++

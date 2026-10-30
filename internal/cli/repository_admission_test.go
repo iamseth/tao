@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestRepositoryObservationGuardSelectedDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(fmt.Sprintf(`{"plan":{"id":"sibling"},"repo":{"root":%q}}`, root)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app := App{Err: io.Discard}
+	app := App{Err: io.Discard} // Intentionally exercise production observation/admission.
 	guard := app.repositoryObservationGuard(plan.NewFileRepository(selected))
 	registry := taodata.NewRegistry("")
 	repo := taodata.Repo{ID: taodata.RepoID(root), Root: root}
@@ -96,7 +97,7 @@ func TestRepositoryAdmissionRefusesCLIEntries(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := readReworkArtifacts(t, dir)
-			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil)}
+			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil)} // Production refusal is the subject.
 			registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo", Root: root}}}
 			app.Registry = func() NoteRegistry { return registry }
 			mode := repoadmission.Merge
@@ -287,7 +288,7 @@ func TestMergeAdmissionChild(t *testing.T) {
 		detail := cliMergeDetail(t)
 		detail.State.Repo.Root = root
 		registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo", Root: root}}}
-		app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), RepositoryAdmission: guard, Registry: func() NoteRegistry { return registry }}
+		app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), RepositoryAdmission: guard, Registry: func() NoteRegistry { return registry }})
 		args := []string{"plan-a"}
 		repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 		if mode == "batch" {
@@ -308,7 +309,129 @@ func TestMergeAdmissionChild(t *testing.T) {
 	}
 }
 
-// Synthetic fixtures opt in explicitly; production identity stays fail-closed.
+func TestNewTestApp(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "fixture")
+	wantErr := errors.New("operation error")
+	original := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(original)
+	if app.RepositoryAdmission == nil {
+		t.Fatal("missing default admission")
+	}
+	// Compare the function separately, then all other fields including private state.
+	if reflect.ValueOf(original.Registry).Pointer() != reflect.ValueOf(app.Registry).Pointer() {
+		t.Fatal("registry changed")
+	}
+	before, after := original, app
+	before.Registry, after.Registry = nil, nil
+	after.RepositoryAdmission = nil
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("non-admission fields changed")
+	}
+	calls := 0
+	operation := func(got context.Context) error {
+		calls++
+		if got != ctx {
+			t.Fatal("callback context changed")
+		}
+		return wantErr
+	}
+	request := repoadmission.Request{Root: "synthetic-no-git", Mode: repoadmission.Run}
+	if err := app.RepositoryAdmission(ctx, request, operation); !errors.Is(err, wantErr) || calls != 1 {
+		t.Fatalf("default: calls=%d err=%v", calls, err)
+	}
+	for _, deny := range []bool{false, true} {
+		guardCalls := 0
+		custom := original
+		custom.RepositoryAdmission = func(got context.Context, req repoadmission.Request, callback func(context.Context) error) error {
+			guardCalls++
+			if got != ctx || !reflect.DeepEqual(req, request) {
+				t.Fatal("guard inputs changed")
+			}
+			if deny {
+				return wantErr
+			}
+			return callback(got)
+		}
+		guarded := newTestApp(custom)
+		calls = 0
+		if err := guarded.RepositoryAdmission(ctx, request, operation); !errors.Is(err, wantErr) {
+			t.Fatalf("custom error=%v", err)
+		}
+		wantCalls := 1
+		if deny {
+			wantCalls = 0
+		}
+		if guardCalls != 1 || calls != wantCalls {
+			t.Fatalf("custom: guard=%d callback=%d", guardCalls, calls)
+		}
+	}
+}
+
+func TestNewTestAppExclusiveLeaseHandoffs(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := t.TempDir()
+	if out, err := exec.Command("git", "init", root).CombinedOutput(); err != nil { // #nosec G204 -- test-owned temporary repository.
+		t.Fatalf("init: %s: %v", out, err)
+	}
+	for _, command := range []string{"run", "merge"} {
+		t.Run(command, func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			repo := plan.NewFileRepository(fixture.root)
+			detail, err := repo.ResolvePlan(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail.State.Repo.Root = root
+			record, err := plan.NewPlanRecord(fixture.dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			old := executeSinglePlan
+			t.Cleanup(func() { executeSinglePlan = old })
+			executeSinglePlan = func(_ run.Service, _ context.Context, _ run.Request) error { calls++; return nil }
+			service := &fakeCLIMergeService{}
+			stubMergeServiceRunner(t, service)
+			mergeDetail := cliMergeDetail(t)
+			mergeDetail.State.Repo.Root = root
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
+			invoke := func(app App) error {
+				// Never inherit the holder's context/ownership.
+				if command == "run" {
+					return app.run(context.Background(), repo, []string{fixture.id})
+				}
+				return app.merge(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": mergeDetail}}, []string{"plan-a"})
+			}
+			err = repoadmission.With(context.Background(), repoadmission.Request{Root: root, Mode: repoadmission.Merge}, func(context.Context) error {
+				production := app
+				production.RepositoryAdmission = nil // Intentional production opt-out on the identical fixture.
+				var busy *repoadmission.ContentionError
+				if err := invoke(production); !errors.As(err, &busy) {
+					t.Fatalf("production contention: %v", err)
+				}
+				if err := invoke(app); err != nil {
+					t.Fatalf("ordinary fixture operation: %v", err)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command == "run" && calls != 1 {
+				t.Fatalf("run calls=%d", calls)
+			}
+			if command == "merge" && service.calls != 1 {
+				t.Fatalf("merge calls=%d", service.calls)
+			}
+		})
+	}
+}
+
+// Synthetic fixtures use this guard; production identity stays fail-closed.
 func testRepositoryAdmission(ctx context.Context, _ repoadmission.Request, operation func(context.Context) error) error {
 	return operation(ctx)
 }

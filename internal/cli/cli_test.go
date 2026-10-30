@@ -44,7 +44,7 @@ func TestDefaultPlanLookupFromLinkedLaunchDirectory(t *testing.T) {
 			t.Chdir(launch)
 			for _, args := range [][]string{{"list"}, {"show", "plan-shared"}} {
 				var out bytes.Buffer
-				if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), args); err != nil {
+				if err := (newTestApp(App{Out: &out, Err: io.Discard})).Run(context.Background(), args); err != nil {
 					t.Fatalf("%v: %v", args, err)
 				}
 				if !strings.Contains(out.String(), "plan-shared") {
@@ -106,7 +106,7 @@ type testTerminalBuffer struct {
 func (*testTerminalBuffer) IsTerminal() bool { return true }
 
 func TestOutputPaletteRequiresTerminalAndHonorsEnvironment(t *testing.T) {
-	outputPalette := (App{}).outputPalette
+	outputPalette := (newTestApp(App{})).outputPalette
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("COLORTERM", "")
 	t.Setenv("NO_COLOR", "")

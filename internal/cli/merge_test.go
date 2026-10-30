@@ -32,7 +32,7 @@ func TestMergeAgentConfigPromptDirectories(t *testing.T) {
 	root := t.TempDir()
 	batches := filepath.Join(root, "merge-batches")
 	store := mergepkg.NewBatchStore(batches, filepath.Join(batches, "active.json"))
-	batch := newMergeBatchAgentConfig(App{}, root, nil, store, runtimeconfig.ModelSelection{}, io.Discard)
+	batch := newMergeBatchAgentConfig(newTestApp(App{}), root, nil, store, runtimeconfig.ModelSelection{}, io.Discard)
 	if batch.PromptDir == nil {
 		t.Fatal("batch prompt directory resolver is missing")
 	}
@@ -43,7 +43,7 @@ func TestMergeAgentConfigPromptDirectories(t *testing.T) {
 		t.Fatalf("empty batch prompt directory = %q", got)
 	}
 	detail := &plan.PlanDetail{Dir: filepath.Join(root, "plan-a")}
-	single := newSingleMergeAgentConfig(App{}, detail, root, nil, nil, runtimeconfig.ModelSelection{})
+	single := newSingleMergeAgentConfig(newTestApp(App{}), detail, root, nil, nil, runtimeconfig.ModelSelection{})
 	if single.PromptDir == nil {
 		t.Fatal("single merge prompt directory resolver is missing")
 	}
@@ -55,11 +55,11 @@ func TestMergeAgentConfigPromptDirectories(t *testing.T) {
 }
 
 func TestMergeLogf(t *testing.T) {
-	if logf := (App{}).mergeLogf(); logf != nil {
+	if logf := (newTestApp(App{})).mergeLogf(); logf != nil {
 		t.Fatal("nil output should disable merge logging")
 	}
 	var out bytes.Buffer
-	logf := (App{Out: &out}).mergeLogf()
+	logf := (newTestApp(App{Out: &out})).mergeLogf()
 	logf("Skipped %s: %d", "plan-a", 2)
 	if got, want := out.String(), "Skipped plan-a: 2\n"; got != want {
 		t.Fatalf("merge log = %q, want %q", got, want)
@@ -75,7 +75,7 @@ func TestNewMergeBatchCoordinatorSeamsWiresProgressStore(t *testing.T) {
 			if withOutput {
 				out = &bytes.Buffer{}
 			}
-			seams := newMergeBatchCoordinatorSeams(App{Out: out}, store, mergepkg.Service{}, &mergepkg.BatchWorkspace{}, nil, mergepkg.BatchAgentSession{})
+			seams := newMergeBatchCoordinatorSeams(newTestApp(App{Out: out}), store, mergepkg.Service{}, &mergepkg.BatchWorkspace{}, nil, mergepkg.BatchAgentSession{})
 			progressStore, ok := seams.Store.(*mergepkg.BatchProgressStore)
 			if !ok || progressStore.BatchStore != store {
 				t.Fatalf("coordinator store = %#v, want progress wrapper around %p", seams.Store, store)
@@ -104,7 +104,7 @@ func TestNewMergeBatchAgentConfigWiresRepositoryTelemetryStoreAndClock(t *testin
 	fixed := time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC)
 	transcript := mergepkg.NewBatchTranscriptWriter(store, io.Discard, nil)
 	defer func() { _ = transcript.Close() }()
-	config := newMergeBatchAgentConfig(App{Out: io.Discard, Now: func() time.Time { return fixed }}, "/control", nil, store, runtimeconfig.ModelSelection{}, transcript)
+	config := newMergeBatchAgentConfig(newTestApp(App{Out: io.Discard, Now: func() time.Time { return fixed }}), "/control", nil, store, runtimeconfig.ModelSelection{}, transcript)
 	if config.Log != transcript || !config.FramedLog || config.EventAppender != store || config.ControlRoot != "/control" || config.Now == nil || !config.Now().Equal(fixed) {
 		t.Fatalf("batch agent config = %#v", config)
 	}
@@ -124,7 +124,7 @@ func TestMergeBatchTranscriptReceivesProviderRecords(t *testing.T) {
 			defer func() { _ = transcript.Close() }()
 			calls := 0
 			snapshot := runtimeconfig.RuntimeEnv()
-			config := newMergeBatchAgentConfig(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, "transcript", nil, &calls)}, "", nil, store, runtimeconfig.ModelSelection{}, transcript)
+			config := newMergeBatchAgentConfig(newTestApp(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, "transcript", nil, &calls)}), "", nil, store, runtimeconfig.ModelSelection{}, transcript)
 			session, err := mergepkg.NewBatchAgentSession(config)
 			if err != nil {
 				t.Fatal(err)
@@ -189,7 +189,7 @@ func TestNewSingleMergeAgentConfigWiresPlanTelemetryBestEffort(t *testing.T) {
 	appender := &recordingMergeMetricsAppender{}
 	var out bytes.Buffer
 	runner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
-	config := newSingleMergeAgentConfig(App{Out: &out, Now: func() time.Time { return fixed }}, detail, detail.State.Repo.Root, runner, appender, runtimeconfig.ModelSelection{})
+	config := newSingleMergeAgentConfig(newTestApp(App{Out: &out, Now: func() time.Time { return fixed }}), detail, detail.State.Repo.Root, runner, appender, runtimeconfig.ModelSelection{})
 	if config.ControlRoot != detail.State.Repo.Root || config.CommandRunner == nil || config.Now == nil || !config.Now().Equal(fixed) || config.Observe == nil {
 		t.Fatalf("single merge agent config = %#v", config)
 	}
@@ -215,11 +215,11 @@ func TestNewMergeServiceRunnerWiresDeferredGuardedSinglePlanSessions(t *testing.
 	snapshot := runtimeconfig.RuntimeEnv()
 	detail := cliMergeDetail(t)
 	manager := &fakeWorkspaceManager{}
-	app := App{
+	app := newTestApp(App{
 		RuntimeEnv:       &snapshot,
 		Out:              io.Discard,
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-	}
+	})
 	runner, err := app.newMergeServiceRunner(context.Background(), detail, "")
 	if err != nil {
 		t.Fatalf("non-conflicting merge configured provider eagerly: %v", err)
@@ -262,13 +262,13 @@ func TestMergeCommandRuntimeStatusLifetime(t *testing.T) {
 				}
 			}}
 			stubMergeServiceRunner(t, service)
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return startedAt }, StatusReporter: runtimeStatusReporter{
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Now: func() time.Time { return startedAt }, StatusReporter: runtimeStatusReporter{
 				newPublisher: func(got runpkg.StatusInvocation) runtimeStatusPublisher {
 					invocation = got
 					return publisher
 				},
 				newTicker: func(time.Duration) runtimeStatusTicker { return ticker },
-			}}
+			}})
 			args := []string{"plan-a"}
 			if test.restart {
 				args = append([]string{"--restart"}, args...)
@@ -314,7 +314,7 @@ func TestMergeCommandPublishesServicePhases(t *testing.T) {
 			}
 			gitRunner := newCLIMergeGitRunner(t, detail.State.Repo.Root)
 			verified := false
-			app := App{
+			app := newTestApp(App{
 				RepositoryAdmission: testRepositoryAdmission,
 				Out:                 io.Discard,
 				WorkspaceManager:    func(string) (WorkspaceManager, error) { return manager, nil },
@@ -334,7 +334,7 @@ func TestMergeCommandPublishesServicePhases(t *testing.T) {
 					}
 					return test.verifyErr
 				},
-			}
+			})
 			err := app.merge(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"--verify-command", "test gate", "plan-a"})
 			want := []runstatus.Phase{runstatus.PhaseWaitingForOwnership, runstatus.PhaseMergeIntegrating, runstatus.PhaseMergeVerifying}
 			if test.verifyErr != nil {
@@ -373,7 +373,7 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	var gotManagerRoot string
 	providerCalls := 0
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		RepositoryAdmission: testRepositoryAdmission,
 		Out:                 &out,
 		Err:                 &out,
@@ -389,7 +389,7 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 			gotManagerRoot = repoRoot
 			return manager, nil
 		},
-	}
+	})
 
 	if err := app.Run(context.Background(), []string{"m", "plan-a"}); err != nil {
 		t.Fatal(err)
@@ -427,13 +427,13 @@ func TestMergeCommandRefusesAbandonedPlanBeforeServiceConstruction(t *testing.T)
 	}
 	t.Cleanup(func() { newMergeServiceRunner = original })
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		RepositoryAdmission: testRepositoryAdmission,
 		Out:                 &out, Err: &out,
 		Repository: func(string) Repository {
 			return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 		},
-	}
+	})
 
 	err := app.Run(context.Background(), []string{"merge", "--force", "plan-a"})
 	if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded") {
@@ -467,14 +467,14 @@ func TestMergeCommandReloadsUnderLockBeforeSquashOrNoSquashMutation(t *testing.T
 			service := &fakeCLIMergeService{}
 			stubMergeServiceRunner(t, service)
 			var mergeOut bytes.Buffer
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: &mergeOut, Err: &mergeOut}
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &mergeOut, Err: &mergeOut})
 			mergeDone := make(chan error, 1)
 			go func() {
 				mergeDone <- app.merge(context.Background(), repo, append(test.args, fixture.id))
 			}()
 
 			<-repo.resolved
-			abandonErr := (App{Out: io.Discard, Err: io.Discard}).abandon(context.Background(), inner, []string{"--reason", "superseded concurrently", fixture.id})
+			abandonErr := (newTestApp(App{Out: io.Discard, Err: io.Discard})).abandon(context.Background(), inner, []string{"--reason", "superseded concurrently", fixture.id})
 			close(repo.release)
 			if abandonErr != nil {
 				t.Fatal(abandonErr)
@@ -574,9 +574,9 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 			service := &fakeCLIMergeService{err: tt.err}
 			stubMergeServiceRunner(t, service)
 			var out bytes.Buffer
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 				return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
-			}}
+			}})
 
 			err := app.Run(context.Background(), []string{"merge", "plan-a"})
 			if err == nil {
@@ -734,9 +734,9 @@ func TestMergeRestartStopsAfterSinglePlanRecoveryWithoutBatchMutation(t *testing
 	batch := &fakeCLIMergeBatchRunner{}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(string) Repository {
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(string) Repository {
 		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
-	}}
+	}})
 
 	if err := app.Run(context.Background(), []string{"merge", "--restart", "plan-a"}); err != nil {
 		t.Fatal(err)
@@ -781,7 +781,7 @@ func TestMergeBatchRestartDoesNotConstructSinglePlanService(t *testing.T) {
 		return &fakeCLIMergeService{}, nil
 	}
 	t.Cleanup(func() { newMergeServiceRunner = original })
-	app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }})
 
 	if err := app.Run(context.Background(), []string{"merge", "--all", "--restart"}); err != nil {
 		t.Fatal(err)
@@ -802,9 +802,9 @@ func TestMergeRestartRejectsForceBeforeDiscardingReviewedResolutionAuthority(t *
 	}
 	service := &fakeCLIMergeService{}
 	stubMergeServiceRunner(t, service)
-	app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
 		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
-	}}
+	}})
 
 	err := app.Run(context.Background(), []string{"merge", "--restart", "--force", "plan-a"})
 	if err == nil || !strings.Contains(err.Error(), "--restart cannot be combined with --force") {
@@ -869,9 +869,9 @@ func TestMergeCommandPassesForceNoSquashNoVerifyAndVerifyCommandOptions(t *testi
 	service := &fakeCLIMergeService{}
 	stubMergeServiceRunner(t, service)
 	var out bytes.Buffer
-	app := App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
-	}}
+	}})
 
 	if err := app.Run(context.Background(), []string{"merge", "--force", "--no-squash", "--no-verify", "--verify-command", "custom verify", "plan-a"}); err != nil {
 		t.Fatal(err)
@@ -894,9 +894,9 @@ func TestMergeCommandPassesSignalContextToBatchAndSinglePlan(t *testing.T) {
 			stubMergeBatchRunner(t, batch)
 			stubMergeServiceRunner(t, service)
 			detail := cliMergeDetail(t)
-			app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, Repository: func(string) Repository {
 				return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
-			}}
+			}})
 			args := []string{"merge", "plan-a"}
 			if mode == "batch" {
 				args = []string{"merge", "--all", "--dry-run"}
@@ -930,7 +930,7 @@ func TestMergeAllCommandPassesBatchOptionsAndRendersInvariant(t *testing.T) {
 	}}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 
 	if err := app.Run(context.Background(), []string{"merge", "--all", "--dry-run", "--verify-command", "make verify"}); err != nil {
 		t.Fatal(err)
@@ -1010,7 +1010,7 @@ func TestMergeAllAutoEjectEnablesSameRunEjectAndReland(t *testing.T) {
 	}}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 
 	if err := app.Run(context.Background(), []string{"merge", "--all", "--auto-eject"}); err != nil {
 		t.Fatal(err)
@@ -1035,7 +1035,7 @@ func TestMergeAllRerunTriggeredEjectionRendersAttribution(t *testing.T) {
 	}}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 
 	if err := app.Run(context.Background(), []string{"merge", "--all"}); err != nil {
 		t.Fatal(err)
@@ -1066,7 +1066,7 @@ func TestMergeAllDefaultStopsWithAttributedNonConvergenceOffer(t *testing.T) {
 	}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 
 	err := app.Run(context.Background(), []string{"merge", "--all"})
 	if err == nil || !strings.Contains(err.Error(), "not converging") {
@@ -1100,7 +1100,7 @@ func TestMergeAllResumeFailureOffersRestartPreviewIndependentOfDryRun(t *testing
 		batch := &fakeCLIMergeBatchRunner{err: fmt.Errorf("resume merge batch: %w", resumeErr)}
 		stubMergeBatchRunner(t, batch)
 		var out bytes.Buffer
-		app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+		app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 
 		err := app.Run(context.Background(), args)
 		if !errors.Is(err, resumeErr) {
@@ -1161,7 +1161,7 @@ func TestMergeAllRecoveryGuidancePreviewsStaleBatchRemovals(t *testing.T) {
 	})
 	stubMergeBatchRunner(t, coordinator)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := app.Run(context.Background(), []string{"merge", "--all", "--dry-run"}); err == nil {
 		t.Fatal("missing integration workspace did not refuse resume")
 	}
@@ -1204,7 +1204,7 @@ func TestMergeAllResumeFailureDoesNotOfferUnsafeRestart(t *testing.T) {
 			batch := &fakeCLIMergeBatchRunner{err: resumeErr}
 			stubMergeBatchRunner(t, batch)
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 
 			if err := app.Run(context.Background(), []string{"merge", "--all"}); !errors.Is(err, resumeErr) {
 				t.Fatalf("merge error = %v, want original resume error", err)
@@ -1334,7 +1334,7 @@ func TestMergeAllDoesNotOfferUnavailableOperatorEjection(t *testing.T) {
 }
 
 func TestMergeAllFlagCompatibilityAndPositionals(t *testing.T) {
-	app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }})
 	for _, args := range [][]string{
 		{"merge", "--all", "plan-a"},
 		{"merge", "--dry-run", "plan-a"},
@@ -1367,7 +1367,7 @@ func TestMergeAllResumeRendersLandedSettlementRecovery(t *testing.T) {
 	}}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := app.Run(context.Background(), []string{"merge", "--all"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1382,7 +1382,7 @@ func TestMergeAllZeroCandidatesIsSuccessfulNoOp(t *testing.T) {
 	batch := &fakeCLIMergeBatchRunner{}
 	stubMergeBatchRunner(t, batch)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := app.Run(context.Background(), []string{"merge", "--all"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1393,7 +1393,7 @@ func TestMergeAllZeroCandidatesIsSuccessfulNoOp(t *testing.T) {
 
 func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)

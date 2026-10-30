@@ -33,7 +33,7 @@ func TestMergeModelSelection(t *testing.T) {
 				t.Setenv("TAO_MERGE_REVIEW_MODEL", "env-review")
 				detail := cliMergeDetail(t)
 				registry := &fakeNoteRegistry{current: taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Base: "repo-base", Resolver: "repo-resolver"}}}}
-				app := App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} }}
+				app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} }})
 				check := func(a App, model string, effort ...string) {
 					t.Helper()
 					options, err := a.mergeSessionOptions(model, effort...)()
@@ -99,7 +99,7 @@ func TestMergeModelSelection(t *testing.T) {
 func TestMergeModelFlagRejectsInvalidValue(t *testing.T) {
 	for _, value := range []string{" \t", "two models", "model\tname"} {
 		for _, mode := range []string{"--all", "plan-a"} {
-			app := App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }}
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(string) Repository { return fakeRepository{} }})
 			err := app.Run(context.Background(), []string{"merge", "--model=" + value, mode})
 			if err == nil || !strings.Contains(err.Error(), "--model") {
 				t.Fatalf("value %q: %v", value, err)
@@ -133,7 +133,7 @@ func TestSingleMergeProposalTelemetryProviders(t *testing.T) {
 					providerErr := errors.New("provider failed")
 					var out bytes.Buffer
 					snapshot := runtimeconfig.RuntimeEnv()
-					app := App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}
+					app := newTestApp(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)})
 					config := newSingleMergeAgentConfig(app, detail, "", nil, appender, runtimeconfig.ModelSelection{})
 					if config.EventAppender != nil {
 						t.Fatal("single proposal wired batch persistence")
@@ -241,7 +241,7 @@ func TestBatchMergeTelemetryProviders(t *testing.T) {
 						}
 						var out bytes.Buffer
 						snapshot := runtimeconfig.RuntimeEnv()
-						config := newMergeBatchAgentConfig(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}, "", nil, nil, runtimeconfig.ModelSelection{}, logrecord.TeeWriter(io.Discard, &out))
+						config := newMergeBatchAgentConfig(newTestApp(App{RuntimeEnv: &snapshot, Out: &out, ProcessStarter: mergeMetricsStarter(t, provider, outcome, providerErr, &calls)}), "", nil, nil, runtimeconfig.ModelSelection{}, logrecord.TeeWriter(io.Discard, &out))
 						if config.Observe != nil {
 							t.Fatal("batch wired plan observer")
 						}
@@ -306,12 +306,12 @@ func TestMergeServiceProposalUsesPlanObserver(t *testing.T) {
 	calls := 0
 	starter := mergeMetricsStarter(t, "claude", "reported", nil, &calls)
 	snapshot := runtimeconfig.RuntimeEnv()
-	app := App{RuntimeEnv: &snapshot, Out: io.Discard, CommandRunner: newCLIMergeGitRunner(t, detail.State.Repo.Root), WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil }, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
+	app := newTestApp(App{RuntimeEnv: &snapshot, Out: io.Discard, CommandRunner: newCLIMergeGitRunner(t, detail.State.Repo.Root), WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil }, ProcessStarter: func(ctx context.Context, cwd, name string, args []string) (agent.Process, error) {
 		if !strings.Contains(strings.Join(args, " "), "--model chosen") {
 			t.Fatalf("proposal args = %v", args)
 		}
 		return starter(ctx, cwd, name, args)
-	}}
+	}})
 	runner, err := app.newMergeServiceRunner(context.Background(), detail, "chosen")
 	if err != nil {
 		t.Fatal(err)
@@ -449,7 +449,7 @@ func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr err
 func TestSingleMergeObserverIgnoresBatchAndUninvokedResults(t *testing.T) {
 	detail := cliMergeDetail(t)
 	appender := &recordingMergeMetricsAppender{}
-	config := newSingleMergeAgentConfig(App{}, detail, "", nil, appender, runtimeconfig.ModelSelection{})
+	config := newSingleMergeAgentConfig(newTestApp(App{}), detail, "", nil, appender, runtimeconfig.ModelSelection{})
 	config.Observe(mergepkg.BatchAgentSessionRequest{BatchID: "batch-a", Operation: mergepkg.BatchAgentOperationProposalGeneration}, mergepkg.BatchAgentSessionResult{Provider: agentsession.Result{Invoked: true, AgentLabel: "pi"}}, nil)
 	config.Observe(mergepkg.BatchAgentSessionRequest{Operation: mergepkg.BatchAgentOperationProposalGeneration}, mergepkg.BatchAgentSessionResult{}, nil)
 	if len(appender.events) != 0 {
@@ -474,11 +474,11 @@ func TestMergeConstructorsCaptureRepositoryOnce(t *testing.T) {
 			registry := &mergeCountingRegistry{logBatchRegistry: logBatchRegistry{&fakeNoteRegistry{
 				current: taodata.Repo{ID: "repo", Root: detail.State.Repo.Root}, dir: t.TempDir(),
 			}}}
-			app := App{Out: io.Discard, Registry: func() NoteRegistry { return registry },
+			app := newTestApp(App{Out: io.Discard, Registry: func() NoteRegistry { return registry },
 				RuntimeEnv:       snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"}),
 				CommandRunner:    newCLIMergeGitRunner(t, detail.State.Repo.Root),
 				WorkspaceManager: func(string) (WorkspaceManager, error) { return &fakeWorkspaceManager{}, nil },
-			}
+			})
 			if batch {
 				runner, err := app.newMergeBatchRunner(context.Background(), fakeRepository{}, "")
 				if err != nil {
@@ -513,7 +513,7 @@ func TestMergeConstructorsCaptureRepositoryOnce(t *testing.T) {
 func TestMergeApplicableOptionErrorsAndFallback(t *testing.T) {
 	for _, key := range []string{runtimeconfig.EnvAgent, runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions, runtimeconfig.EnvResolverModel, runtimeconfig.EnvMergeReviewModel} {
 		t.Run(key, func(t *testing.T) {
-			app := App{RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})}
+			app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{key: "invalid value"})})
 			resolve := app.mergeSessionOptions("")
 			for range 2 {
 				if _, err := resolve(); err == nil || !strings.Contains(err.Error(), key) {
@@ -522,7 +522,7 @@ func TestMergeApplicableOptionErrorsAndFallback(t *testing.T) {
 			}
 		})
 	}
-	app := App{RuntimeEnv: composedSnapshotWith(nil, map[string]string{"models.model": `"repo-base"`})}
+	app := newTestApp(App{RuntimeEnv: composedSnapshotWith(nil, map[string]string{"models.model": `"repo-base"`})})
 	options, err := app.mergeSessionOptions("")()
 	if err != nil {
 		t.Fatal(err)
@@ -539,7 +539,7 @@ func TestMergeApplicableOptionsCapturedOnce(t *testing.T) {
 		runtimeconfig.EnvPullRequest: "invalid", runtimeconfig.EnvModel: "captured",
 		runtimeconfig.EnvRunModel: "invalid unused model",
 	})
-	app := App{RuntimeEnv: snapshot}
+	app := newTestApp(App{RuntimeEnv: snapshot})
 	resolve := app.mergeSessionOptions("chosen")
 	t.Setenv(runtimeconfig.EnvAgent, "invalid")
 	for range 2 {

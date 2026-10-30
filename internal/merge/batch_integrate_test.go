@@ -101,13 +101,13 @@ func TestBatchIntegratorAppliesCandidateWithoutVerification(t *testing.T) {
 		_, _ = stdout.Write([]byte("verification-only conflict\n"))
 		return errors.New("exit 1")
 	}
-	service := Service{
+	service := newTestService(Service{
 		Git: gitops.NewClient(fixture.repoRoot, nil),
 		NewGit: func(root string) GitClient {
 			return gitops.NewClient(root, nil)
 		},
 		Runner: runner,
-	}
+	})
 	result, err := (BatchIntegrator{Store: &recordingBatchTransitionStore{}, Service: service}).Integrate(context.Background(), batchIntegrateTestState(fixture, sourceHead, defaultHead), integrationRoot, BatchIntegrateOptions{VerifyCommand: "false"})
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +351,7 @@ func TestBatchAgentSecondPlannedDeferralRequestRemainsResumable(t *testing.T) {
 			{PlanID: "plan-b", PlanTitle: "plan b", RepoRoot: fixture.repoRoot, Branch: "tao/plan-b", SourceTip: sourceB, ReviewBase: defaultHead, ReviewHead: sourceB, DefaultBranch: fixture.defaultBranch, DefaultStartSHA: defaultHead, CommitMessage: testBatchCommitMessage("plan-b", sourceB), Deferred: &deferredB},
 		},
 	}
-	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+	owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,11 +35,11 @@ func TestStalenessReportsChangedExpectedFilesSinceBaseCommit(t *testing.T) {
 	}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
-	app := App{Out: &out, CommandRunner: reviewFakeRunner(map[string]string{
+	app := newTestApp(App{Out: &out, CommandRunner: reviewFakeRunner(map[string]string{
 		"rev-parse HEAD": "bbbbbbbbbbbb2222\n",
 		"merge-base --is-ancestor aaaaaaaaaaaa1111 HEAD": "",
 		"diff --name-only aaaaaaaaaaaa1111..HEAD":        "internal/run/run.go\ndocs/plan-format.md\n",
-	}, nil)}
+	}, nil)})
 
 	if err := app.staleness(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
@@ -61,12 +61,12 @@ func TestStalenessWarnsWhenBaseCommitIsNotAncestor(t *testing.T) {
 	}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
-	app := App{Out: &out, CommandRunner: reviewFakeRunner(map[string]string{
+	app := newTestApp(App{Out: &out, CommandRunner: reviewFakeRunner(map[string]string{
 		"rev-parse HEAD": "bbbbbbbbbbbb2222\n",
 		"diff --name-only aaaaaaaaaaaa1111..HEAD": "",
 	}, map[string]error{
 		"merge-base --is-ancestor aaaaaaaaaaaa1111 HEAD": errors.New("exit status 1"),
-	})}
+	})})
 
 	if err := app.staleness(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestStalenessWarnsWhenBaseCommitMissing(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Repo: plan.Repo{Root: "/repo"}, Plan: plan.PlanState{ID: "plan-a"}}}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
-	app := App{Out: &out, CommandRunner: reviewFakeRunner(nil, nil)}
+	app := newTestApp(App{Out: &out, CommandRunner: reviewFakeRunner(nil, nil)})
 
 	if err := app.staleness(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestStalenessWarnsWhenBaseCommitMissing(t *testing.T) {
 func TestReviewAgentUnavailableDoesNotFallback(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 	calls := 0
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 	app.CommandRunner = reviewFakeRunner(map[string]string{"status --porcelain": "", "rev-parse HEAD": "head123\n"}, nil)
 	app.ProcessStarter = func(_ context.Context, _, name string, _ []string) (agent.Process, error) {
 		calls++
@@ -114,7 +114,7 @@ func TestReviewAgentUnavailableDoesNotFallback(t *testing.T) {
 }
 
 func TestReviewAgentRejectsInvalidFlags(t *testing.T) {
-	app := App{Out: io.Discard, Err: io.Discard}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	for _, args := range [][]string{{"--review-agent=claude", "plan-a"}, {"--run", "--review-agent=invalid", "plan-a"}, {"--run", "--review-agent=", "plan-a"}} {
 		if err := app.review(context.Background(), fakeRepository{}, args); err == nil || !strings.Contains(err.Error(), "--review-agent") {
 			t.Fatalf("%v: %v", args, err)
@@ -131,7 +131,7 @@ func TestReviewPrintsPersistedReviewArtifact(t *testing.T) {
 	var out bytes.Buffer
 	reporter := newRecordingCLIStatusReporter()
 
-	if err := (App{Out: &out, Err: &out, StatusReporter: reporter}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out, StatusReporter: reporter})).review(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(reporter.calls) != 0 {
@@ -148,7 +148,7 @@ func TestReviewPrintsStateReviewWhenArtifactMissing(t *testing.T) {
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
 
-	if err := (App{Out: &out, Err: &out}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).review(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -168,7 +168,7 @@ func TestReviewSuppressesStaleNextStepHints(t *testing.T) {
 		t.Helper()
 		repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 		var out bytes.Buffer
-		if err := (App{Out: &out, Err: &out}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
+		if err := (newTestApp(App{Out: &out, Err: &out})).review(context.Background(), repo, []string{"plan-a"}); err != nil {
 			t.Fatal(err)
 		}
 		return out.String()
@@ -278,7 +278,7 @@ func TestReviewPrintsClearMessageWhenNoReviewExists(t *testing.T) {
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var out bytes.Buffer
 
-	if err := (App{Out: &out, Err: &out}).review(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).review(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -377,7 +377,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 			var out bytes.Buffer
 			var prompt string
 			reporter := newRecordingCLIStatusReporter()
-			app := App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+			app := newTestApp(App{Out: &out, Err: &out, StatusReporter: reporter, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
 				if name != "git" {
 					t.Fatalf("unexpected command %s %v", name, args)
 					return nil
@@ -393,7 +393,7 @@ func TestReviewRunTriggersFreshReview(t *testing.T) {
 				return nil
 			}, ProcessStarter: fakeCLIProcessStarter(t, reviewOutput, func(value string) {
 				prompt = value
-			})}
+			})})
 
 			failingWriter := &noticeFailWriter{Buffer: &out}
 			if tt.failNotice {
@@ -466,11 +466,11 @@ func TestAuxiliaryGeneratorsInheritBaseModel(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvRunModel, "provider/run")
 	t.Setenv(runtimeconfig.EnvReviewModel, "provider/review")
 	snapshot := runtimeconfig.RuntimeEnv()
-	defaults, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
+	defaults, err := (newTestApp(App{RuntimeEnv: &snapshot})).runEnvDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: &snapshot, CommandRunner: reviewFakeRunner(nil, nil)}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: &snapshot, CommandRunner: reviewFakeRunner(nil, nil)})
 	config, err := defaults.runConfig(runtimeconfig.RunOptionsPatch{})
 	if err != nil {
 		t.Fatal(err)

@@ -66,7 +66,7 @@ func TestPrepareRunExecutionAllowsCurrentModeReverifyWithPullRequestDefault(t *t
 		Fingerprint: "failed-verification",
 	}
 	var out bytes.Buffer
-	service := NewService(&memoryRunRepository{}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
+	service := newTestService(&memoryRunRepository{}, &out, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{
 		CommitPolicy:  CommitPolicySlice,
 		ExecutionMode: ExecutionModeCurrent,
 		PullRequest:   true,
@@ -114,7 +114,7 @@ func TestPlacementNoticeMetadata(t *testing.T) {
 				detail.State.Workspace = &plan.Workspace{Strategy: tt.recorded}
 			}
 			var out bytes.Buffer
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{})
+			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{})
 			request := Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: tt.requested}}
 			// One outer invocation can drive multiple Execute calls (rework or
 			// recovery), without repeating presentation or changing admission.
@@ -158,7 +158,7 @@ func TestPlacementNoticePreservesPRRefusalDespiteOutputFailure(t *testing.T) {
 		detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 		detail.Dir = t.TempDir()
 		detail.State.Workspace = &plan.Workspace{Strategy: "worktree", Path: "/recorded-root"}
-		service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, out, Options{ExecutionConfig: ExecutionConfig{OptionSources: RunOptionSources{PullRequest: "repository", ExecutionMode: "flag"}}})
+		service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, out, Options{ExecutionConfig: ExecutionConfig{OptionSources: RunOptionSources{PullRequest: "repository", ExecutionMode: "flag"}}})
 		err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicySlice, PullRequest: true}})
 		if err == nil || !strings.Contains(err.Error(), "--pull-request requires --execution-mode isolated") {
 			t.Fatalf("PR refusal = %v", err)
@@ -190,7 +190,7 @@ func TestPlacementNoticeDoesNotChangeRepeatedPreparation(t *testing.T) {
 		detail.State.Repo.Root = "/current-root"
 		detail.State.Workspace = &plan.Workspace{Strategy: tt.recorded, Path: "/recorded-root", Branch: "feature/test"}
 		var out bytes.Buffer
-		service := NewService(&memoryRunRepository{}, &out, Options{})
+		service := newTestService(&memoryRunRepository{}, &out, Options{})
 		config := ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: tt.requested, PullRequest: true}}
 		request := Request{RecoveryMode: RecoveryMode{Reverify: true}}
 		service.reportPlacementMismatch(detail, config)
@@ -237,7 +237,7 @@ func preparedServiceExecution(t *testing.T) runExecution {
 	var out bytes.Buffer
 	workspaceRoot := t.TempDir()
 
-	execution, err := NewService(repo, &out, Options{RunDependencies: RunDependencies{
+	execution, err := newTestService(repo, &out, Options{RunDependencies: RunDependencies{
 		CommandRunner: runGitFake(&[]string{}, nil),
 		WorkspacePreparer: func(ctx context.Context, detail *plan.PlanDetail, input WorkspaceResolverInput) (string, error) {
 			return workspaceRoot, nil

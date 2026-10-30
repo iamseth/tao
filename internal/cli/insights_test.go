@@ -55,7 +55,7 @@ func renderAllInsightsScorecard(out *bytes.Buffer, report insights.Report) error
 
 func TestInsightsScorecardFlags(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := app.Run(context.Background(), []string{"insi", "--scorecard", "--digest"}); err == nil || err.Error() != "--scorecard cannot be combined with --digest" {
 		t.Fatalf("conflicting flags error = %v", err)
 	}
@@ -91,10 +91,10 @@ func TestInsightsCommandRegistrationAndPlansDir(t *testing.T) {
 
 	var gotPlansDir string
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 		gotPlansDir = plansDir
 		return fakeRepository{}
-	}}
+	}})
 	if err := app.Run(context.Background(), []string{"--plans-dir", "/tmp/insights-plans", "insi"}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestInsightsCatalogRoutes(t *testing.T) {
 	if err := registry.WriteRepo(legacy); err != nil {
 		t.Fatal(err)
 	}
-	createTestRoute(t, App{Registry: func() NoteRegistry { return registry }}, repo, testRouteID)
+	createTestRoute(t, newTestApp(App{Registry: func() NoteRegistry { return registry }}), repo, testRouteID)
 	report, err := insights.AggregateSources(context.Background(), catalogInsightSources{registry: registry})
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +527,7 @@ func TestInsightsDigestGlobalCapPreservesUTF8(t *testing.T) {
 
 func TestInsightsAllReposHelpAndFlagConflict(t *testing.T) {
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"insights", "--help"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"insights", "--help"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"--all-repos", "all registered repositories", "tao insights --all-repos --digest"} {
@@ -536,7 +536,7 @@ func TestInsightsAllReposHelpAndFlagConflict(t *testing.T) {
 		}
 	}
 
-	err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}).Run(
+	err := (newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})).Run(
 		context.Background(), []string{"--plans-dir", "/tmp/explicit", "insights", "--all-repos"},
 	)
 	if err == nil || !strings.Contains(err.Error(), "--all-repos cannot be combined with --plans-dir") {
@@ -589,9 +589,9 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 		"repo-z": fakeRepository{err: errors.New("permission denied")},
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 		return repositories[filepath.Base(filepath.Dir(plansDir))]
-	}}
+	}})
 	if err := app.Run(context.Background(), []string{"insights", "--all-repos"}); err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestInsightsAllReposEmptyHistoryAndDigestCap(t *testing.T) {
 	dataHome := t.TempDir()
 	t.Setenv("TAO_DATA_HOME", dataHome)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := app.Run(context.Background(), []string{"insights", "--all-repos", "--digest"}); err != nil {
 		t.Fatal(err)
 	}
@@ -704,9 +704,9 @@ func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing
 	}
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(string) Repository {
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository {
 		return fakeRepository{summaries: []plan.PlanSummary{{ID: "plan-a", Dir: dir}}}
-	}}
+	}})
 	if err := app.Run(context.Background(), []string{"insights"}); err != nil {
 		t.Fatal(err)
 	}
@@ -717,7 +717,7 @@ func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing
 	}
 
 	out.Reset()
-	empty := App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	empty := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := empty.Run(context.Background(), []string{"insights", "--digest"}); err != nil {
 		t.Fatal(err)
 	}

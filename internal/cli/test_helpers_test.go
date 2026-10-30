@@ -19,6 +19,14 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+// newTestApp supplies admission for ordinary synthetic CLI fixtures.
+func newTestApp(app App) App {
+	if app.RepositoryAdmission == nil {
+		app.RepositoryAdmission = testRepositoryAdmission
+	}
+	return app
+}
+
 var suiteTaoDataHome string
 
 func TestMain(m *testing.M) {

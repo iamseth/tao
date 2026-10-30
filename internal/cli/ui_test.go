@@ -195,7 +195,7 @@ func TestUIFlagValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
-			app := App{Out: &output, Err: &output, MonitorIsTerminal: func(io.Writer) bool { return false }}
+			app := newTestApp(App{Out: &output, Err: &output, MonitorIsTerminal: func(io.Writer) bool { return false }})
 			err := app.ui(context.Background(), test.args)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("ui(%v) error = %v, want containing %q", test.args, err, test.want)
@@ -209,7 +209,7 @@ func TestUIRejectsNonTerminalOutputWithMonitorGuidance(t *testing.T) {
 	collectorCalled := false
 	registryCalled := false
 	tickerCalled := false
-	app := App{
+	app := newTestApp(App{
 		Out:               &output,
 		Err:               &output,
 		MonitorCollector:  collectingMonitorFunc(func(context.Context) error { collectorCalled = true; return nil }),
@@ -222,7 +222,7 @@ func TestUIRejectsNonTerminalOutputWithMonitorGuidance(t *testing.T) {
 			tickerCalled = true
 			return nil
 		},
-	}
+	})
 	err := app.ui(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "tao monitor --once") {
 		t.Fatalf("non-terminal ui error = %v, want monitor --once guidance", err)
@@ -243,13 +243,13 @@ func TestUIDependencyErrorsIdentifyUnavailableInventory(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
-			app := App{
+			app := newTestApp(App{
 				In: strings.NewReader("q"), Out: &output, Err: &output,
 				MonitorCollector:  test.monitorCollector,
 				MonitorIsTerminal: func(io.Writer) bool { return true },
 				UITerminal:        &uiTerminalStub{resizes: make(chan struct{})},
 				Registry:          func() NoteRegistry { return &fakeNoteRegistry{} },
-			}
+			})
 			err := app.ui(context.Background(), nil)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("ui dependency error = %v, want containing %q", err, test.want)
@@ -276,7 +276,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 	var requestedRef note.RepoReference
 	var output bytes.Buffer
 	ticker := &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
-	app := App{
+	app := newTestApp(App{
 		In: strings.NewReader("\x1b[Zq"), Out: &output, Err: &output,
 		MonitorCollector:  collectingMonitorFunc(func(context.Context) error { return nil }),
 		MonitorIsTerminal: func(io.Writer) bool { return true },
@@ -291,7 +291,7 @@ func TestUIComposesRepositoryNotesCollector(t *testing.T) {
 			t.Fatal("merely viewing notes must not launch planning")
 			return nil
 		}),
-	}
+	})
 	if err := app.ui(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestUIComposesNoteCreationWithMetadataDestinations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		In: strings.NewReader("\x1b[Zn\rq"), Out: &output, Err: &output,
 		MonitorCollector:  collectingMonitorFunc(func(context.Context) error { return nil }),
 		MonitorIsTerminal: func(io.Writer) bool { return true },
@@ -326,7 +326,7 @@ func TestUIComposesNoteCreationWithMetadataDestinations(t *testing.T) {
 		RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth {
 			return taodata.RepoHealth{}
 		},
-	}
+	})
 	calls := 0
 	app.UINoteCreator = &uiNoteEditor{app: app, session: noteeditor.Session{TempDir: t.TempDir(), Runner: func(_ context.Context, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
 		calls++

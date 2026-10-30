@@ -24,7 +24,7 @@ func TestShowPlanOwnedBlocker(t *testing.T) {
 		// Another slice's block must not hide this slice's evidence.
 		detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeSliceBlocked, SliceID: "002-b"})
 		var out bytes.Buffer
-		if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{})}); err != nil {
+		if err := (newTestApp(App{})).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{})}); err != nil {
 			t.Fatal(err)
 		}
 		for _, want := range []string{"Classification: plan_owned (go vet ./internal/run)", "Paths: internal/run/a.go, internal/run/b.go"} {
@@ -52,7 +52,7 @@ func TestRenderPlanDetailFinalVerificationEvents(t *testing.T) {
 				Events: []plan.Event{{Type: plan.EventTypeFinalVerification, Timestamp: now, Result: tc.result, Reason: tc.reason, Message: message}},
 			}
 			var out bytes.Buffer
-			if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now)}); err != nil {
+			if err := (newTestApp(App{})).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now)}); err != nil {
 				t.Fatal(err)
 			}
 			_, recent, ok := strings.Cut(out.String(), "Recent Events:\n")
@@ -81,7 +81,7 @@ func TestRenderPlanDetailExplainsBlockedSlicesAndEvents(t *testing.T) {
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}
 
 	var plain bytes.Buffer
-	if err := (App{}).renderPlanDetail(&plain, loaded); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&plain, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := plain.String()
@@ -108,10 +108,10 @@ func TestRenderPlanDetailExplainsBlockedSlicesAndEvents(t *testing.T) {
 	terminal := &testTerminalBuffer{}
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
-	if err := (App{}).renderPlanDetail(terminal, loaded); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(terminal, loaded); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(terminal.String(), (App{}).outputPalette(terminal).Paint(theme.RoleWarn, "blocked (waiting for outside action)")) || stripANSI(terminal.String()) != text {
+	if !strings.Contains(terminal.String(), (newTestApp(App{})).outputPalette(terminal).Paint(theme.RoleWarn, "blocked (waiting for outside action)")) || stripANSI(terminal.String()) != text {
 		t.Fatalf("terminal blocked status was not amber-equivalent to plain output:\n%q", terminal.String())
 	}
 }
@@ -134,7 +134,7 @@ func TestRenderPlanDetailIncludesWarningsPlanningMetricsSlicesAndEvents(t *testi
 	}
 	var out bytes.Buffer
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}
-	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()

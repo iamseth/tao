@@ -81,7 +81,7 @@ func TestReviewAgentFlagScopeAndCompletion(t *testing.T) {
 		t.Fatal("merge acquired plan review selector")
 	}
 	fs = flag.NewFlagSet("note run", flag.ContinueOnError)
-	(App{}).registerRunRequestFlags(fs)
+	(newTestApp(App{})).registerRunRequestFlags(fs)
 	if fs.Lookup("review-agent") != nil {
 		t.Fatal("shared note-run flags acquired review selector")
 	}
@@ -600,7 +600,7 @@ func TestZshBooleanCompletionUsesEqualsOnlyParserSyntax(t *testing.T) {
 			}
 
 			args := append([]string{"--auto-rework=false"}, test.positionals...)
-			fs, positional, err := (App{Err: io.Discard}).parseArgs(test.name, args, test.register)
+			fs, positional, err := (newTestApp(App{Err: io.Discard})).parseArgs(test.name, args, test.register)
 			if err != nil {
 				t.Fatalf("parse completed boolean argument: %v", err)
 			}
@@ -758,7 +758,7 @@ func TestZshCompletionScriptCompletesMergePlanIDs(t *testing.T) {
 
 func TestCompletionAndCompleteCommands(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.completion([]string{"zsh"}); err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +832,7 @@ func TestCompletionAndCompleteCommands(t *testing.T) {
 
 func TestCompletionAndCompleteUsageErrors(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.completion([]string{"bash"}); err == nil {
 		t.Fatal("expected completion usage error")
 	}

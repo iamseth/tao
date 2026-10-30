@@ -48,6 +48,14 @@ func testDependencies(executor SliceExecutor, runner CommandRunner, mutators ...
 	return dependencies
 }
 
+// newTestService isolates ordinary fixtures without changing their policy or collaborators.
+func newTestService(repository Repository, output io.Writer, options Options) Service {
+	if options.RepositoryAdmission == nil {
+		options.RepositoryAdmission = testRepositoryAdmission
+	}
+	return NewService(repository, output, options)
+}
+
 func testRepositoryAdmission(ctx context.Context, _ repoadmission.Request, operation func(context.Context) error) error {
 	return operation(ctx)
 }

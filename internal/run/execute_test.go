@@ -60,7 +60,7 @@ func TestExecuteSessionTimeoutSettlesOnlyCompletedSlice(t *testing.T) {
 					}),
 				},
 			}
-			err := NewService(repository, &out, options).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})
+			err := newTestService(repository, &out, options).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options.ResolvedRunOptions})
 			if completed {
 				if err != nil {
 					t.Fatalf("completed timeout: %v", err)
@@ -140,7 +140,7 @@ func TestExecuteRecordedReworkModel(t *testing.T) {
 						LogAppender:         unscopedFileRepository(t),
 					}
 					dependencies.SliceExecutor = newAgentExecutor(descriptor, ExecutionConfig{ResolvedRunOptions: options}, dependencies, "", nil)
-					service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: dependencies})
+					service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: dependencies})
 					if err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: options}); !errors.Is(err, transportErr) {
 						t.Fatalf("execute error = %v, want transport failure", err)
 					}

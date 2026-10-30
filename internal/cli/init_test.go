@@ -17,7 +17,7 @@ func TestInitJSONRegistersRepoAndAllocatesPlan(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", dataHome)
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	withWorkingDir(t, repoRoot, func() {
 		if err := app.Run(context.Background(), []string{"init", "--slug", "Example Plan", "--json"}); err != nil {
 			t.Fatalf("init failed: %v\n%s", err, out.String())
@@ -68,7 +68,7 @@ func TestInitDefaultOutputRegistersWithoutPlan(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", dataHome)
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	withWorkingDir(t, repoRoot, func() {
 		if err := app.Run(context.Background(), []string{"init"}); err != nil {
 			t.Fatalf("init failed: %v\n%s", err, out.String())

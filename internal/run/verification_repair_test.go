@@ -368,7 +368,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			if test.resume {
 				// Discard the append's in-memory detail, as a new invocation would
 				// after a crash between the journaled append and the next handoff.
-				service := NewService(repo, &out, Options{ExecutionConfig: execution.Config, RunDependencies: execution.Dependencies})
+				service := newTestService(repo, &out, Options{ExecutionConfig: execution.Config, RunDependencies: execution.Dependencies})
 				err = service.Execute(ctx, Request{Input: planDir, ResolvedRunOptions: execution.Config.ResolvedRunOptions})
 			} else {
 				err = executeDetailWithExecution(ctx, detail, func(ctx context.Context, prior *plan.PlanDetail) (*plan.PlanDetail, error) {
@@ -470,7 +470,7 @@ func TestRecoveryFinalVerificationDoesNotScheduleRepair(t *testing.T) {
 			gateErr := errors.New("repository tests failed")
 			gateCalls, handoffs, reviews, pullRequests := 0, 0, 0, 0
 			options := ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, Agent: AgentPi, ReviewEnabled: true, PullRequest: true}
-			service := NewService(repo, io.Discard, Options{
+			service := newTestService(repo, io.Discard, Options{
 				ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 				RunDependencies: RunDependencies{
 					CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {

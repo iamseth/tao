@@ -27,13 +27,13 @@ func TestUISettingsServiceCollectsAndUpdatesRepositoryDefaults(t *testing.T) {
 		}
 	}
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
-	app := App{
+	app := newTestApp(App{
 		RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: "true"}),
 		Now:        func() time.Time { return now },
 		RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth {
 			return taodata.RepoHealth{Status: taodata.RepoHealthOK, Message: "ok"}
 		},
-	}
+	})
 	app.SettingsService = settings.NewService(registry.DataHome, *app.RuntimeEnv)
 	service := uiSettingsService{app: app, registry: registry, userHomeDir: func() (string, error) { return "/test/home", nil }}
 	snapshot, err := service.Collect(context.Background())
@@ -84,7 +84,7 @@ func TestUISettingsWorkspaceSetupScope(t *testing.T) {
 
 func TestUISettingsReviewAgentProjection(t *testing.T) {
 	for _, value := range []string{"", "pi", "claude", "invalid"} {
-		service := uiSettingsService{app: App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: value})}, registry: &fakeNoteRegistry{}}
+		service := uiSettingsService{app: newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: value})}), registry: &fakeNoteRegistry{}}
 		snapshot, err := service.Collect(context.Background())
 		if err != nil {
 			t.Fatal(err)
@@ -119,7 +119,7 @@ func TestUISettingsDiagnosticBaselineDoesNotChangeRepositorySettings(t *testing.
 			if err := registry.WriteRepo(repository); err != nil {
 				t.Fatal(err)
 			}
-			app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: value, runtimeconfig.EnvUpdate: "invalid"}), RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }}
+			app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvPullRequest: value, runtimeconfig.EnvUpdate: "invalid"}), RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{Status: "ok"} }})
 			app.SettingsService = settings.NewService(registry.DataHome, *app.RuntimeEnv)
 			service := uiSettingsService{app: app, registry: registry}
 			for range 2 {
@@ -142,7 +142,7 @@ func TestUISettingsDiagnosticBaselineDoesNotChangeRepositorySettings(t *testing.
 func TestUISettingsServiceLeavesDisplayHomeEmptyWhenLookupFails(t *testing.T) {
 	clearTaoEnv(t)
 	service := uiSettingsService{
-		app:         App{},
+		app:         newTestApp(App{}),
 		registry:    taodata.Registry{DataHome: t.TempDir()},
 		userHomeDir: func() (string, error) { return "", errors.New("home unavailable") },
 	}
@@ -164,7 +164,7 @@ func TestUISettingsInvalidFieldsRemainVisibleAndRefresh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(registry.DataHome, "repos", "repo", "repo.json"), []byte(`{"schema":"tao.repo.v1","id":"repo","name":"broken","root":"/missing","run_defaults":{"agent":"invalid","max_slices":3}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}))}}
+	service := uiSettingsService{registry: registry, app: newTestApp(App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvAgent: "pi"}))})}
 	snapshot, err := service.Collect(ctx)
 	if err != nil || len(snapshot.Repositories) != 1 {
 		t.Fatalf("inventory: %+v %v", snapshot, err)
@@ -200,7 +200,7 @@ func TestUISettingsEditorUnsetDisabledAndInvalid(t *testing.T) {
 	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo", Name: "example", Root: "/missing"}); err != nil {
 		t.Fatal(err)
 	}
-	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvModel: "frozen"}))}}
+	service := uiSettingsService{registry: registry, app: newTestApp(App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvModel: "frozen"}))})}
 	for _, test := range []struct {
 		key    string
 		value  *string
@@ -241,7 +241,7 @@ func TestUISettingsSharedWriterAndMaskedProjection(t *testing.T) {
 	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo", Name: "example", Root: "/missing"}); err != nil {
 		t.Fatal(err)
 	}
-	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvModel: "environment"}))}}
+	service := uiSettingsService{registry: registry, app: newTestApp(App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvModel: "environment"}))})}
 	model := "saved"
 	if err := service.SetSetting(ctx, "repo", "models.model", &model); err != nil {
 		t.Fatal(err)
@@ -286,7 +286,7 @@ func TestUISettingsRepositoryReworkProjection(t *testing.T) {
 	if err := registry.WriteRepo(repo); err != nil {
 		t.Fatal(err)
 	}
-	service := uiSettingsService{registry: registry, app: App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8"}))}}
+	service := uiSettingsService{registry: registry, app: newTestApp(App{SettingsService: settings.NewService(registry.DataHome, *snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "8"}))})}
 	snapshot, err := service.Collect(ctx)
 	if err != nil || len(snapshot.Repositories) != 1 {
 		t.Fatalf("inventory: %+v %v", snapshot, err)

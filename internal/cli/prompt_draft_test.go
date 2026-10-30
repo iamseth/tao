@@ -12,7 +12,7 @@ import (
 func TestDraftPromptCommandSavesStdinToLocalDraft(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var out bytes.Buffer
-	app := App{In: strings.NewReader("/tao-plan make the web feel great\n"), Out: &out, Err: &out}
+	app := newTestApp(App{In: strings.NewReader("/tao-plan make the web feel great\n"), Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"draft-prompt", "Web Foundation Plan"}); err != nil {
 		t.Fatalf("draft-prompt failed: %v", err)
@@ -41,7 +41,7 @@ func TestDraftPromptCommandReadsFromFileAndRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"dr", "file prompt", "--from", source}); err != nil {
 		t.Fatalf("draft-prompt failed: %v", err)

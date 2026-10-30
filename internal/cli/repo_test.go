@@ -35,7 +35,7 @@ func TestRepoListAndShow(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"repo", "list"}); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRepoConfigShowsUnsetAndSetsPullRequest(t *testing.T) {
 	t.Chdir(root)
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"repo", "config"}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRepoConfigReviewAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	for _, value := range []string{"claude", "pi", "unset"} {
 		out.Reset()
 		if err := app.Run(context.Background(), []string{"repo", "config", "--review-agent=" + value, "--pull-request=false", "--review-model=provider/review"}); err != nil {
@@ -190,7 +190,7 @@ func TestRepoConfigModelDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	flags := []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model", "effort", "run-effort", "review-effort", "merge-review-effort", "resolver-effort"}
 	keys := []string{"model", "run_model", "review_model", "merge_review_model", "resolver_model", "rework_escalation_model", "effort", "run_effort", "review_effort", "merge_review_effort", "resolver_effort"}
 	if err := app.Run(context.Background(), []string{"repo", "config"}); err != nil {
@@ -295,9 +295,9 @@ func TestRepositoryPullRequestDefaultAppliesToRunAndExplicitFlagWins(t *testing.
 		t.Fatal(err)
 	}
 	newApp := func(environment map[string]string) App {
-		return (App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(environment)), Registry: func() NoteRegistry {
+		return (newTestApp(App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(environment)), Registry: func() NoteRegistry {
 			return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
-		}}).initializeSettings(ctx)
+		}})).initializeSettings(ctx)
 	}
 
 	active := &first
@@ -356,11 +356,11 @@ func TestStatusShowsEnvironmentMasksRepositoryPullRequestSource(t *testing.T) {
 	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: &value}}
 	registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out:        &out,
 		Repository: func(string) Repository { return fakeRepository{} },
 		Registry:   func() NoteRegistry { return registry },
-	}
+	})
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestRepoDoctorReportsErrorsAndReturnsNonZero(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "doctor"})
+	err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"repo", "doctor"})
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") {
 		t.Fatalf("expected unhealthy repo error, got %v", err)
 	}
@@ -441,7 +441,7 @@ func TestRepoShowUsesSharedSelectorPolicy(t *testing.T) {
 	} {
 		t.Run(tt.selector, func(t *testing.T) {
 			var out bytes.Buffer
-			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "show", tt.selector})
+			err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"repo", "show", tt.selector})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
 					t.Fatalf("repo show error = %v, want %q", err, tt.wantErr)
@@ -487,7 +487,7 @@ func TestRepoShowPreservesUnhealthyCatalogDetails(t *testing.T) {
 	} {
 		t.Run(tt.selector, func(t *testing.T) {
 			var out bytes.Buffer
-			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "show", tt.selector})
+			err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"repo", "show", tt.selector})
 			if (err != nil) != strings.HasPrefix(tt.selector, "bad-") || !strings.HasPrefix(out.String(), tt.want) {
 				t.Fatalf("repo show = %q, %v; want %q", out.String(), err, tt.want)
 			}
@@ -495,7 +495,7 @@ func TestRepoShowPreservesUnhealthyCatalogDetails(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"repo", "config", "--pull-request=true", "bad-json"})
+	err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"repo", "config", "--pull-request=true", "bad-json"})
 	if err == nil || !strings.Contains(err.Error(), "repair the file manually") {
 		t.Fatalf("config accepted malformed metadata: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestRepoShowPreservesUnhealthyCatalogDetails(t *testing.T) {
 
 func TestRepoUsageErrors(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	for _, args := range [][]string{{"repo"}, {"repo", "list", "extra"}, {"repo", "show"}, {"repo", "config", "one", "two"}, {"repo", "doctor", "extra"}, {"repo", "bad"}} {
 		if err := app.Run(context.Background(), args); err == nil {
 			t.Fatalf("Run(%v) succeeded unexpectedly", args)
@@ -520,7 +520,7 @@ func TestRepoConfigReworkDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	call := func(args ...string) error {
 		out.Reset()
 		return app.Run(context.Background(), append(append([]string{"repo", "config"}, args...), repo.ID))

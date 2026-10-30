@@ -75,7 +75,7 @@ func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {
 	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo", Name: "repo"}, PlansDir: plansDir, RuntimeStatusDir: statusDir}
 	var requestedDir string
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out:      &out,
 		Err:      &out,
 		Now:      func() time.Time { return now },
@@ -85,7 +85,7 @@ func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {
 			return fakeRepository{summaries: []plan.PlanSummary{{ID: "cross-repo", Title: "Cross Repo", Status: plan.StatusPlanned}}}
 		},
 		MonitorIsTerminal: func(io.Writer) bool { return false },
-	}
+	})
 	if err := app.Run(context.Background(), []string{"monitor"}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestMonitorShowInvalidControlsInvalidPlanRows(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var out bytes.Buffer
-			app := App{
+			app := newTestApp(App{
 				Out:      &out,
 				Err:      &out,
 				Registry: func() NoteRegistry { return monitorRegistryStub{entries: []taodata.RepoInventoryEntry{entry}} },
@@ -117,7 +117,7 @@ func TestMonitorShowInvalidControlsInvalidPlanRows(t *testing.T) {
 					return fakeRepository{summaries: []plan.PlanSummary{{ID: "damaged-plan", Status: plan.StatusInvalid, Warnings: []string{"invalid state.json"}}}}
 				},
 				MonitorIsTerminal: func(io.Writer) bool { return false },
-			}
+			})
 			if err := app.Run(context.Background(), test.args); err != nil {
 				t.Fatal(err)
 			}
@@ -149,11 +149,11 @@ func TestMonitorOnceRendersPlainColumnsLivenessAndWarnings(t *testing.T) {
 		},
 	}}}
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out: &out, Err: &out, MonitorCollector: collector,
 		MonitorIsTerminal: func(io.Writer) bool { return true },
 		MonitorTicker:     func(time.Duration) MonitorTicker { t.Fatal("once mode created ticker"); return nil },
-	}
+	})
 	if err := app.Run(context.Background(), []string{"monitor", "--once"}); err != nil {
 		t.Fatal(err)
 	}
@@ -367,11 +367,11 @@ func TestMonitorUnicodeColumnsMatchExactPlainAndColoredOutput(t *testing.T) {
 func TestMonitorRedirectedOutputIsAutomaticallyOnceAndPlain(t *testing.T) {
 	collector := &monitorCollectorStub{snapshots: []monitor.Snapshot{{}}}
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out: &out, Err: &out, MonitorCollector: collector,
 		MonitorIsTerminal: func(io.Writer) bool { return false },
 		MonitorTicker:     func(time.Duration) MonitorTicker { t.Fatal("redirected monitor created ticker"); return nil },
-	}
+	})
 	if err := app.Run(context.Background(), []string{"monitor"}); err != nil {
 		t.Fatal(err)
 	}
@@ -388,11 +388,11 @@ func TestMonitorInteractiveRefreshUsesIntervalRedrawsAndCancels(t *testing.T) {
 	var gotInterval time.Duration
 	var out testTerminalBuffer
 	ctx, cancel := context.WithCancel(context.Background())
-	app := App{
+	app := newTestApp(App{
 		Out: &out, Err: &out, MonitorCollector: collector,
 		MonitorIsTerminal: func(io.Writer) bool { return true },
 		MonitorTicker:     func(interval time.Duration) MonitorTicker { gotInterval = interval; return ticker },
-	}
+	})
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx, []string{"monitor", "--interval", "350ms"}) }()
 	if got := <-collector.called; got != 1 {
@@ -434,10 +434,10 @@ func TestMonitorFollowKeepsInvocationPalette(t *testing.T) {
 	var out testTerminalBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app := App{
+	app := newTestApp(App{
 		Out: &out, Err: &out, MonitorCollector: collector,
 		MonitorTicker: func(time.Duration) MonitorTicker { return ticker },
-	}
+	})
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx, []string{"monitor"}) }()
 	<-collector.called
@@ -493,7 +493,7 @@ func TestMonitorInteractiveColorPolicy(t *testing.T) {
 func TestMonitorRejectsInvalidIntervalsAndArguments(t *testing.T) {
 	for _, args := range [][]string{{"monitor", "--interval", "0s"}, {"monitor", "--interval", "-1s"}, {"monitor", "--interval", "later"}, {"monitor", "extra"}} {
 		var out bytes.Buffer
-		app := App{Out: &out, Err: &out, MonitorCollector: &monitorCollectorStub{}}
+		app := newTestApp(App{Out: &out, Err: &out, MonitorCollector: &monitorCollectorStub{}})
 		if err := app.Run(context.Background(), args); err == nil {
 			t.Fatalf("Run(%v) succeeded", args)
 		}
@@ -503,7 +503,7 @@ func TestMonitorRejectsInvalidIntervalsAndArguments(t *testing.T) {
 func TestMonitorRefreshErrorIsReturnedWithoutPartialRedraw(t *testing.T) {
 	collector := &monitorCollectorStub{errors: []error{errors.New("catalog unavailable")}}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, MonitorCollector: collector, MonitorIsTerminal: func(io.Writer) bool { return true }}
+	app := newTestApp(App{Out: &out, Err: &out, MonitorCollector: collector, MonitorIsTerminal: func(io.Writer) bool { return true }})
 	err := app.Run(context.Background(), []string{"monitor", "--once"})
 	if err == nil || !strings.Contains(err.Error(), "refresh monitor: catalog unavailable") {
 		t.Fatalf("error = %v", err)

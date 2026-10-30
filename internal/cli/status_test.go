@@ -41,7 +41,7 @@ func persistStatusRepository(t *testing.T, repo taodata.Repo) string {
 // used to compose effective presentation.
 func TestLegacyRepositoryStatusAdapter(t *testing.T) {
 	repo := taodata.Repo{RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(false), Models: &taodata.RepoModelDefaults{Base: "legacy", Effort: "legacy", RunEffort: "legacy", ReviewEffort: "legacy", MergeReviewEffort: "legacy", ResolverEffort: "legacy"}}}
-	app := App{Registry: func() NoteRegistry { return &fakeNoteRegistry{current: repo} }}
+	app := newTestApp(App{Registry: func() NoteRegistry { return &fakeNoteRegistry{current: repo} }})
 	patch, err := app.currentRepositoryRunOptions(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestLegacyRepositoryStatusAdapter(t *testing.T) {
 func TestStatusCommandApplicability(t *testing.T) {
 	var out bytes.Buffer
 	rows := snapshotWith(nil).Status()
-	if err := (App{Out: &out}).writeStatus(statusPayload{RuntimeEnv: rows}); err != nil {
+	if err := (newTestApp(App{Out: &out})).writeStatus(statusPayload{RuntimeEnv: rows}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Precedence: built-in → global → repository → environment → flags") {
@@ -102,7 +102,7 @@ func TestStatusMixedInvalidConfigurationKeepsCompleteRows(t *testing.T) {
 	registered := taodata.Repo{ID: "repo-a", RunDefaults: &taodata.RepoRunDefaults{PullRequest: new(true), Models: &taodata.RepoModelDefaults{Base: "repo-model"}}}
 	var out bytes.Buffer
 	persistStatusRepository(t, registered)
-	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }, Repository: func(string) Repository { return nil }}
+	app := newTestApp(App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }, Repository: func(string) Repository { return nil }})
 	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestStatusInvalidThemeWarnsWithoutFailing(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("TAO_THEME", "nope")
 	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository { return fakeRepository{} }}
+	app := newTestApp(App{Out: &out, Repository: func(string) Repository { return fakeRepository{} }})
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestStatusRepositoryModelDefaults(t *testing.T) {
 			}
 			registry := &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}}
 			var out bytes.Buffer
-			app := App{Out: &out, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{} }}
+			app := newTestApp(App{Out: &out, Registry: func() NoteRegistry { return registry }, Repository: func(string) Repository { return fakeRepository{} }})
 			if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 				t.Fatal(err)
 			}
@@ -292,7 +292,7 @@ func TestStatusShowsRuntimeEnvAndPlanRollup(t *testing.T) {
 	t.Setenv("TAO_PULL_REQUEST", "1")
 	summaries := []plan.PlanSummary{{ID: "plan-a", Status: plan.StatusCompleted, Complete: true, Reviewed: true, ReviewVerdict: "approve"}}
 	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository { return fakeRepository{summaries: summaries} }}
+	app := newTestApp(App{Out: &out, Repository: func(string) Repository { return fakeRepository{summaries: summaries} }})
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestStatusCountsAbandonmentSeparatelyFromCompletion(t *testing.T) {
 		{ID: "completed", Status: plan.StatusCompleted, Complete: true, Reviewed: true},
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository { return fakeRepository{summaries: summaries} }}
+	app := newTestApp(App{Out: &out, Repository: func(string) Repository { return fakeRepository{summaries: summaries} }})
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -328,9 +328,9 @@ func TestStatusCountsAbandonmentSeparatelyFromCompletion(t *testing.T) {
 func TestStatusJSONContainsOnlyLocalStatus(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository {
+	app := newTestApp(App{Out: &out, Repository: func(string) Repository {
 		return fakeRepository{summaries: []plan.PlanSummary{{Status: plan.StatusInProgress}}}
-	}}
+	}})
 	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestStatusJSONContainsOnlyLocalStatus(t *testing.T) {
 func TestStatusWithNoPlanRepositoryShowsEmptyRollup(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository { return nil }}
+	app := newTestApp(App{Out: &out, Repository: func(string) Repository { return nil }})
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestStatusWithNoPlanRepositoryShowsEmptyRollup(t *testing.T) {
 func TestStatusJSONWithPlanListErrorIsValidAndEmpty(t *testing.T) {
 	clearTaoEnv(t)
 	var out bytes.Buffer
-	app := App{Out: &out, Repository: func(string) Repository { return fakeRepository{err: errors.New("plans unavailable")} }}
+	app := newTestApp(App{Out: &out, Repository: func(string) Repository { return fakeRepository{err: errors.New("plans unavailable")} }})
 	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestStatusRepositoryReworkDefaults(t *testing.T) {
 	persistStatusRepository(t, registered)
 	snapshot := snapshotWith(map[string]string{runtimeconfig.EnvMaxReworkAttempts: "9"})
 	var out bytes.Buffer
-	app := App{Out: &out, RuntimeEnv: snapshot, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }}
+	app := newTestApp(App{Out: &out, RuntimeEnv: snapshot, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }})
 	if err := app.status(context.Background(), nil, []string{"--json"}); err != nil {
 		t.Fatal(err)
 	}

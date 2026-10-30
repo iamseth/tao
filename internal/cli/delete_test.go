@@ -13,7 +13,7 @@ import (
 
 func TestDeleteUsageAndMissingForce(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.delete(context.Background(), fakeRepository{}, nil); err == nil || !strings.Contains(err.Error(), "usage: tao delete") {
 		t.Fatalf("expected delete usage error, got %v", err)
 	}
@@ -28,7 +28,7 @@ func TestDeleteDeletesCompletedPlan(t *testing.T) {
 	root := t.TempDir()
 	planID := "20260430-1200-delete"
 	planDir := writeRunPlan(t, root, planID, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"--plans-dir", root, "delete", planID, "--force"}); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestDeleteForceDeletesActivePlan(t *testing.T) {
 	root := t.TempDir()
 	planID := "20260430-1200-delete"
 	planDir := writeRunPlan(t, root, planID, plan.StatusInProgress, []string{"001-a"}, nil, "001-a", plan.StatusInProgress)
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	if err := app.Run(context.Background(), []string{"--plans-dir", root, "de", planID, "--force"}); err != nil {
 		t.Fatal(err)

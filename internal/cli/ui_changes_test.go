@@ -103,7 +103,7 @@ func TestUIChangesAppWiring(t *testing.T) {
 	defer func() { _ = keys.Close() }()
 	reached := make(chan struct{}, 1)
 	var output bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		In: input, Out: &output, Err: io.Discard,
 		MonitorIsTerminal: func(io.Writer) bool { return true },
 		MonitorCollector:  &monitorCollectorStub{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{{Kind: monitor.RowKindPlan, PlanID: "changes-plan", PlanDir: dir, PlanTitle: "Changes plan", Status: plan.StatusInProgress}}}}},
@@ -122,7 +122,7 @@ func TestUIChangesAppWiring(t *testing.T) {
 			return errors.New("test probe unavailable")
 		},
 		RepoHealthCheck: func(context.Context, taodata.Repo) taodata.RepoHealth { return taodata.RepoHealth{} },
-	}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	done := make(chan error, 1)

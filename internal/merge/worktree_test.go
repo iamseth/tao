@@ -106,13 +106,13 @@ func TestWorktreeGitUsesPlanWorktreeBoundGitClientAndFallback(t *testing.T) {
 
 	t.Run("worktree plan uses worktree-bound git client", func(t *testing.T) {
 		var gotDir string
-		service := Service{
+		service := newTestService(Service{
 			Git: gitops.NewClient(fixture.repoRoot, nil),
 			NewGit: func(dir string) GitClient {
 				gotDir = dir
 				return gitops.NewClient(dir, nil)
 			},
-		}
+		})
 
 		git, err := service.worktreeGit(realGitWorktreeDetail(fixture, plan.WorkspaceStrategyWorktree))
 		if err != nil {
@@ -133,13 +133,13 @@ func TestWorktreeGitUsesPlanWorktreeBoundGitClientAndFallback(t *testing.T) {
 	t.Run("current mode falls back to repo-root git client", func(t *testing.T) {
 		fallback := &fakeGitClient{status: "repo-root status\n"}
 		calledNewGit := false
-		service := Service{
+		service := newTestService(Service{
 			Git: fallback,
 			NewGit: func(dir string) GitClient {
 				calledNewGit = true
 				return gitops.NewClient(dir, nil)
 			},
-		}
+		})
 
 		git, err := service.worktreeGit(realGitWorktreeDetail(fixture, plan.WorkspaceStrategyCurrent))
 		if err != nil {

@@ -42,12 +42,12 @@ func TestCleanupRemovesMergedBranchesAndSkipsRest(t *testing.T) {
 			"typed-pr":   {State: plan.State{Repo: plan.Repo{Root: root}, Plan: plan.PlanState{PullRequest: &plan.PullRequest{Branch: "docs/typed-pr"}}}},
 		},
 	}
-	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner(root), WorkspaceManager: func(gotRoot string) (WorkspaceManager, error) {
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner(root), WorkspaceManager: func(gotRoot string) (WorkspaceManager, error) {
 		if gotRoot != root {
 			t.Fatalf("expected repo root %q, got %q", root, gotRoot)
 		}
 		return manager, nil
-	}}
+	}})
 
 	if err := app.cleanup(context.Background(), repo, nil); err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestCleanupPlansDirCannotClaimBranchFromAnotherRepository(t *testing.T) {
 			"foreign-plan": {State: plan.State{Repo: plan.Repo{Root: foreignRoot}, Workspace: &plan.Workspace{Branch: branch}}},
 		},
 	}
-	app := App{
+	app := newTestApp(App{
 		Out:           &out,
 		Err:           &out,
 		CommandRunner: cleanupTopLevelRunner(currentRoot),
@@ -98,7 +98,7 @@ func TestCleanupPlansDirCannotClaimBranchFromAnotherRepository(t *testing.T) {
 			return repo
 		},
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-	}
+	})
 
 	if err := app.Run(context.Background(), []string{"--plans-dir", plansDir, "cleanup"}); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestCleanupForceRemovesUnmergedButNotCurrent(t *testing.T) {
 		{Branch: "tao/wip", Status: workspace.ManagedStatusUnmerged, Reason: "not merged into master"},
 		{Branch: "tao/cur", Status: workspace.ManagedStatusCurrent, Reason: "branch is currently checked out"},
 	}}
-	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }}
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }})
 
 	if err := app.cleanup(context.Background(), fakeRepository{}, []string{"--force"}); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestCleanupDryRunDoesNotRemove(t *testing.T) {
 	manager := &fakeWorkspaceManager{managedPlans: []workspace.ManagedCleanup{
 		{Branch: "tao/done", Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "merged into master"},
 	}}
-	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }}
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }})
 
 	if err := app.cleanup(context.Background(), fakeRepository{}, []string{"--dry-run"}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestCleanupContinuesAfterFailures(t *testing.T) {
 		},
 		cleanManagedErr: map[string]error{"tao/bad": errors.New("worktree locked")},
 	}
-	app := App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }}
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: cleanupTopLevelRunner("/repo"), WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil }})
 
 	err := app.cleanup(context.Background(), fakeRepository{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "cleanup failed for 1 branch") {
@@ -183,10 +183,10 @@ func TestCleanupReportsRepositoryLocateFailure(t *testing.T) {
 		_, _ = io.WriteString(stderr, "not a git repository")
 		return errors.New("exit status 128")
 	}
-	app := App{Out: &out, Err: &out, CommandRunner: runner, WorkspaceManager: func(string) (WorkspaceManager, error) {
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: runner, WorkspaceManager: func(string) (WorkspaceManager, error) {
 		t.Fatal("workspace manager must not be built when repo root is unknown")
 		return nil, nil
-	}}
+	}})
 	err := app.cleanup(context.Background(), fakeRepository{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "locate repository") {
 		t.Fatalf("expected locate repository error, got %v", err)
@@ -220,7 +220,7 @@ func TestCleanupFromLinkedWorktreeExcludesControlActiveBatch(t *testing.T) {
 				}
 				t.Chdir(linked)
 				var out bytes.Buffer
-				app := App{Out: &out, Registry: func() NoteRegistry { return registry }}
+				app := newTestApp(App{Out: &out, Registry: func() NoteRegistry { return registry }})
 				var args []string
 				if force {
 					args = append(args, "--force")
@@ -322,7 +322,7 @@ func TestCleanupSkipsLiveBatchOwnership(t *testing.T) {
 					writeCLICommitFile(t, path, "progress.txt", "live integration\n")
 				}
 				var out bytes.Buffer
-				app := App{Out: &out, Registry: func() NoteRegistry { return registry }}
+				app := newTestApp(App{Out: &out, Registry: func() NoteRegistry { return registry }})
 				var args []string
 				if force {
 					args = []string{"--force"}
@@ -395,10 +395,10 @@ func TestCleanupHoldsBatchOwnershipThroughEnumerationAndRemoval(t *testing.T) {
 		}}},
 		assertOwned: assertOwned,
 	}
-	app := App{Out: io.Discard, CommandRunner: registry.Runner,
+	app := newTestApp(App{Out: io.Discard, CommandRunner: registry.Runner,
 		Registry:         func() NoteRegistry { return registry },
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-	}
+	})
 	if err := app.cleanup(context.Background(), fakeRepository{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -450,10 +450,10 @@ func TestCleanupIntegrationNamespaces(t *testing.T) {
 			manager := &fakeWorkspaceManager{integrationPlans: []workspace.ManagedCleanup{
 				{Branch: "tao/integration/orphan", WorktreePath: path, Status: workspace.ManagedStatusClean, CanRemove: true, Reason: "merged into main"},
 			}}
-			app := App{Out: &out, CommandRunner: registry.Runner,
+			app := newTestApp(App{Out: &out, CommandRunner: registry.Runner,
 				Registry:         func() NoteRegistry { return registry },
 				WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-			}
+			})
 			var args []string
 			if dryRun {
 				args = []string{"--dry-run"}
@@ -506,9 +506,9 @@ func TestCleanupIntegrationInactiveIdentity(t *testing.T) {
 				}
 			}
 			manager := &fakeWorkspaceManager{activeBatchID: "not called"}
-			app := App{Out: &out, CommandRunner: registry.Runner,
+			app := newTestApp(App{Out: &out, CommandRunner: registry.Runner,
 				WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-			}
+			})
 			if err := app.cleanup(context.Background(), fakeRepository{}, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -539,10 +539,10 @@ func TestCleanupUnknownControlIdentitySkipsIntegrations(t *testing.T) {
 				}
 				return registry.Runner(ctx, dir, name, args, stdout, stderr)
 			}
-			app := App{Out: &out, CommandRunner: runner,
+			app := newTestApp(App{Out: &out, CommandRunner: runner,
 				Registry:         func() NoteRegistry { return registry },
 				WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-			}
+			})
 			if err := app.cleanup(context.Background(), fakeRepository{}, []string{"--force"}); err != nil {
 				t.Fatal(err)
 			}
@@ -570,10 +570,10 @@ func TestCleanupRegistryFailureStillRemovesPlanItems(t *testing.T) {
 	manager := &fakeWorkspaceManager{managedPlans: []workspace.ManagedCleanup{
 		{Branch: "tao/done", Status: workspace.ManagedStatusClean, CanRemove: true},
 	}}
-	app := App{Out: &out, CommandRunner: cleanupTopLevelRunner(root),
+	app := newTestApp(App{Out: &out, CommandRunner: cleanupTopLevelRunner(root),
 		Registry:         func() NoteRegistry { return cleanupFailingRegistry{} },
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-	}
+	})
 	if err := app.cleanup(context.Background(), fakeRepository{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -593,10 +593,10 @@ func TestCleanupForceSkipsUnregisteredIntegration(t *testing.T) {
 	manager := &fakeWorkspaceManager{integrationPlans: []workspace.ManagedCleanup{
 		{Branch: "tao/integration/unregistered", Status: workspace.ManagedStatusUnregistered, Reason: "directory is not a registered worktree"},
 	}}
-	app := App{Out: &out, CommandRunner: registry.Runner,
+	app := newTestApp(App{Out: &out, CommandRunner: registry.Runner,
 		Registry:         func() NoteRegistry { return registry },
 		WorkspaceManager: func(string) (WorkspaceManager, error) { return manager, nil },
-	}
+	})
 	if err := app.cleanup(context.Background(), fakeRepository{}, []string{"--force"}); err != nil {
 		t.Fatal(err)
 	}

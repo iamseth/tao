@@ -31,7 +31,7 @@ func TestUINoteRepositoryInventoryIsMetadataOnly(t *testing.T) {
 		t.Fatal("inventory probed health")
 		return nil
 	}
-	editor := newUINoteEditor(App{Registry: func() NoteRegistry { return registry }}, nil, nil)
+	editor := newUINoteEditor(newTestApp(App{Registry: func() NoteRegistry { return registry }}), nil, nil)
 	items, err := editor.ListNoteRepositories(context.Background())
 	if err != nil || len(items) != 1 || items[0].ID != repo.ID || items[0].Name != repo.Name {
 		t.Fatalf("items=%+v err=%v", items, err)

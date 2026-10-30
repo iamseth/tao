@@ -38,7 +38,7 @@ func TestExecutionDefaultsCannotGrantRecovery(t *testing.T) {
 
 func TestSequentialRequestsKeepRecoveryInvocationLocal(t *testing.T) {
 	t.Parallel()
-	service := NewService(&memoryRunRepository{}, io.Discard, Options{ExecutionConfig: ExecutionConfig{
+	service := newTestService(&memoryRunRepository{}, io.Discard, Options{ExecutionConfig: ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
 	}})
 	detail := completedReviewPlanDetail(t.TempDir())

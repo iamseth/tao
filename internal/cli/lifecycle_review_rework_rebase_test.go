@@ -69,7 +69,7 @@ func TestLifecycleReworkRunLockHandoff(t *testing.T) {
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
 	var out bytes.Buffer
-	if err := (App{Out: &out, Err: &out, Now: func() time.Time { return fixture.now }}).Run(context.Background(), []string{"--plans-dir", fixture.plansRoot, "rework", "--run", fixture.planID}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out, Now: func() time.Time { return fixture.now }})).Run(context.Background(), []string{"--plans-dir", fixture.plansRoot, "rework", "--run", fixture.planID}); err != nil {
 		t.Fatal(err)
 	}
 	if !executed {

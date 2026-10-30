@@ -488,11 +488,11 @@ func TestMergeCapabilityPreflightFailureRestoresRetryableBoundary(t *testing.T) 
 				},
 			})
 			git := gitops.NewClient(fixture.repoRoot, nil)
-			service := Service{
+			service := newTestService(Service{
 				Git: git, Events: events, Cleaner: successfulCleanup(),
 				SingleResolver: GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: agentSession},
 				SingleReviewer: GuardedSingleIntegrationReviewer{Git: git, Recorder: record, Agent: agentSession},
-			}
+			})
 			err = service.Merge(context.Background(), detail, Options{NoVerify: true})
 			if !errors.Is(err, ErrSingleResolutionPreflight) || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("capability preflight merge error = %v", err)
@@ -554,10 +554,10 @@ func TestMergeRearmsRejectedAttributedStartupForExactLaterExplicitSuccess(t *tes
 	failedAgent := &preflightSingleMergeAgent{resolve: func(context.Context, BatchAgentSessionRequest) (BatchAgentSessionResult, error) {
 		return BatchAgentSessionResult{Provider: agentsession.Result{PromptAcceptance: agent.PromptAcceptanceRejected}}, errors.New("fixture explicit rejection")
 	}}
-	service := Service{
+	service := newTestService(Service{
 		Git: git, Events: events, Cleaner: successfulCleanup(),
 		SingleResolver: GuardedSingleConflictResolver{Git: git, Recorder: record, Agent: failedAgent},
-	}
+	})
 	err = service.Merge(context.Background(), detail, Options{NoVerify: true})
 	startup, ok := errors.AsType[*SingleResolutionStartupError](err)
 	if !ok || startup.Authority != SingleResolutionAuthorityRearmed {
@@ -885,7 +885,7 @@ func TestMergeForceRefusesConflictResolutionWithPreExistingTrackedAndUntrackedDi
 		resolverCalls++
 		return batchResolutionJSON("must not run"), nil
 	})}
-	service := Service{Git: git, Events: events, Cleaner: successfulCleanup(), SingleResolver: resolver}
+	service := newTestService(Service{Git: git, Events: events, Cleaner: successfulCleanup(), SingleResolver: resolver})
 
 	preexistingPaths, preexistingBoundary, err := snapshotPreexistingWorktreeBoundary(context.Background(), git)
 	if err != nil {

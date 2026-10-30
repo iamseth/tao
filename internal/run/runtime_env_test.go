@@ -150,7 +150,7 @@ func TestInvalidSliceBudgetsRejectBeforeWorkspace(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			snapshot := runEnvSnapshot(map[string]string{key: "invalid"})
 			detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
-			service := NewService(nil, io.Discard, Options{})
+			service := newTestService(nil, io.Discard, Options{})
 			_, err := service.prepareRunExecution(context.Background(), detail, ExecutionConfig{RuntimeEnv: snapshot})
 			if err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("budget reached workspace dependencies: %v", err)
@@ -205,7 +205,7 @@ func TestServiceExecuteInvalidBudgetsPreserveVerificationRepair(t *testing.T) {
 				artifacts[name] = contents
 			}
 			providerCalls := 0
-			service := NewService(repo, io.Discard, Options{
+			service := newTestService(repo, io.Discard, Options{
 				ExecutionConfig: ExecutionConfig{RuntimeEnv: runEnvSnapshot(map[string]string{key: "invalid"})},
 				RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 					CommandRunner: newScriptedGitRunner("").Run,
@@ -269,7 +269,7 @@ func TestNonSlicePreparationIgnoresInvalidBudgets(t *testing.T) {
 				}),
 				ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, PullRequest: true},
 			}
-			service := NewService(unscopedFileRepository(t), io.Discard, Options{})
+			service := newTestService(unscopedFileRepository(t), io.Discard, Options{})
 			if _, err := service.prepareRequestRunExecution(context.Background(), detail, Request{RecoveryMode: RecoveryMode{Reverify: reverify}}, config); err != nil {
 				t.Fatalf("unused budgets blocked non-slice preparation: %v", err)
 			}

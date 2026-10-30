@@ -32,7 +32,7 @@ func TestValidateSliceTimingGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
-			err = (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"})
+			err = (newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})).Run(context.Background(), []string{"validate", "example"})
 			if !errors.Is(err, errPlanValidationFailed) {
 				t.Fatalf("expected validation failure, got %v; output:\n%s", err, out.String())
 			}
@@ -66,7 +66,7 @@ func TestValidateSliceTimingLeavesArtifactsUnchanged(t *testing.T) {
 				before[name] = readText(t, filepath.Join(fixture.dir, name))
 			}
 			var out bytes.Buffer
-			err := (App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", fixture.root, "validate", fixture.id})
+			err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"--plans-dir", fixture.root, "validate", fixture.id})
 			if !errors.Is(err, errPlanValidationFailed) || !strings.Contains(out.String(), "timing.started_at") {
 				t.Fatalf("expected timing failure, got %v; output:\n%s", err, out.String())
 			}
@@ -87,7 +87,7 @@ func TestValidateApprovalContractGolden(t *testing.T) {
 	slice.Tasks = []string{"Use the supplied facts.", "Approval must state observer/emulator/version/date/outcome."}
 	slice.Approval = &plan.Approval{Required: true, Approved: true}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
-	err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"})
+	err := (newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})).Run(context.Background(), []string{"validate", "example"})
 	if !errors.Is(err, errPlanValidationFailed) {
 		t.Fatalf("expected validation failure, got %v; output:\n%s", err, out.String())
 	}
@@ -101,7 +101,7 @@ func TestValidateApprovalContractGolden(t *testing.T) {
 
 func TestValidateUsageAndDispatch(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.validate(context.Background(), fakeRepository{}, nil); err == nil {
 		t.Fatal("expected validate usage error")
 	}
@@ -109,7 +109,7 @@ func TestValidateUsageAndDispatch(t *testing.T) {
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{
 		"example": validatePlanDetail(t.TempDir(), []string{"go version"}, nil),
 	}}
-	if err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})).Run(context.Background(), []string{"validate", "example"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Validation: 20260427-1810-example") || !strings.Contains(out.String(), "No validation findings.") {
@@ -121,7 +121,7 @@ func TestValidatePrintsWarningsWithoutFailing(t *testing.T) {
 	var out bytes.Buffer
 	repoRoot := t.TempDir()
 	detail := validatePlanDetail(repoRoot, []string{"go test missing_test.go"}, []string{"events.jsonl line 1: invalid"})
-	err := App{Out: &out, Err: &out}.validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
+	err := newTestApp(App{Out: &out, Err: &out}).validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestValidateLegacyPlacementWarningsAreAdvisory(t *testing.T) {
 	}
 	detail := validatePlanDetail(t.TempDir(), []string{"go version"}, warnings)
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree}
-	err := (App{Out: &out, Err: &out}).validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
+	err := (newTestApp(App{Out: &out, Err: &out})).validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestValidatePrintsAgentBudgetWarningsWithoutFailing(t *testing.T) {
 			OutputTokens: 150001,
 		},
 	}}
-	err := App{Out: &out, Err: &out}.validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
+	err := newTestApp(App{Out: &out, Err: &out}).validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestValidatePrintsGuardrailWarningsWithoutFailing(t *testing.T) {
 		Verification: plan.Verification{Commands: []string{"make verify"}},
 	})
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
-	err := (App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }}).Run(context.Background(), []string{"validate", "example"})
+	err := (newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})).Run(context.Background(), []string{"validate", "example"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestValidateReturnsErrorForMissingRequiredInput(t *testing.T) {
 	var out bytes.Buffer
 	detail := validatePlanDetail(t.TempDir(), []string{"go test ."}, nil)
 	detail.Slices.Slices[0].RequiredInputs = []plan.RequiredInput{{Path: "missing.txt", Kind: plan.RequiredInputFile, Reason: "test fixture"}}
-	err := App{Out: &out, Err: &out}.validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
+	err := newTestApp(App{Out: &out, Err: &out}).validate(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}, []string{"example"})
 	if !errors.Is(err, errPlanValidationFailed) {
 		t.Fatalf("expected validation failure, got %v", err)
 	}
@@ -216,7 +216,7 @@ func TestValidateReturnsErrorForMissingRequiredInput(t *testing.T) {
 
 func TestValidateResolvesPrefixesSlugsAndPaths(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	app := App{Out: io.Discard, Err: io.Discard}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
 	for _, args := range [][]string{
 		{"--plans-dir", fixture.root, "v", "20260430"},
 		{"--plans-dir", fixture.root, "val", "run"},

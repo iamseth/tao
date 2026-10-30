@@ -24,7 +24,7 @@ func TestConfigSchemaRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}
+	app := newTestApp(App{Out: &out, Err: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})
 	for _, def := range runtimeconfig.SettingDefinitions() {
 		for _, scope := range def.Scopes {
 			t.Run(scope+"/"+def.Key, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestConfigErrorsRepairAndMasking(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", home)
 	env := runtimeconfig.LoadEnv(func(key string) (string, bool) { return "true", key == "TAO_PULL_REQUEST" })
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, SettingsService: settings.NewService(home, env)}
+	app := newTestApp(App{Out: &out, Err: &out, SettingsService: settings.NewService(home, env)})
 	ctx := context.Background()
 	for _, args := range [][]string{{"set", "unknown", "x", "--global"}, {"set", "pull_request", "null", "--global"}, {"set", "pull_request", "wrong", "--global"}, {"--global", "--repo", "a"}, {"--repo", ""}, {"--repo", "missing"}} {
 		if err := app.config(ctx, args); err == nil {
@@ -119,7 +119,7 @@ func TestConfigRepositoryRepairAndLegacyAtomicity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}
+	app := newTestApp(App{Out: &out, Err: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})
 	ctx := context.Background()
 	if err := app.repoDoctor(ctx, registry); err == nil || !strings.Contains(out.String(), "Settings diagnostic:") {
 		t.Fatalf("doctor: %v, %s", err, &out)
@@ -157,7 +157,7 @@ func TestConfigUnavailablePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))}
+	app := newTestApp(App{Out: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})
 	for _, args := range [][]string{{"get", "--global"}, {"set", "pull_request", "false", "--global"}} {
 		if err := app.config(context.Background(), args); err == nil {
 			t.Fatalf("accepted unavailable path: %v", args)
@@ -169,7 +169,7 @@ func TestConfigGlobalRoundTrip(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	t.Setenv("TAO_UPDATE", "off")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	for _, args := range [][]string{{"config", "set", "pull_request", "false", "--global"}, {"config", "get", "pull_request", "--global"}, {"config", "unset", "pull_request", "--global"}} {
 		if err := app.Run(context.Background(), args); err != nil {
 			t.Fatalf("%v: %v", args, err)

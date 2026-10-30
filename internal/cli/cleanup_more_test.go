@@ -9,7 +9,7 @@ import (
 )
 
 func TestDefaultCleanupRunnerExecutesCommand(t *testing.T) {
-	runner := (App{}).cleanupRunner()
+	runner := (newTestApp(App{})).cleanupRunner()
 	var out bytes.Buffer
 	if err := runner(context.Background(), "", "printf", []string{"cleanup"}, &out, &out); err != nil {
 		t.Fatal(err)

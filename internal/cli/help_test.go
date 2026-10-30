@@ -14,7 +14,7 @@ import (
 
 func TestUsageRendersGroupedLayout(t *testing.T) {
 	var out bytes.Buffer
-	if err := (App{Out: &out}).usage(); err != nil {
+	if err := (newTestApp(App{Out: &out})).usage(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +91,7 @@ func registeredCommandFlag(t *testing.T, metadata *commandMetadata, name string)
 
 func TestCommandHelpRendersOptionsExamplesAndFlaglessCommands(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"run", "--help"}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestCommandHelpRendersSingleDashAliases(t *testing.T) {
 	} {
 		t.Run(tt.command, func(t *testing.T) {
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out}
+			app := newTestApp(App{Out: &out, Err: &out})
 			if err := app.Run(context.Background(), []string{tt.command, "--help"}); err != nil {
 				t.Fatal(err)
 			}
@@ -179,7 +179,7 @@ func TestEveryRegisteredCommandRendersPerCommandHelp(t *testing.T) {
 
 func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"help"}); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestRunHandlesHelpCompletionAndUnknownCommand(t *testing.T) {
 
 func TestRunHandlesNoArgsAndGlobalFlagErrors(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestCommandHelpReflectsRuntimeEnvDefaults(t *testing.T) {
 	t.Setenv("TAO_MAX_REWORK_ATTEMPTS", "3")
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"run", "--help"}); err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestCommandHelpReflectsRuntimeEnvDefaults(t *testing.T) {
 func assertCommandOutputContains(t *testing.T, label string, args []string, wants ...string) {
 	t.Helper()
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), args); err != nil {
 		t.Fatal(err)
 	}

@@ -79,13 +79,13 @@ func TestAbandonDispatchesThroughRegistry(t *testing.T) {
 	isolateAbandonBatchData(t)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	var out bytes.Buffer
-	app := App{
+	app := newTestApp(App{
 		Out: &out,
 		Err: &out,
 		Repository: func(string) Repository {
 			return plan.NewFileRepository(fixture.root)
 		},
-	}
+	})
 	if err := app.Run(context.Background(), []string{"abandon", "--reason", "obsolete", fixture.id}); err != nil {
 		t.Fatal(err)
 	}
@@ -252,9 +252,9 @@ func TestCommandPrefixNormalization(t *testing.T) {
 
 func TestCommandPrefixDispatch(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(plansDir string) Repository {
 		return fakeRepository{summaries: []plan.PlanSummary{{ID: "20260427-1810-example", Title: "Example", Status: plan.StatusPlanned}}}
-	}}
+	}})
 
 	if err := app.Run(context.Background(), []string{"l"}); err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestRunVersionOutputsBuildMetadata(t *testing.T) {
 
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		var out bytes.Buffer
-		app := App{Out: &out, Err: &out}
+		app := newTestApp(App{Out: &out, Err: &out})
 		if err := app.Run(context.Background(), args); err != nil {
 			t.Fatalf("Run(%v) failed: %v", args, err)
 		}
@@ -317,7 +317,7 @@ func TestRunVersionFallsBackToDevForLocalBuilds(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"version"}); err != nil {
 		t.Fatalf("Run(version) failed: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestRunVersionHandlesUnknownBuildAge(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"--version"}); err != nil {
 		t.Fatalf("Run(--version) failed: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestRunVersionHandlesUnknownBuildAge(t *testing.T) {
 
 func TestRunDoesNotAddShortVersionAlias(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	err := app.Run(context.Background(), []string{"v"})
 	if err == nil || !strings.Contains(err.Error(), "usage: tao validate") {
 		t.Fatalf("expected v to remain validate prefix, got %v", err)
@@ -403,7 +403,7 @@ func TestStartupUpdateRunsForRecognizedUserFacingCommandClasses(t *testing.T) {
 			updater := &fakeSelfUpdater{}
 			var out, errOut bytes.Buffer
 			repositoryCalls := 0
-			app := App{
+			app := newTestApp(App{
 				Out:         &out,
 				Err:         &errOut,
 				SelfUpdater: updater,
@@ -411,7 +411,7 @@ func TestStartupUpdateRunsForRecognizedUserFacingCommandClasses(t *testing.T) {
 					repositoryCalls++
 					return fakeRepository{}
 				},
-			}
+			})
 			if err := app.Run(context.Background(), test.args); err != nil {
 				t.Fatalf("Run(%v) failed: %v", test.args, err)
 			}
@@ -448,7 +448,7 @@ func TestStartupUpdateExcludesInternalAndExplicitCommandsAndUnrecognizedInput(t 
 				Comparison:     selfupdate.VersionCurrent,
 			}}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &bytes.Buffer{}, SelfUpdater: updater, Repository: func(string) Repository { return fakeRepository{} }}
+			app := newTestApp(App{Out: &out, Err: &bytes.Buffer{}, SelfUpdater: updater, Repository: func(string) Repository { return fakeRepository{} }})
 			err := app.Run(context.Background(), test.args)
 			if (err != nil) != test.wantError {
 				t.Fatalf("Run(%v) error = %v, wantError %t", test.args, err, test.wantError)
@@ -477,7 +477,7 @@ func TestStartupUpdateModesAndInvalidConfiguration(t *testing.T) {
 		t.Run(test.value, func(t *testing.T) {
 			t.Setenv("TAO_UPDATE", test.value)
 			updater := &fakeSelfUpdater{}
-			if err := (App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, SelfUpdater: updater}).Run(context.Background(), []string{"version"}); err != nil {
+			if err := (newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, SelfUpdater: updater})).Run(context.Background(), []string{"version"}); err != nil {
 				t.Fatal(err)
 			}
 			if test.wantCall {
@@ -493,7 +493,7 @@ func TestStartupUpdateModesAndInvalidConfiguration(t *testing.T) {
 	t.Setenv("TAO_UPDATE", "sometimes")
 	updater := &fakeSelfUpdater{}
 	var out bytes.Buffer
-	err := (App{Out: &out, Err: &bytes.Buffer{}, SelfUpdater: updater}).Run(context.Background(), []string{"version"})
+	err := (newTestApp(App{Out: &out, Err: &bytes.Buffer{}, SelfUpdater: updater})).Run(context.Background(), []string{"version"})
 	if err == nil || !strings.Contains(err.Error(), "TAO_UPDATE: invalid update mode") || !strings.Contains(err.Error(), "warn, auto, or off") {
 		t.Fatalf("invalid mode error = %v", err)
 	}
@@ -521,7 +521,7 @@ func TestStartupUpdateNoticesAndFailuresStayOffStdout(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			updater := &fakeSelfUpdater{startupOutcome: test.outcome}
 			var out, errOut bytes.Buffer
-			app := App{Out: &out, Err: &errOut, SelfUpdater: updater, Repository: func(string) Repository { return fakeRepository{} }}
+			app := newTestApp(App{Out: &out, Err: &errOut, SelfUpdater: updater, Repository: func(string) Repository { return fakeRepository{} }})
 			if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 				t.Fatal(err)
 			}
@@ -547,7 +547,7 @@ func TestStartupAutomaticInstallFailureWarningIsNonFatalAndThrottled(t *testing.
 		{},
 	}}
 	var out, errOut bytes.Buffer
-	app := App{Out: &out, Err: &errOut, SelfUpdater: updater}
+	app := newTestApp(App{Out: &out, Err: &errOut, SelfUpdater: updater})
 	for range 2 {
 		if err := app.Run(context.Background(), []string{"version"}); err != nil {
 			t.Fatal(err)
@@ -571,7 +571,7 @@ func TestStartupAutomaticInstallRunsRequestedCommandOnceWithoutReexec(t *testing
 		Notice:       "Tao v1.1.0 was installed and will take effect on the next invocation",
 	}}
 	var out, errOut bytes.Buffer
-	if err := (App{Out: &out, Err: &errOut, SelfUpdater: updater}).Run(context.Background(), []string{"version"}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: &errOut, SelfUpdater: updater})).Run(context.Background(), []string{"version"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(updater.startupModes) != 1 || strings.Count(out.String(), "tao v1.0.0") != 1 {
@@ -589,7 +589,7 @@ func TestStartupNoticeSuppressionHandoff(t *testing.T) {
 		{},
 	}}
 	var out, errOut bytes.Buffer
-	app := App{Out: &out, Err: &errOut, SelfUpdater: updater}
+	app := newTestApp(App{Out: &out, Err: &errOut, SelfUpdater: updater})
 	for range 2 {
 		if err := app.Run(context.Background(), []string{"version"}); err != nil {
 			t.Fatal(err)

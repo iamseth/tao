@@ -25,12 +25,12 @@ func TestListSelectedTheme(t *testing.T) {
 			t.Setenv("TAO_THEME", "gruvbox")
 			selected, _ := theme.Lookup("gruvbox")
 			var out testTerminalBuffer
-			app := App{Out: &out, Repository: func(string) Repository {
+			app := newTestApp(App{Out: &out, Repository: func(string) Repository {
 				if mode == "frozen" {
 					t.Setenv("TAO_THEME", "tokyonight")
 				}
 				return fakeRepository{summaries: []plan.PlanSummary{{ID: "plan", Status: plan.StatusCompleted, CompletedCount: 1, TotalCount: 1}}}
-			}}
+			}})
 			if mode == "injected" {
 				app.Theme = &selected
 				t.Setenv("TAO_THEME", "tokyonight")
@@ -61,14 +61,14 @@ func TestUIUsesRuntimeTheme(t *testing.T) {
 	t.Setenv("CLICOLOR_FORCE", "1")
 	var out testTerminalBuffer
 	registry := taodata.NewRegistry(t.TempDir())
-	app := App{
+	app := newTestApp(App{
 		In: strings.NewReader("q"), Out: &out, Err: &out,
 		Registry: func() NoteRegistry { return registry },
 		MonitorTicker: func(time.Duration) MonitorTicker {
 			return &monitorTickerStub{ch: make(chan time.Time), stopped: make(chan struct{})}
 		},
 		UITerminal: &uiTerminalStub{size: term.Size{Width: 160, Height: 60}},
-	}
+	})
 	if err := app.Run(context.Background(), []string{"ui"}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,14 +109,14 @@ func TestPlanListForcedPalettePreservesPlainText(t *testing.T) {
 	t.Setenv("CLICOLOR_FORCE", "")
 	summaries := []plan.PlanSummary{{ID: "plan", Status: plan.StatusCompleted, CompletedCount: 1, TotalCount: 1}}
 	var plain, colored bytes.Buffer
-	if err := (App{}).renderPlanList(&plain, summaries, time.Time{}); err != nil {
+	if err := (newTestApp(App{})).renderPlanList(&plain, summaries, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(plain.String(), "\x1b[") {
 		t.Fatalf("redirected output contains ANSI: %q", plain.String())
 	}
 	t.Setenv("CLICOLOR_FORCE", "1")
-	if err := (App{}).renderPlanList(&colored, summaries, time.Time{}); err != nil {
+	if err := (newTestApp(App{})).renderPlanList(&colored, summaries, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	palette := theme.Default().Palette(theme.ProfileANSI16)

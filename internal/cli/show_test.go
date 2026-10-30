@@ -40,7 +40,7 @@ func TestShowCapturedPromptPointer(t *testing.T) {
 				args = append(args, "--json")
 				want = `"prompt_capture"`
 			}
-			if err := (App{Out: &out, Err: &out}).Run(context.Background(), args); err != nil {
+			if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), args); err != nil {
 				t.Fatal(err)
 			}
 			if strings.Contains(out.String(), want) != captured {
@@ -93,7 +93,7 @@ func TestShowPrintsElapsedAndSliceRows(t *testing.T) {
 		},
 	}}
 
-	err := App{Out: &out, Err: &out}.show(context.Background(), repo, []string{"20260427-1810"})
+	err := newTestApp(App{Out: &out, Err: &out}).show(context.Background(), repo, []string{"20260427-1810"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestRenderPlanDetailUsesLifecycleStatusProjection(t *testing.T) {
 	plan.SetPersistedReview(detail, plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "head123"})
 
 	var out bytes.Buffer
-	if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, now), Now: now}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -255,7 +255,7 @@ func TestRenderPlanDetailShowsCurrentRunAbort(t *testing.T) {
 					detail.Events = append(detail.Events, plan.Event{Type: plan.EventTypeRunContext, Timestamp: now.Add(time.Second)})
 				}
 				var out bytes.Buffer
-				if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Now: now}); err != nil {
+				if err := (newTestApp(App{})).renderPlanDetail(&out, planview.Plan{Detail: detail, Now: now}); err != nil {
 					t.Fatal(err)
 				}
 				want := "Last run exited (" + wantKind + ") at 2026-10-03T19:00:00Z: driver stopped"
@@ -299,7 +299,7 @@ func TestRenderPlanDetailUsesHumanTimestamps(t *testing.T) {
 		}}},
 	}
 
-	if err := (App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.DerivedPlan{Elapsed: 90 * time.Minute}, Now: now}); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.DerivedPlan{Elapsed: 90 * time.Minute}, Now: now}); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
@@ -331,7 +331,7 @@ func TestShowPlanningSessionUnavailableStates(t *testing.T) {
 	}}
 
 	var missingOut bytes.Buffer
-	if err := (App{Out: &missingOut, Err: &missingOut}).show(context.Background(), repo, []string{"missing"}); err != nil {
+	if err := (newTestApp(App{Out: &missingOut, Err: &missingOut})).show(context.Background(), repo, []string{"missing"}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(missingOut.String(), "Planning Session:") {
@@ -339,7 +339,7 @@ func TestShowPlanningSessionUnavailableStates(t *testing.T) {
 	}
 
 	var suspectOut bytes.Buffer
-	if err := (App{Out: &suspectOut, Err: &suspectOut}).show(context.Background(), repo, []string{"suspect"}); err != nil {
+	if err := (newTestApp(App{Out: &suspectOut, Err: &suspectOut})).show(context.Background(), repo, []string{"suspect"}); err != nil {
 		t.Fatal(err)
 	}
 	text := suspectOut.String()
@@ -365,10 +365,10 @@ func TestShowTelemetryTextAndJSON(t *testing.T) {
 	}
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 	var text, structured bytes.Buffer
-	if err := (App{Out: &text}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &text})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := (App{Out: &structured}).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &structured})).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	var payload planview.ShowPayload
@@ -420,7 +420,7 @@ func TestShowPrintsAgentBudgetWarnings(t *testing.T) {
 		},
 	}}
 
-	err := App{Out: &out, Err: &out}.show(context.Background(), repo, []string{"20260427-1810"})
+	err := newTestApp(App{Out: &out, Err: &out}).show(context.Background(), repo, []string{"20260427-1810"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +468,7 @@ func TestShowScopeDecisionAmendmentAcceptsGeneratedFiles(t *testing.T) {
 	reasonFile := writeAmendInput(t, "reason.txt", "Accept required regression coverage")
 	command := strings.ReplaceAll(next.Primary.Command, "--reason-file FILE", "--reason-file "+reasonFile)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	noOpArgs := []string{"--plans-dir", fixture.root, "edit", "amend", fixture.id, id, "--reason-file", reasonFile, "--allow-file", "original.go"}
 	if err := app.Run(context.Background(), noOpArgs); err == nil || !strings.Contains(err.Error(), "does not change slice") {
 		t.Fatalf("unrelated duplicate should remain a no-op: %v", err)
@@ -511,7 +511,7 @@ func TestShowScopeDecisionNextAction(t *testing.T) {
 		t.Fatalf("rendered next = %q", out.String())
 	}
 	out.Reset()
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestShowJSONUsesExplicitNextActionProjection(t *testing.T) {
 		Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a", Status: plan.StatusPending}}},
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +564,7 @@ func TestShowProjectsSafeAbandonmentEvidenceInTextAndJSON(t *testing.T) {
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 
 	var textOut bytes.Buffer
-	if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &textOut, Err: &textOut})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(textOut.String())
@@ -580,7 +580,7 @@ func TestShowProjectsSafeAbandonmentEvidenceInTextAndJSON(t *testing.T) {
 	}
 
 	var jsonOut bytes.Buffer
-	if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+	if err := (newTestApp(App{Out: &jsonOut, Err: &jsonOut})).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	var payload planview.ShowPayload
@@ -611,7 +611,7 @@ func TestShowHandlesAbandonedStatusWithMissingOrEmptyEvidence(t *testing.T) {
 			}
 			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out}
+			app := newTestApp(App{Out: &out, Err: &out})
 			if err := app.show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
 				t.Fatal(err)
 			}
@@ -661,7 +661,7 @@ func TestShowProjectsDurableFinalizationRecoveryInTextJSONAndEvents(t *testing.T
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 
 	var textOut bytes.Buffer
-	if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &textOut, Err: &textOut})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(textOut.String())
@@ -675,7 +675,7 @@ func TestShowProjectsDurableFinalizationRecoveryInTextJSONAndEvents(t *testing.T
 	}
 
 	var jsonOut bytes.Buffer
-	if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+	if err := (newTestApp(App{Out: &jsonOut, Err: &jsonOut})).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	var payload planview.ShowPayload
@@ -721,7 +721,7 @@ func TestShowProjectsNonRetryablePullRequestRecoveryActions(t *testing.T) {
 			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 
 			var textOut bytes.Buffer
-			if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+			if err := (newTestApp(App{Out: &textOut, Err: &textOut})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 				t.Fatal(err)
 			}
 			if text := stripANSI(textOut.String()); !strings.Contains(text, test.wantText) || strings.Contains(text, "Next: tao run --pull-request") {
@@ -729,7 +729,7 @@ func TestShowProjectsNonRetryablePullRequestRecoveryActions(t *testing.T) {
 			}
 
 			var jsonOut bytes.Buffer
-			if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+			if err := (newTestApp(App{Out: &jsonOut, Err: &jsonOut})).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
 				t.Fatal(err)
 			}
 			var payload planview.ShowPayload
@@ -776,7 +776,7 @@ func TestShowProjectsPostCorrectionRecoveryActions(t *testing.T) {
 			repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 
 			var textOut bytes.Buffer
-			if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+			if err := (newTestApp(App{Out: &textOut, Err: &textOut})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 				t.Fatal(err)
 			}
 			if text := stripANSI(textOut.String()); !strings.Contains(text, test.wantText) {
@@ -784,7 +784,7 @@ func TestShowProjectsPostCorrectionRecoveryActions(t *testing.T) {
 			}
 
 			var jsonOut bytes.Buffer
-			if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+			if err := (newTestApp(App{Out: &jsonOut, Err: &jsonOut})).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
 				t.Fatal(err)
 			}
 			var payload planview.ShowPayload
@@ -819,7 +819,7 @@ func TestShowProjectsFailedProposalCorrectionForLegacyEmptyReviewBase(t *testing
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
 
 	var textOut bytes.Buffer
-	if err := (App{Out: &textOut, Err: &textOut}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &textOut, Err: &textOut})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(textOut.String())
@@ -830,7 +830,7 @@ func TestShowProjectsFailedProposalCorrectionForLegacyEmptyReviewBase(t *testing
 	}
 
 	var jsonOut bytes.Buffer
-	if err := (App{Out: &jsonOut, Err: &jsonOut}).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
+	if err := (newTestApp(App{Out: &jsonOut, Err: &jsonOut})).show(context.Background(), repo, []string{"plan-a", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	var payload planview.ShowPayload
@@ -869,10 +869,10 @@ func TestShowLiveMergeOwnerAvoidsGitInspection(t *testing.T) {
 				want = "Merge in progress: pid 0, phase merge_cleanup"
 			}
 			var out bytes.Buffer
-			app := App{Out: &out, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+			app := newTestApp(App{Out: &out, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 				t.Fatal("live merge must not inspect Git recovery boundaries")
 				return nil
-			}}
+			}})
 			if err := app.show(context.Background(), fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}, []string{"plan-a"}); err != nil {
 				t.Fatal(err)
 			}
@@ -908,7 +908,7 @@ func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T)
 	render := func() string {
 		t.Helper()
 		var out bytes.Buffer
-		if err := (App{Out: &out, Err: &out}).show(context.Background(), repo, []string{"plan-a"}); err != nil {
+		if err := (newTestApp(App{Out: &out, Err: &out})).show(context.Background(), repo, []string{"plan-a"}); err != nil {
 			t.Fatal(err)
 		}
 		return stripANSI(out.String())
@@ -936,7 +936,7 @@ func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T)
 		t.Fatalf("live merge text:\n%s", live)
 	}
 	var structured bytes.Buffer
-	if err := (App{Out: &structured}).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &structured})).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	var payload struct {
@@ -960,7 +960,7 @@ func TestShowUsesLiveGitToResumeExactBoundaryAndRestartStaleIntent(t *testing.T)
 		t.Fatal(err)
 	}
 	structured.Reset()
-	if err := (App{Out: &structured}).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
+	if err := (newTestApp(App{Out: &structured})).show(context.Background(), repo, []string{"--json", "plan-a"}); err != nil {
 		t.Fatal(err)
 	}
 	payload.MergeInProgress = nil
@@ -1022,7 +1022,7 @@ func TestStaleSingleMergeIntentPrimaryActionMatchesShowMergeAndTUI(t *testing.T)
 	}
 
 	var showOut bytes.Buffer
-	if err := (App{}).renderPlanDetail(&showOut, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&showOut, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1057,7 +1057,7 @@ func TestRenderPlanDetailProminentlyShowsReasonAndSubordinateAlternatives(t *tes
 	}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
 	var out bytes.Buffer
-	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -1083,7 +1083,7 @@ func TestShowCommentReviewWithFindingsRecommendsRework(t *testing.T) {
 	}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
 	var out bytes.Buffer
-	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -1113,7 +1113,7 @@ func TestRenderPlanDetailShowsTerminalNoActionGuidance(t *testing.T) {
 	detail := &plan.PlanDetail{State: plan.State{Status: plan.StatusCompleted, Plan: plan.PlanState{ID: "done", Title: "Done"}}}
 	loaded := planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{}), Now: time.Now()}
 	var out bytes.Buffer
-	if err := (App{}).renderPlanDetail(&out, loaded); err != nil {
+	if err := (newTestApp(App{})).renderPlanDetail(&out, loaded); err != nil {
 		t.Fatal(err)
 	}
 	text := stripANSI(out.String())
@@ -1127,7 +1127,7 @@ func TestRenderPlanDetailShowsTerminalNoActionGuidance(t *testing.T) {
 
 func TestShowUsageAndRepoErrors(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.show(context.Background(), fakeRepository{}, nil); err == nil {
 		t.Fatal("expected show usage error")
 	}

@@ -22,7 +22,7 @@ func TestStatusSavedMaskedAndInvalid(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvPullRequest, "false")
 	t.Setenv(runtimeconfig.EnvSessionTimeout, "2m")
 	var out bytes.Buffer
-	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }, Repository: func(string) Repository { return nil }}
+	app := newTestApp(App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: registered, repos: []taodata.Repo{registered}} }, Repository: func(string) Repository { return nil }})
 	if err := app.Run(context.Background(), []string{"status", "--json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSettingsPathsFallbackAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TAO_PI_EXTENSION_DIR", extension)
-	rows := (App{}).captureSettingsPaths("missing").settingsPaths()
+	rows := (newTestApp(App{})).captureSettingsPaths("missing").settingsPaths()
 	for _, row := range rows {
 		switch row.Name {
 		case "data home":
@@ -96,7 +96,7 @@ func TestSettingsPathsFallbackAndOverrides(t *testing.T) {
 	}
 	t.Setenv("TAO_DATA_HOME", filepath.Join(home, "data"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "ignored"))
-	if row := (App{}).captureSettingsPaths("").settingsPaths()[0]; row.Value != filepath.Join(home, "data") || row.Source != "TAO_DATA_HOME" {
+	if row := (newTestApp(App{})).captureSettingsPaths("").settingsPaths()[0]; row.Value != filepath.Join(home, "data") || row.Source != "TAO_DATA_HOME" {
 		t.Fatal(row)
 	}
 	if _, err := os.Stat(filepath.Join(home, "pi")); !os.IsNotExist(err) {
@@ -112,7 +112,7 @@ func TestSettingsPathsFrozenAndSelected(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("TAO_CLAUDE_COMMANDS_DIR", "")
-	a := App{}
+	a := newTestApp(App{})
 	a = a.captureSettingsPaths("selected-plans")
 	t.Setenv("XDG_DATA_HOME", "changed")
 	rows := a.settingsPaths()
@@ -141,7 +141,7 @@ func TestStatusScopedProjectionCompleteness(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("TAO_DATA_HOME", t.TempDir())
 	var out bytes.Buffer
-	app := App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: taodata.Repo{}} }, Repository: func(string) Repository { return nil }}
+	app := newTestApp(App{Out: &out, Registry: func() NoteRegistry { return &fakeNoteRegistry{current: taodata.Repo{}} }, Repository: func(string) Repository { return nil }})
 	if err := app.Run(context.Background(), []string{"--plans-dir", "missing", "status", "--json"}); err != nil {
 		t.Fatal(err)
 	}

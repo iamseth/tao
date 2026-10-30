@@ -58,10 +58,10 @@ func TestWorkspaceManagerFromCWDKeepsLinkedLaunchPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			var got string
-			app := App{WorkspaceManager: func(root string) (WorkspaceManager, error) {
+			app := newTestApp(App{WorkspaceManager: func(root string) (WorkspaceManager, error) {
 				got = root
 				return &fakeWorkspaceManager{}, nil
-			}}
+			}})
 			if _, err := app.workspaceManagerFromCWD(); err != nil {
 				t.Fatal(err)
 			}
@@ -247,10 +247,10 @@ func TestWorkspacePrepareUsesPlanRepoRootAndBaseBranch(t *testing.T) {
 	var out bytes.Buffer
 	manager := &fakeWorkspaceManager{prepared: workspace.Metadata{PlanID: "plan-a", Path: "/repo/.tao/workspaces/plan-a", Branch: "tao/plan-a", BaseBranch: "master", Created: true}}
 	var gotRepoRoot string
-	app := App{Out: &out, Err: &out, WorkspaceManager: func(repoRoot string) (WorkspaceManager, error) {
+	app := newTestApp(App{Out: &out, Err: &out, WorkspaceManager: func(repoRoot string) (WorkspaceManager, error) {
 		gotRepoRoot = repoRoot
 		return manager, nil
-	}}
+	}})
 	detail := workspacePlanDetail("plan-a", plan.StatusPlanned)
 	detail.Dir = t.TempDir()
 	repo := fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
@@ -323,10 +323,10 @@ func TestWorkspacePrepareReloadsAbandonmentUnderPlanLock(t *testing.T) {
 	manager := &fakeWorkspaceManager{}
 	managerCreated := false
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, WorkspaceManager: func(string) (WorkspaceManager, error) {
+	app := newTestApp(App{Out: &out, Err: &out, WorkspaceManager: func(string) (WorkspaceManager, error) {
 		managerCreated = true
 		return manager, nil
-	}}
+	}})
 
 	prepareDone := make(chan error, 1)
 	go func() {
@@ -335,7 +335,7 @@ func TestWorkspacePrepareReloadsAbandonmentUnderPlanLock(t *testing.T) {
 	<-repo.initialResolved
 
 	var abandonOut bytes.Buffer
-	abandonErr := (App{Out: &abandonOut, Err: &abandonOut}).abandon(context.Background(), inner, []string{"--reason", "superseded", fixture.id})
+	abandonErr := (newTestApp(App{Out: &abandonOut, Err: &abandonOut})).abandon(context.Background(), inner, []string{"--reason", "superseded", fixture.id})
 	close(repo.continuePrepare)
 	if abandonErr != nil {
 		t.Fatal(abandonErr)
@@ -564,7 +564,7 @@ func TestWorkspaceCleanForceRemovesWithDirtyOverride(t *testing.T) {
 }
 
 func workspaceTestApp(out *bytes.Buffer, manager *fakeWorkspaceManager) App {
-	return App{Out: out, Err: out, WorkspaceManager: func(repoRoot string) (WorkspaceManager, error) { return manager, nil }}
+	return newTestApp(App{Out: out, Err: out, WorkspaceManager: func(repoRoot string) (WorkspaceManager, error) { return manager, nil }})
 }
 
 func workspacePlanDetail(id string, status string) *plan.PlanDetail {

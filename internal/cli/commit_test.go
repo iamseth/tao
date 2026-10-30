@@ -24,7 +24,7 @@ func TestCommitContextIsReadOnlyAndFinalizesStructuredProposal(t *testing.T) {
 	beforeIndex := runCLICommitGit(t, root, "diff", "--cached")
 
 	var out bytes.Buffer
-	app := App{Out: &out, Err: io.Discard}
+	app := newTestApp(App{Out: &out, Err: io.Discard})
 	if err := app.Run(context.Background(), []string{"commit", "--context", "--repo-root", root}); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestCommitPushModesAndOutput(t *testing.T) {
 			}
 			beforeIndex := runCLICommitGit(t, root, "diff", "--cached")
 			var out bytes.Buffer
-			app := App{Out: &out, Err: io.Discard}
+			app := newTestApp(App{Out: &out, Err: io.Discard})
 			contextArgs := []string{"commit", "--context", "--repo-root", root}
 			if mode != "commit-only" {
 				contextArgs = append(contextArgs, "--push")
@@ -182,7 +182,7 @@ func TestCommitPushPreflightErrorsInContextAndMessageModes(t *testing.T) {
 		for _, mode := range [][]string{{"--context"}, {"--message", "feat(cli): test push preflight\n\nWhat:\nCheck prerequisites.\n\nWhy:\nPrevent unsafe mutation."}} {
 			args := append([]string{"commit", "--push", "--repo-root", root}, mode...)
 			var out bytes.Buffer
-			err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), args)
+			err := (newTestApp(App{Out: &out, Err: io.Discard})).Run(context.Background(), args)
 			want := "configured upstream"
 			if detached {
 				want = "detached"
@@ -249,7 +249,7 @@ func TestCommitRefusesManagedWorktreeBeforeContextOrGitMutation(t *testing.T) {
 							args = append(args, "--push")
 						}
 						var out bytes.Buffer
-						err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), args)
+						err := (newTestApp(App{Out: &out, Err: io.Discard})).Run(context.Background(), args)
 						if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "tao run --continue plan-managed") {
 							t.Fatalf("%v: managed refusal = %v", args, err)
 						}
@@ -340,7 +340,7 @@ func TestCommitRefusalRendersCommandlessRepairCapInstruction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = (App{Out: io.Discard, Err: io.Discard}).Run(context.Background(), []string{"commit", "--context", "--repo-root", worktree})
+	err = (newTestApp(App{Out: io.Discard, Err: io.Discard})).Run(context.Background(), []string{"commit", "--context", "--repo-root", worktree})
 	if err == nil || !strings.Contains(err.Error(), "active Tao-managed worktree") || !strings.Contains(err.Error(), "Repair the repository verification failure manually before explicitly reverifying") || strings.Contains(err.Error(), "use `") || strings.Contains(err.Error(), "--repair-verification") {
 		t.Fatalf("commandless verification recovery error = %v", err)
 	}
@@ -376,7 +376,7 @@ func TestCommitRefusesActiveManagedWorktreeAfterLiveBranchDrift(t *testing.T) {
 			beforeHead := strings.TrimSpace(runCLICommitGit(t, worktree, "rev-parse", "HEAD"))
 			beforeIndex := runCLICommitGit(t, worktree, "diff", "--cached")
 			var out bytes.Buffer
-			app := App{Out: &out, Err: io.Discard}
+			app := newTestApp(App{Out: &out, Err: io.Discard})
 			for _, args := range [][]string{
 				{"commit", "--context"},
 				{"commit", "--message", "chore(cli): unsafe commit\n\nWhat:\nCommit drifted work.\n\nWhy:\nExercise the ownership guard."},
@@ -422,7 +422,7 @@ func TestCommitRefusesInvalidPlanAssociatedWithTargetWorktree(t *testing.T) {
 	beforeIndex := runCLICommitGit(t, worktree, "diff", "--cached")
 	var out bytes.Buffer
 	t.Chdir(worktree)
-	err = (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{"commit", "--context"})
+	err = (newTestApp(App{Out: &out, Err: io.Discard})).Run(context.Background(), []string{"commit", "--context"})
 	if err == nil || !strings.Contains(err.Error(), "ownership cannot be safely resolved") || !strings.Contains(err.Error(), "plan-invalid") {
 		t.Fatalf("invalid managed plan error = %v", err)
 	}
@@ -456,7 +456,7 @@ func TestCommitAllowsUnrelatedWorktreeWithStaleManagedMetadata(t *testing.T) {
 	message := "chore(cli): keep unrelated commits\n\nWhat:\nCommit work in an unrelated worktree.\n\nWhy:\nStale plan metadata must not claim a different exact path."
 	var out bytes.Buffer
 	t.Chdir(unrelated)
-	if err := (App{Out: &out, Err: io.Discard}).Run(context.Background(), []string{"commit", "--message", message}); err != nil {
+	if err := (newTestApp(App{Out: &out, Err: io.Discard})).Run(context.Background(), []string{"commit", "--message", message}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Created local commit") {
@@ -469,7 +469,7 @@ func TestCommitMessageOverrideUsesCentralValidationAndReportsSafeNoOp(t *testing
 	writeCLICommitFile(t, root, ".env.example", "TOKEN=replace-me\n")
 	message := "chore(cli): check standalone commit safety\n\nWhat:\nApply live safety filtering to explicit commit messages.\n\nWhy:\nCompatibility overrides must not bypass Tao's path authority."
 	var out bytes.Buffer
-	app := App{Out: &out, Err: io.Discard}
+	app := newTestApp(App{Out: &out, Err: io.Discard})
 	if err := app.Run(context.Background(), []string{"commit", "--message", message, "--repo-root", root}); err != nil {
 		t.Fatal(err)
 	}
@@ -487,14 +487,14 @@ func TestCommitRejectsInvalidProposalBeforeGitCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	app := App{
+	app := newTestApp(App{
 		Out: io.Discard,
 		Err: io.Discard,
 		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 			calls++
 			return nil
 		},
-	}
+	})
 	err := app.Run(context.Background(), []string{"commit", "--proposal-file", path})
 	if err == nil || !strings.Contains(err.Error(), "unsupported commit type") {
 		t.Fatalf("expected proposal validation error, got %v", err)

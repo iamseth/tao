@@ -58,7 +58,7 @@ func TestSliceBlockedScopeRefusal(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+			app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "waiting")}
 			refusal := mode == "owned" || mode == "expected unverified"
 			// Seed an actual resume cache through the unchanged evidence-free flow.
@@ -190,7 +190,7 @@ func TestSliceBlockedGateEvidence(t *testing.T) {
 				args = append(args, "--invalid-command", "go test ./missing", "--invalid-reason", "missing package")
 			}
 			var out, warnings bytes.Buffer
-			app := App{Out: &out, Err: &warnings}
+			app := newTestApp(App{Out: &out, Err: &warnings})
 			if mode == "fingerprint error" {
 				app.CommandRunner = func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 					if strings.HasSuffix(strings.Join(args, " "), "diff HEAD") {
@@ -269,10 +269,10 @@ func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
+	app := newTestApp(App{Out: &out, Err: &out, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
 		t.Error("unchanged blocker must not start an agent")
 		return nil, errors.New("unexpected agent handoff")
-	}}
+	}})
 	if err := app.Run(ctx, []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "lint failed"), "--gate-command", "go test ./...", "--failing-path", path, "--contract-conflict"}); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestSliceBlockedGateEvidenceValidation(t *testing.T) {
 			fixture := newStartedSliceBlockedFixture(t)
 			before := resolveSliceBlockedDetail(t, fixture.dir)
 			args := append([]string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "blocked")}, tt.args...)
-			app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+			app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 			if err := app.Run(context.Background(), args); err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
@@ -358,7 +358,7 @@ func TestSliceBlockedRejectedNoteNotPublished(t *testing.T) {
 	t.Setenv("TAO_DATA_HOME", home)
 	fixture := newStartedSliceBlockedFixture(t)
 	file := writeSliceBlockedReason(t, "private advisory")
-	app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 	if err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "missing", "--reason-file", file, "--resume-note-file", file}); err == nil {
 		t.Fatal("invalid block accepted")
 	}
@@ -387,7 +387,7 @@ func TestSliceBlockedResumeNote(t *testing.T) {
 	reason := writeSliceBlockedReason(t, "waiting")
 	note := writeSliceBlockedReason(t, "last action: inspect; next action: fix; why: failing; do-not: commit")
 	var warnings bytes.Buffer
-	app := App{Out: &bytes.Buffer{}, Err: &warnings, Now: func() time.Time { return time.Date(2026, 7, 19, 17, 0, 0, 0, time.UTC) }}
+	app := newTestApp(App{Out: &bytes.Buffer{}, Err: &warnings, Now: func() time.Time { return time.Date(2026, 7, 19, 17, 0, 0, 0, time.UTC) }})
 	args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reason}
 	if err := app.Run(context.Background(), append(append([]string{}, args...), "--resume-note-file", note)); err != nil {
 		t.Fatal(err)
@@ -431,7 +431,7 @@ func TestSliceBlockedCommandBlocksCurrentSlice(t *testing.T) {
 	reasonFile := writeSliceBlockedReason(t, "  dependency service is unavailable  ")
 	blockedAt := time.Date(2026, 7, 19, 16, 10, 0, 0, time.UTC)
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Now: func() time.Time { return blockedAt }}
+	app := newTestApp(App{Out: &out, Err: &out, Now: func() time.Time { return blockedAt }})
 
 	if err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile}); err != nil {
 		t.Fatal(err)
@@ -470,7 +470,7 @@ func TestSliceBlockedCommandRejectsAbandonedPlanWithoutMutation(t *testing.T) {
 	before := resolveSliceBlockedDetail(t, fixture.dir)
 	reasonFile := writeSliceBlockedReason(t, "later blocker must not revive work")
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 
 	err = app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile})
 	if err == nil || !strings.Contains(err.Error(), "plan "+fixture.id+" is abandoned: superseded by safer work") {
@@ -489,7 +489,7 @@ func TestSliceBlockedCommandRepeatIsIdempotent(t *testing.T) {
 	fixture := newStartedSliceBlockedFixture(t)
 	reasonFile := writeSliceBlockedReason(t, "invalid verification setup")
 	blockedAt := time.Date(2026, 7, 19, 16, 15, 0, 0, time.UTC)
-	app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Now: func() time.Time { return blockedAt }}
+	app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Now: func() time.Time { return blockedAt }})
 	args := []string{
 		"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile,
 		"--invalid-command", "go test ./missing", "--invalid-reason", "package path does not exist", "--corrected-command", "go test ./internal/cli",
@@ -515,7 +515,7 @@ func TestSliceBlockedCommandEmitsVerificationCommandInvalid(t *testing.T) {
 	fixture := newStartedSliceBlockedFixture(t)
 	reasonFile := writeSliceBlockedReason(t, "verification command cannot load tests")
 	blockedAt := time.Date(2026, 7, 19, 16, 20, 0, 0, time.UTC)
-	app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Now: func() time.Time { return blockedAt }}
+	app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}, Now: func() time.Time { return blockedAt }})
 
 	if err := app.Run(context.Background(), []string{
 		"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile,
@@ -567,7 +567,7 @@ func TestSliceBlockedCommandRejectsOversizedInputs(t *testing.T) {
 			reasonFile := writeSliceBlockedReason(t, reason)
 			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile}
 			args = append(args, tt.evidence...)
-			app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+			app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 
 			err := app.Run(context.Background(), args)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -585,7 +585,7 @@ func TestSliceBlockedCommandReportsUnknownAndCompletedSlices(t *testing.T) {
 	t.Run("unknown slice", func(t *testing.T) {
 		fixture := newStartedSliceBlockedFixture(t)
 		reasonFile := writeSliceBlockedReason(t, "blocked")
-		app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+		app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 		err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "missing", "--reason-file", reasonFile})
 		if err == nil || !strings.Contains(err.Error(), "slice missing not found") {
 			t.Fatalf("unknown-slice error = %v", err)
@@ -595,7 +595,7 @@ func TestSliceBlockedCommandReportsUnknownAndCompletedSlices(t *testing.T) {
 	t.Run("completed slice", func(t *testing.T) {
 		fixture := newRunPlanFixture(t, plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 		reasonFile := writeSliceBlockedReason(t, "blocked")
-		app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+		app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 		err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile})
 		if err == nil || !strings.Contains(err.Error(), "slice 001-a is completed and cannot be blocked") {
 			t.Fatalf("completed-slice error = %v", err)
@@ -605,7 +605,7 @@ func TestSliceBlockedCommandReportsUnknownAndCompletedSlices(t *testing.T) {
 
 func TestSliceBlockedCommandHelpAndMetadataDerivedCompletion(t *testing.T) {
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out}
+	app := newTestApp(App{Out: &out, Err: &out})
 	if err := app.Run(context.Background(), []string{"help"}); err != nil {
 		t.Fatal(err)
 	}

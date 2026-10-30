@@ -45,7 +45,7 @@ func TestEditRemoveSkipsAndMovesPendingSlices(t *testing.T) {
 	const planID = "20260526-1200-edit"
 	repo := editPlanRepo()
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }})
 
 	// Remove 004-d.
 	if err := app.Run(context.Background(), []string{"edit", "remove", planID, "004-d"}); err != nil {
@@ -132,7 +132,7 @@ func TestEditSurfacesGeneratedVerificationRepairRefusalWithoutPersistence(t *tes
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }})
 
 			err = app.Run(context.Background(), []string{"edit", test.action, planID, test.sliceID})
 			want := "cannot " + test.action + " generated verification-repair slice " + test.sliceID +
@@ -183,7 +183,7 @@ func TestEditRejectsAbandonedPlanWithoutChangingPreservedWork(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }}
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(_ string) Repository { return repo }})
 
 			err = app.Run(context.Background(), test.args)
 			if err == nil || !strings.Contains(err.Error(), "plan "+planID+" is abandoned: superseded by safer work") {
@@ -210,7 +210,7 @@ func TestEditRejectsAbandonedPlanWithoutChangingPreservedWork(t *testing.T) {
 func TestEditRejectsInvalidFlagsUnknownSubcommandsAndUnsafeEdits(t *testing.T) {
 	const planID = "20260526-1200-edit"
 	repo := editPlanRepo()
-	app := App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }})
 
 	for _, test := range []struct {
 		name string
@@ -318,7 +318,7 @@ func TestEditAmendAppendsContractChangesToBlockedSlice(t *testing.T) {
 	goalFile := writeAmendInput(t, "goal.txt", "Amended goal\n")
 	now := time.Date(2026, 9, 29, 20, 0, 0, 0, time.UTC)
 	var out, errOut bytes.Buffer
-	app := App{Out: &out, Err: &errOut, Now: func() time.Time { return now }, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: &out, Err: &errOut, Now: func() time.Time { return now }, Repository: func(_ string) Repository { return repo }})
 
 	err := app.Run(context.Background(), []string{"edit", "amend", planID, "002-b",
 		"--reason-file", reasonFile,
@@ -386,7 +386,7 @@ func TestEditAmendRepairSliceAppends(t *testing.T) {
 	const planID = "20260526-1200-amend"
 	repo, detail := amendPlanRepo(t)
 	sliceByID(detail, "002-b").VerificationRepair = &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
-	app := App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }})
 	err := app.Run(context.Background(), []string{"edit", "amend", planID, "002-b",
 		"--reason-file", writeAmendInput(t, "reason.txt", "authorize helper"),
 		"--allow-file", "internal/cli/new.go", "--add-task", "Add the helper"})
@@ -452,7 +452,7 @@ func TestEditAmendApprovalContracts(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: io.Discard, Repository: func(string) Repository { return repo }}
+			app := newTestApp(App{Out: &out, Err: io.Discard, Repository: func(string) Repository { return repo }})
 			args := []string{"edit", "amend", planID, "001-a", "--reason-file", writeAmendInput(t, "reason.txt", facts), "--add-task", facts}
 			if test.replaceGoal {
 				args = append(args, "--goal-file", writeAmendInput(t, "goal.txt", facts))
@@ -610,7 +610,7 @@ func TestEditAmendRefusesWithoutPersisting(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			app := App{Out: &out, Err: io.Discard, Repository: func(_ string) Repository { return repo }}
+			app := newTestApp(App{Out: &out, Err: io.Discard, Repository: func(_ string) Repository { return repo }})
 
 			err = app.Run(context.Background(), test.args(t))
 			if err == nil || !strings.Contains(err.Error(), test.want) {

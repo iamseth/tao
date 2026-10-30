@@ -92,7 +92,7 @@ func TestServiceExecutePullRequestRejectsCommitPolicyNone(t *testing.T) {
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail}}
 	executor := &countingSliceExecutor{}
 
-	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{SliceExecutor: executor}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, PullRequest: true}})
+	err := newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{SliceExecutor: executor}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, PullRequest: true}})
 	if err == nil || !strings.Contains(err.Error(), "--pull-request requires commit policy") {
 		t.Fatalf("expected pull request commit policy error, got %v", err)
 	}
@@ -119,7 +119,7 @@ func TestServiceExecutePullRequestRejectsCurrentMode(t *testing.T) {
 		return nil
 	}
 
-	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{SliceExecutor: executor, CommandRunner: runner}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, PullRequest: true}})
+	err := newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{SliceExecutor: executor, CommandRunner: runner}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, PullRequest: true}})
 	if err == nil || !strings.Contains(err.Error(), "--pull-request requires --execution-mode isolated") {
 		t.Fatalf("expected current-mode pull request rejection, got %v", err)
 	}

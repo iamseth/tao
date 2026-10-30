@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/repoadmission"
@@ -120,6 +124,166 @@ func TestRecordOnlyExemptsExclusiveAdmission(t *testing.T) {
 	}}
 	// Ordinary eligibility still applies; exemption is not lifecycle authority.
 	_ = svc.Merge(context.Background(), mergeVerifyDetail(), Options{RecordOnly: true})
+}
+
+func newTestService(service Service) Service {
+	if service.RepositoryAdmission == nil {
+		service.RepositoryAdmission = testRepositoryAdmission
+	}
+	return service
+}
+
+func newTestBatchCoordinator(seams BatchCoordinatorSeams) *BatchCoordinator {
+	if seams.RepositoryAdmission == nil {
+		seams.RepositoryAdmission = testRepositoryAdmission
+	}
+	return NewBatchCoordinator(seams)
+}
+
+func testBatchWorkspaceDefaults(owner *BatchWorkspace) *BatchWorkspace {
+	if owner.RepositoryAdmission == nil {
+		owner.RepositoryAdmission = testRepositoryAdmission
+	}
+	return owner
+}
+
+func newTestBatchWorkspace(root, batches string, runner commandrunner.Runner) (*BatchWorkspace, error) {
+	owner, err := NewBatchWorkspace(root, batches, runner)
+	if err != nil {
+		return nil, err
+	}
+	return testBatchWorkspaceDefaults(owner), nil
+}
+
+func TestOrdinaryMergeFixtureGuardsPreserved(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "caller")
+	failure := errors.New("operation failed")
+	request := repoadmission.Request{Root: "synthetic-only", Mode: repoadmission.Merge}
+	for _, deny := range []bool{false, true} {
+		calls := 0
+		guard := func(got context.Context, req repoadmission.Request, operation func(context.Context) error) error {
+			calls++
+			if got != ctx || req.Root != request.Root || req.Mode != request.Mode {
+				t.Fatal("guard lost context or request")
+			}
+			if deny {
+				return failure
+			}
+			return operation(context.WithValue(got, contextKey{}, "guard"))
+		}
+		git := mergeVerifyGit()
+		service := newTestService(Service{RepositoryAdmission: guard, Git: git})
+		owner := &BatchWorkspace{RepositoryAdmission: guard, repoRoot: request.Root}
+		if testBatchWorkspaceDefaults(owner) != owner || owner.repoRoot != request.Root || service.Git != git {
+			t.Fatal("defaults changed unrelated fields")
+		}
+		coordinator := newTestBatchCoordinator(BatchCoordinatorSeams{RepositoryAdmission: guard, Workspace: owner, Planner: service})
+		if coordinator.seams.Workspace != owner {
+			t.Fatal("workspace replaced")
+		}
+		for _, kept := range []repoadmission.Guard{service.RepositoryAdmission, coordinator.seams.RepositoryAdmission, owner.RepositoryAdmission} {
+			called := false
+			err := kept(ctx, request, func(got context.Context) error {
+				called = true
+				if got.Value(contextKey{}) != "guard" {
+					t.Fatal("callback context lost")
+				}
+				return failure
+			})
+			if !errors.Is(err, failure) || called == deny {
+				t.Fatalf("deny=%t callback=%t error=%v", deny, called, err)
+			}
+		}
+		if calls != 3 {
+			t.Fatalf("custom guard calls: %d", calls)
+		}
+	}
+	// An ordinary outer coordinator must not overwrite a nested owner's denial.
+	owner := testBatchWorkspaceDefaults(&BatchWorkspace{RepositoryAdmission: func(context.Context, repoadmission.Request, func(context.Context) error) error { return failure }})
+	coordinator := newTestBatchCoordinator(BatchCoordinatorSeams{Workspace: owner})
+	err := coordinator.seams.RepositoryAdmission(ctx, request, func(ctx context.Context) error {
+		_, err := owner.Restart(ctx, BatchState{})
+		return err
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("nested workspace denial: %v", err)
+	}
+	// The ordinary guard preserves callback context and errors without Git.
+	for _, guard := range []repoadmission.Guard{newTestService(Service{}).RepositoryAdmission, coordinator.seams.RepositoryAdmission, testBatchWorkspaceDefaults(&BatchWorkspace{}).RepositoryAdmission} {
+		if err := guard(ctx, request, func(got context.Context) error {
+			if got != ctx {
+				t.Fatal("ordinary guard changed context")
+			}
+			return failure
+		}); !errors.Is(err, failure) {
+			t.Fatalf("callback error: %v", err)
+		}
+	}
+}
+
+func TestOrdinaryMergeAdmissionDefaults(t *testing.T) {
+	// Missing defaults fail deterministically without resolving any repository.
+	if newTestService(Service{}).RepositoryAdmission == nil {
+		t.Fatal("ordinary service missing admission default")
+	}
+	if newTestBatchCoordinator(BatchCoordinatorSeams{}).seams.RepositoryAdmission == nil {
+		t.Fatal("ordinary coordinator missing admission default")
+	}
+	if testBatchWorkspaceDefaults(&BatchWorkspace{}).RepositoryAdmission == nil {
+		t.Fatal("ordinary workspace missing admission default")
+	}
+}
+
+func TestOrdinaryMergeFixturesUnderRepositoryLease(t *testing.T) {
+	testenv.SkipIfShort(t)
+	fixture := newRealGitWorktree(t)
+	for _, mode := range []repoadmission.Mode{repoadmission.Run, repoadmission.Merge} {
+		t.Run(string(mode), func(t *testing.T) {
+			err := repoadmission.With(context.Background(), repoadmission.Request{Root: fixture.repoRoot, Mode: mode}, func(context.Context) error {
+				detail := mergeVerifyDetail()
+				detail.State.Repo.Root = fixture.repoRoot
+				failure := errors.New("intended verification failure")
+				service := Service{Git: mergeVerifyGit(), Runner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return failure }}
+				var busy *repoadmission.ContentionError
+				// Independent contender contexts must not inherit the outer lease.
+				if err := service.Verify(context.Background(), detail, "main", "head", Options{VerifyCommand: "test gate"}); !errors.As(err, &busy) {
+					t.Fatalf("production admission: %v", err)
+				}
+				if err := newTestService(service).Verify(context.Background(), detail, "main", "head", Options{VerifyCommand: "test gate"}); !errors.Is(err, failure) {
+					t.Fatalf("ordinary verification: %v", err)
+				}
+				owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "batches"), nil)
+				if err != nil {
+					return err
+				}
+				ownership, err := owner.AcquireOwnership(BatchState{}, time.Now())
+				if err != nil {
+					return err
+				}
+				defer func() { _ = ownership.Release() }()
+				productionOwner := *owner
+				productionOwner.RepositoryAdmission = nil
+				if _, err := productionOwner.Restart(context.Background(), BatchState{}); !errors.As(err, &busy) {
+					t.Fatalf("production workspace: %v", err)
+				}
+				if _, err := owner.Restart(context.Background(), BatchState{}); err == nil || !strings.Contains(err.Error(), "merge batch ownership is held") {
+					t.Fatalf("ordinary workspace did not reach batch ownership: %v", err)
+				}
+				seams := BatchCoordinatorSeams{Workspace: owner}
+				if _, err := NewBatchCoordinator(seams).Run(context.Background(), BatchCoordinatorOptions{}); !errors.As(err, &busy) {
+					t.Fatalf("production coordinator: %v", err)
+				}
+				if _, err := newTestBatchCoordinator(seams).Run(context.Background(), BatchCoordinatorOptions{}); err == nil || err.Error() != "batch coordinator store is required" {
+					t.Fatalf("ordinary coordinator: %v", err)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 // Synthetic fixtures explicitly inject admission; production remains fail-closed.

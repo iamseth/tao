@@ -173,7 +173,7 @@ func TestServiceExecuteClassifiesReloadedPolicyNoneCurrentRunWithWorkspaceBranch
 	repo := plan.NewFileRepository(plansDir)
 	providerErr := errors.New("provider stopped")
 	agentCalls := 0
-	service := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{
+	service := newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{
 		RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner:       runGitFake(&[]string{}, nil),
 		SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error {
@@ -353,7 +353,7 @@ func TestServiceExecuteRefusesClaimedWorktreeAtControlCheckout(t *testing.T) {
 	agentCalls := 0
 	gitCalls := 0
 
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 			gitCalls++
@@ -416,7 +416,7 @@ func TestServiceExecuteRefusesWorktreePathResolvingIntoControlCheckout(t *testin
 			detail.State.Repo.Root = controlRoot
 			agentCalls := 0
 
-			err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+			err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				CommandRunner: defaultCommandRunner,
 				SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error {
 					agentCalls++
@@ -446,7 +446,7 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithBoundary(t *testing.T) 
 	continued := false
 	var gotRun SliceRun
 
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
 		EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),
@@ -492,7 +492,7 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithoutBoundary(t *testing.
 	prepared := 0
 	var gotRun SliceRun
 
-	err := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 		EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),
@@ -581,7 +581,7 @@ func TestServiceExecuteRepairsLaterStateAdvancedSliceStartAfterReload(t *testing
 
 	providerErr := errors.New("provider stopped after later start repair")
 	prepared := 0
-	err = NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+	err = newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "first-commit"),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++
@@ -630,7 +630,7 @@ func TestServiceExecuteRepairsSlicesAdvancedStartAndMissingEventAfterReload(t *t
 	repo := plan.NewFileRepository(plansDir)
 	providerErr := errors.New("provider stopped after slices-advanced repair")
 	prepared := 0
-	err := NewService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+	err := newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++
@@ -711,7 +711,7 @@ func TestServiceExecuteResumesStartSettledFromJournalOnReload(t *testing.T) {
 
 	providerErr := errors.New("provider stopped after recovered start")
 	prepared := 0
-	err := NewService(plan.NewFileRepository(plansDir), io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+	err := newTestService(plan.NewFileRepository(plansDir), io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string { return "" }, "tao/plan-a", "base"),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++

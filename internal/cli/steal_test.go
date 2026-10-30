@@ -36,7 +36,7 @@ func TestStealUsageAndSourceRejection(t *testing.T) {
 	for _, args := range [][]string{nil, {"fetch"}, {"fetch", "https://example.com/repo", "extra"}, {"other", "https://example.com/repo"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer
-			err := (App{Out: &out}).steal(context.Background(), args)
+			err := (newTestApp(App{Out: &out})).steal(context.Background(), args)
 			if err == nil || err.Error() != "usage: tao steal fetch <git-url>" || out.Len() != 0 {
 				t.Fatalf("error = %v, output = %q", err, out.String())
 			}
@@ -46,7 +46,7 @@ func TestStealUsageAndSourceRejection(t *testing.T) {
 		t.Run(url, func(t *testing.T) {
 			var out bytes.Buffer
 			_, want := steal.ValidateSourceURL(url)
-			err := (App{Out: &out}).Run(context.Background(), []string{"steal", "fetch", url})
+			err := (newTestApp(App{Out: &out})).Run(context.Background(), []string{"steal", "fetch", url})
 			if err == nil || err.Error() != want.Error() || out.Len() != 0 {
 				t.Fatalf("error = %v, want %v; output = %q", err, want, out.String())
 			}
@@ -82,7 +82,7 @@ func TestStealRefusesCheckoutScratch(t *testing.T) {
 				}
 			}
 			var out bytes.Buffer
-			err := (App{Out: &out}).steal(context.Background(), []string{"fetch", "https://example.com/repo"})
+			err := (newTestApp(App{Out: &out})).steal(context.Background(), []string{"fetch", "https://example.com/repo"})
 			if err == nil || !strings.Contains(err.Error(), "inside") || !strings.Contains(err.Error(), root) || out.Len() != 0 {
 				t.Fatalf("error = %v, output = %q", err, out.String())
 			}
@@ -127,7 +127,7 @@ func TestStealFetchOutput(t *testing.T) {
 					Omitted: []steal.Omission{{Path: "link", Reason: "symlink"}, {Path: "vendor", Reason: "generated"}}}, nil
 			})
 			var out bytes.Buffer
-			if err := (App{Out: &out}).Run(context.Background(), []string{"ste", "fetch", url}); err != nil {
+			if err := (newTestApp(App{Out: &out})).Run(context.Background(), []string{"ste", "fetch", url}); err != nil {
 				t.Fatal(err)
 			}
 			if !called {
@@ -166,7 +166,7 @@ func TestStealFetchOutputEscapesUntrustedValues(t *testing.T) {
 			}
 			stubStealFetch(t, func(context.Context, steal.Options) (steal.Result, error) { return result, nil })
 			var out bytes.Buffer
-			if err := (App{Out: &out}).steal(context.Background(), []string{"fetch", url}); err != nil {
+			if err := (newTestApp(App{Out: &out})).steal(context.Background(), []string{"fetch", url}); err != nil {
 				t.Fatal(err)
 			}
 			output := out.String()
@@ -231,7 +231,7 @@ func TestStealFetchFailure(t *testing.T) {
 	want := errors.New("clone failed")
 	stubStealFetch(t, func(context.Context, steal.Options) (steal.Result, error) { return steal.Result{}, want })
 	var out bytes.Buffer
-	err := (App{Out: &out}).steal(context.Background(), []string{"fetch", "git@example.com:owner/repo.git"})
+	err := (newTestApp(App{Out: &out})).steal(context.Background(), []string{"fetch", "git@example.com:owner/repo.git"})
 	if !errors.Is(err, want) || out.Len() != 0 {
 		t.Fatalf("error = %v, output = %q", err, out.String())
 	}

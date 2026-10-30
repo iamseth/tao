@@ -230,7 +230,7 @@ func TestBatchReviewDiffStatFailureBlocksResumably(t *testing.T) {
 	runner := func(_ context.Context, _ string, _ string, _ []string, _ io.Writer, _ io.Writer) error { return nil }
 	reviewer := BatchAggregateReviewer{
 		Store:   &batchReviewTestStore{dir: t.TempDir()},
-		Service: Service{Git: git, Runner: runner},
+		Service: newTestService(Service{Git: git, Runner: runner}),
 		Agent: batchReviewAgentFunc(func(context.Context, string, string) (string, error) {
 			return reviewJSON("approve", "green", ""), nil
 		}),
@@ -482,7 +482,7 @@ func TestBatchReviewRejectedAgentsRestoreCleanResumableWorkspace(t *testing.T) {
 			fixture := newRealGitWorktree(t)
 			state := batchWorkspaceState(t, fixture)
 			state.ID = "batch-review-rejected"
-			owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+			owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1624,7 +1624,7 @@ func TestBatchReviewSnapshotLimits(t *testing.T) {
 		{name: "explicit short circuit", captured: "bad", explicit: 2, want: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			service := Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvMergeReviewMaxAttempts: tt.captured, runtimeconfig.EnvMaxReworkAttempts: tt.run})}
+			service := newTestService(Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvMergeReviewMaxAttempts: tt.captured, runtimeconfig.EnvMaxReworkAttempts: tt.run})})
 			t.Setenv(runtimeconfig.EnvMergeReviewMaxAttempts, "99")
 			t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "99")
 			got, err := service.batchReviewMaxAttempts(tt.explicit)
@@ -1636,25 +1636,25 @@ func TestBatchReviewSnapshotLimits(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvMaxReworkAttempts, "invalid")
 	t.Setenv(runtimeconfig.EnvMergeReviewMaxAttempts, "invalid")
 	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "invalid")
-	if got, err := (Service{}).batchReviewMaxAttempts(0); err != nil || got != defaultBatchReviewMaxAttempts {
+	if got, err := (newTestService(Service{})).batchReviewMaxAttempts(0); err != nil || got != defaultBatchReviewMaxAttempts {
 		t.Fatalf("nil snapshot attempts = %d, %v", got, err)
 	}
-	service := Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvAggregateReviewConvergenceWindow: "4"})}
+	service := newTestService(Service{RuntimeEnv: mergeSnapshotWith(map[string]string{runtimeconfig.EnvAggregateReviewConvergenceWindow: "4"})})
 	if got, err := service.batchReviewConvergenceWindow(); err != nil || got != 4 {
 		t.Fatalf("captured convergence = %d, %v", got, err)
 	}
-	if got, err := (Service{}).batchReviewConvergenceWindow(); err != nil || got != runtimeconfig.DefaultAggregateReviewConvergenceWindow {
+	if got, err := (newTestService(Service{})).batchReviewConvergenceWindow(); err != nil || got != runtimeconfig.DefaultAggregateReviewConvergenceWindow {
 		t.Fatalf("nil snapshot convergence = %d, %v", got, err)
 	}
 }
 
 func TestBatchReviewConvergenceWindowEnvironment(t *testing.T) {
 	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "4")
-	if got, err := (Service{RuntimeEnv: mergeTestRuntimeEnv()}).batchReviewConvergenceWindow(); err != nil || got != 4 {
+	if got, err := (newTestService(Service{RuntimeEnv: mergeTestRuntimeEnv()})).batchReviewConvergenceWindow(); err != nil || got != 4 {
 		t.Fatalf("batchReviewConvergenceWindow() = %d, %v", got, err)
 	}
 	t.Setenv(runtimeconfig.EnvAggregateReviewConvergenceWindow, "1")
-	if _, err := (Service{RuntimeEnv: mergeTestRuntimeEnv()}).batchReviewConvergenceWindow(); err == nil {
+	if _, err := (newTestService(Service{RuntimeEnv: mergeTestRuntimeEnv()})).batchReviewConvergenceWindow(); err == nil {
 		t.Fatal("expected unsafe convergence window to fail")
 	}
 }
@@ -2014,7 +2014,7 @@ func TestBatchReviewVerificationAttributionRecoveryDetectsAggregateGate(t *testi
 			state.Integrations[0].IntegrationSHA = state.IntegrationHead
 			state.VerificationAttribution = &BatchVerificationAttribution{Status: batchAttributionBisecting, ParkedSHA: parked}
 			runRealGit(t, root, "reset", "--hard", parked)
-			if got := (Service{}).resolveMergeVerifyCommandAtRoot(root, Options{}).command; got != prefixCommand {
+			if got := (newTestService(Service{})).resolveMergeVerifyCommandAtRoot(root, Options{}).command; got != prefixCommand {
 				t.Fatalf("prefix command = %q, want %q", got, prefixCommand)
 			}
 
@@ -2062,7 +2062,7 @@ func TestBatchReviewVerificationAttributionBetweenProbeRecovery(t *testing.T) {
 		state.Candidates[i].DefaultBranch = state.DefaultBranch
 		state.Candidates[i].DefaultStartSHA = state.DefaultStartSHA
 	}
-	owner, err := NewBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
+	owner, err := newTestBatchWorkspace(fixture.repoRoot, filepath.Join(t.TempDir(), "merge-batches"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

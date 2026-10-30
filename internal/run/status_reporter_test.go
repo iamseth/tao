@@ -136,7 +136,7 @@ func executeServiceWithStatusReporter(t *testing.T, ctx context.Context, reporte
 	if enhanced, ok := reporter.(*recordingInvocationStatusReporter); ok {
 		enhanced.repoRoot = detail.State.Repo.Root
 	}
-	service := NewService(repo, io.Discard, Options{
+	service := newTestService(repo, io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, ReviewEnabled: false}},
 		RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 			CommandRunner:     runGitFake(&calls, nil),

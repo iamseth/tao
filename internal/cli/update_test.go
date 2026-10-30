@@ -40,7 +40,7 @@ func TestUpdateCommandBypassesModeAndCommandCaching(t *testing.T) {
 		Comparison:     selfupdate.VersionCurrent,
 	}}
 	var out bytes.Buffer
-	app := App{Out: &out, Err: &out, SelfUpdater: updater}
+	app := newTestApp(App{Out: &out, Err: &out, SelfUpdater: updater})
 
 	for range 2 {
 		if err := app.Run(context.Background(), []string{"update"}); err != nil {
@@ -106,7 +106,7 @@ func TestUpdateCommandReportsCurrentAndSuccessfulOutcomes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var out bytes.Buffer
-			app := App{Out: &out, Err: &out, SelfUpdater: &fakeSelfUpdater{result: test.result}}
+			app := newTestApp(App{Out: &out, Err: &out, SelfUpdater: &fakeSelfUpdater{result: test.result}})
 			if err := app.Run(context.Background(), []string{"update"}); err != nil {
 				t.Fatal(err)
 			}
@@ -139,7 +139,7 @@ func TestUpdateCommandReturnsActionableAndPropagatedFailuresWithoutSuccessOutput
 		t.Run(test.name, func(t *testing.T) {
 			var out bytes.Buffer
 			updater := &fakeSelfUpdater{err: test.err}
-			app := App{Out: &out, Err: &out, SelfUpdater: updater}
+			app := newTestApp(App{Out: &out, Err: &out, SelfUpdater: updater})
 			err := app.Run(context.Background(), []string{"update"})
 			if err == nil {
 				t.Fatal("expected update error")
@@ -163,7 +163,7 @@ func TestUpdateCommandReturnsActionableAndPropagatedFailuresWithoutSuccessOutput
 }
 
 func TestUpdateCommandRejectsArgumentsAndIncompleteSuccess(t *testing.T) {
-	app := App{Out: &bytes.Buffer{}, SelfUpdater: &fakeSelfUpdater{}}
+	app := newTestApp(App{Out: &bytes.Buffer{}, SelfUpdater: &fakeSelfUpdater{}})
 	if err := app.Run(context.Background(), []string{"update", "now"}); err == nil || err.Error() != "usage: tao update" {
 		t.Fatalf("argument error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestUpdateCommandRejectsArgumentsAndIncompleteSuccess(t *testing.T) {
 		Comparison:     selfupdate.VersionUpdateAvailable,
 	}}
 	var out bytes.Buffer
-	app = App{Out: &out, SelfUpdater: updater}
+	app = newTestApp(App{Out: &out, SelfUpdater: updater})
 	if err := app.Run(context.Background(), []string{"update"}); err == nil || !strings.Contains(err.Error(), "without installing") {
 		t.Fatalf("incomplete update error = %v", err)
 	}

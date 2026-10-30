@@ -36,7 +36,7 @@ func TestResolveCommandOptionsCapturedAndExplicit(t *testing.T) {
 		map[string]string{runtimeconfig.EnvPullRequest: "true", runtimeconfig.EnvRunHeader: "false", runtimeconfig.EnvModel: "captured"},
 		map[string]string{"pull_request": "true", "models.model": `"repository"`},
 	)
-	app := App{RuntimeEnv: snapshot}
+	app := newTestApp(App{RuntimeEnv: snapshot})
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	app.registerRunFlags(fs)
 	if err := fs.Parse([]string{"--pull-request=false", "--no-review", "--no-run-header=false"}); err != nil {
@@ -54,7 +54,7 @@ func TestResolveCommandOptionsCapturedAndExplicit(t *testing.T) {
 
 func TestResolveCommandOptionsRepositoryLayer(t *testing.T) {
 	snapshot := composedSnapshotWith(nil, map[string]string{"pull_request": "true", "models.model": `"repository"`, "review_agent": `"claude"`})
-	app := App{RuntimeEnv: snapshot}
+	app := newTestApp(App{RuntimeEnv: snapshot})
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	app.registerRunFlags(fs)
 	if err := fs.Parse(nil); err != nil {
@@ -78,7 +78,7 @@ func TestReviewCommandOptionsMatchProfile(t *testing.T) {
 				runtimeconfig.EnvSessionTimeout: "37s", runtimeconfig.EnvSkipPermissions: permission,
 				runtimeconfig.EnvCommitPolicy: "none", runtimeconfig.EnvExecutionMode: "invalid",
 			}, map[string]string{"pull_request": "true", "models.model": `"repo-base"`})
-			app := App{RuntimeEnv: snapshot}
+			app := newTestApp(App{RuntimeEnv: snapshot})
 			fs := flag.NewFlagSet("review", flag.ContinueOnError)
 			registerReviewFlags(fs)
 			if err := fs.Parse([]string{"--run", "--model=explicit"}); err != nil {
@@ -104,7 +104,7 @@ func TestReviewCommandOptionsMatchProfile(t *testing.T) {
 
 func TestCommandRunHandoffUsesResolvedOptions(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
-	app := App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvRunHeader: "false"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(App{Out: io.Discard, RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvRunHeader: "false"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 	old := executeSinglePlan
 	t.Cleanup(func() { executeSinglePlan = old })
 	calls := 0
@@ -147,7 +147,7 @@ func TestResolveCommandOptionsStrictConflicts(t *testing.T) {
 		{[]string{"--commit-policy=none"}, []string{"requires commit policy slice", "TAO_PULL_REQUEST source=repository", "TAO_COMMIT_POLICY source=flag"}},
 		{[]string{"--max-rework-attempts=-1"}, []string{"TAO_MAX_REWORK_ATTEMPTS source=flag"}},
 	} {
-		app := App{RuntimeEnv: composedSnapshotWith(nil, map[string]string{"pull_request": "true"})}
+		app := newTestApp(App{RuntimeEnv: composedSnapshotWith(nil, map[string]string{"pull_request": "true"})})
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		app.registerRunFlags(fs)
 		if err := fs.Parse(tt.args); err != nil {
@@ -169,7 +169,7 @@ func TestReworkRunRepositoryConflictBeforeMutation(t *testing.T) {
 			const id = "20260628-1200-conflict"
 			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix"}}))
 			before := readReworkArtifacts(t, dir)
-			app := App{Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvCommitPolicy: "none"}, map[string]string{"pull_request": "true"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+			app := newTestApp(App{Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvCommitPolicy: "none"}, map[string]string{"pull_request": "true"}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 			args := []string{"--run", id}
 			if fromPR {
 				args = []string{"--from-pr", "--run", id}
@@ -195,7 +195,7 @@ func TestCommandOptionsSixPaths(t *testing.T) {
 		runtimeconfig.EnvSessionTimeout: "37s", runtimeconfig.EnvSkipPermissions: "false",
 		runtimeconfig.EnvCommitPolicy: "slice", runtimeconfig.EnvExecutionMode: "current",
 	}, map[string]string{"pull_request": "true", "models.model": `"repo-base"`, "models.merge_review_model": `"repo-merge"`})
-	app := App{RuntimeEnv: snapshot}
+	app := newTestApp(App{RuntimeEnv: snapshot})
 	var baseline runtimeconfig.CommandOptions
 	for _, tt := range []struct {
 		name     string
@@ -256,7 +256,7 @@ func TestCommandOptionsSixPaths(t *testing.T) {
 }
 
 func TestResolveCommandOptionsWithoutRepositoryProfile(t *testing.T) {
-	app := App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"}), Registry: func() NoteRegistry { t.Fatal("unexpected repository lookup"); return nil }}
+	app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvAgent: "invalid"}), Registry: func() NoteRegistry { t.Fatal("unexpected repository lookup"); return nil }})
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	if _, err := app.resolveCommandOptions(fs, runtimeconfig.CommandPromptOther); err != nil {
 		t.Fatal(err)
@@ -297,7 +297,7 @@ func TestResolveCommandOptionsRejectsStructuralGlobalLoadError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte("{not json"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 	app = app.initializeSettings(context.Background())
 	if app.settingsGlobal == nil || app.settingsGlobal.LoadError == nil {
 		t.Fatalf("corrupt global settings not surfaced: %+v", app.settingsGlobal)
@@ -349,7 +349,7 @@ func TestSettingsForPlanRootFailsClosedOnUnreadableRegistration(t *testing.T) {
 	if repos, err := registry.ListRepos(); err != nil || len(repos) != 0 {
 		t.Fatalf("catalog listing should omit the unreadable registration: %v %v", repos, err)
 	}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }})
 	if _, err := app.settingsForPlanRoot(context.Background(), detail.State.Repo.Root); err == nil {
 		t.Fatal("unreadable registration composed as unregistered")
 	}
@@ -391,7 +391,7 @@ func TestSettingsForPlanRootFailsClosedOnUnreadableControlCheckout(t *testing.T)
 	if repos, err := registry.ListRepos(); err != nil || len(repos) != 0 {
 		t.Fatalf("catalog listing should omit the unreadable registration: %v %v", repos, err)
 	}
-	app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }})
 	if _, err := app.settingsForPlanRoot(context.Background(), linked); err == nil || !strings.Contains(err.Error(), "repo.json") {
 		t.Fatalf("linked worktree of an unreadable registration composed as unregistered: %v", err)
 	}

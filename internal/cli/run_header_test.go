@@ -61,7 +61,7 @@ func (w *fakeRunHeaderTerminalWriter) String() string {
 func TestInstallRunHeaderLeavesNonTerminalOutputByteIdentical(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	var got bytes.Buffer
-	out, reporter, closeHeader := (App{}).installRunHeader(context.Background(), &got, false)
+	out, reporter, closeHeader := (newTestApp(App{})).installRunHeader(context.Background(), &got, false)
 	if reporter != nil || out != io.Writer(&got) {
 		t.Fatal("non-terminal output activated the run header")
 	}
@@ -80,7 +80,7 @@ func TestRunHeaderWriterPinsHeaderAroundLogOutput(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "1")
 	terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 80, Height: 24})
-	out, reporter, closeHeader := (App{}).installRunHeader(context.Background(), terminal, false)
+	out, reporter, closeHeader := (newTestApp(App{})).installRunHeader(context.Background(), terminal, false)
 	if reporter == nil || out == io.Writer(terminal) {
 		t.Fatal("fake terminal did not activate the run header")
 	}
@@ -207,7 +207,7 @@ func TestExecuteResolvedRunHeaderShowsResolvedReworkLimit(t *testing.T) {
 
 	request := run.Request{Input: planID, ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: run.AgentPi, ExecutionMode: run.ExecutionModeIsolated, CommitPolicy: run.CommitPolicySlice, ReviewEnabled: true}}
 	policy := runtimeconfig.AutoReworkPolicy{Enabled: true, MaxAttempts: 7}
-	if err := (App{RepositoryAdmission: testRepositoryAdmission, Out: terminal}).executeResolvedRun(context.Background(), repo, planID, request, false, policy, runtimeconfig.DefaultReworkEscalationFromAttempt, false, false); err != nil {
+	if err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: terminal})).executeResolvedRun(context.Background(), repo, planID, request, false, policy, runtimeconfig.DefaultReworkEscalationFromAttempt, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if text := terminal.String(); !strings.Contains(text, "rework 2/7") {
@@ -232,7 +232,7 @@ func TestExecuteResolvedRunRestoresRegionWhenRunErrors(t *testing.T) {
 	t.Cleanup(func() { executeSinglePlan = oldExecutor })
 
 	request := run.Request{Input: planID, ResolvedRunOptions: runtimeconfig.ResolvedRunOptions{Agent: run.AgentPi, ExecutionMode: run.ExecutionModeIsolated, CommitPolicy: run.CommitPolicySlice, ReviewEnabled: true}}
-	err := (App{RepositoryAdmission: testRepositoryAdmission, Out: terminal}).executeResolvedRun(context.Background(), repo, planID, request, false, runtimeconfig.AutoReworkPolicy{}, runtimeconfig.DefaultReworkEscalationFromAttempt, false, false)
+	err := (newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: terminal})).executeResolvedRun(context.Background(), repo, planID, request, false, runtimeconfig.AutoReworkPolicy{}, runtimeconfig.DefaultReworkEscalationFromAttempt, false, false)
 	if !errors.Is(err, failure) {
 		t.Fatalf("executeResolvedRun() error = %v, want %v", err, failure)
 	}

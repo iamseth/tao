@@ -46,13 +46,13 @@ func approvalEvidenceFixture(t *testing.T, blocked, approved bool) runPlanFixtur
 }
 
 func approvalEvidenceApp(calls *int, out io.Writer) App {
-	return App{RepositoryAdmission: testRepositoryAdmission, Out: out, Err: out, CommandRunner: func(_ context.Context, _ string, _ string, args []string, stdout, _ io.Writer) error {
+	return newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: out, Err: out, CommandRunner: func(_ context.Context, _ string, _ string, args []string, stdout, _ io.Writer) error {
 		writeRunGitOutput(stdout, args)
 		return nil
 	}, ProcessStarter: func(context.Context, string, string, []string) (run.Process, error) {
 		*calls++
 		return nil, errors.New("test provider admission reached")
-	}}
+	}})
 }
 
 func runApprovalEvidence(app App, fixture runPlanFixture, blocked bool) error {

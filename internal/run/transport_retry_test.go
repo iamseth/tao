@@ -27,7 +27,7 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 	var events []plan.Event
 	agentCalls := 0
 	var out bytes.Buffer
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -110,7 +110,7 @@ func TestServiceExecuteTransportRetryEventuallySucceedsOnThirdSession(t *testing
 		}
 		return ""
 	}, "tao/plan-a", "base")
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -160,7 +160,7 @@ func TestServiceExecuteTransportRetryAcceptsLateDurableCompletionWithoutRetryHan
 		}
 		return ""
 	}, "tao/plan-a", "base")
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -194,7 +194,7 @@ func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testin
 		ctx, cancel := context.WithCancel(context.Background())
 		agentCalls := 0
 		delayCalls := 0
-		service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+		service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 			RepositoryAdmission: testRepositoryAdmission,
 			CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
 			TransportRetryDelay: func(ctx context.Context, delay time.Duration) error {
@@ -227,7 +227,7 @@ func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testin
 		genericErr := errors.New("provider authentication failed")
 		agentCalls := 0
 		delayCalls := 0
-		service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+		service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 			RepositoryAdmission: testRepositoryAdmission,
 			CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
 			TransportRetryDelay: func(context.Context, time.Duration) error { delayCalls++; return nil },
@@ -303,7 +303,7 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 				}
 				return baseRunner(ctx, cwd, name, args, stdout, stderr)
 			}
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{initial, initial, reloaded}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
+			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{initial, initial, reloaded}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner:       runner,
 				TransportRetryDelay: func(context.Context, time.Duration) error { return nil },
 				EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),

@@ -171,7 +171,7 @@ func TestServiceExecuteUsesRequestCommitPolicy(t *testing.T) {
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail, completedDetail}}
 	executor := &packetCapturingExecutor{}
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil)}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}})
+	err := newTestService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{SliceExecutor: executor, PlanRecordFactory: memoryPlanRecordFactory, CommandRunner: runGitFake(&[]string{}, nil)}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestServiceExecuteExecutionModeCurrentCapturesStartingBranchBeforeSliceStar
 		return ctx.Err()
 	}
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: executor, PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
+	err := newTestService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: executor, PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) {
 		record, err := plan.NewPlanRecord(planDir, detail)
 		if err != nil {
 			return nil, err
@@ -249,7 +249,7 @@ func TestServiceExecuteExecutionModeCurrentFailsBeforeSliceStartWhenBranchEmpty(
 		return ctx.Err()
 	}
 
-	err := NewService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: &countingSliceExecutor{}, PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
+	err := newTestService(repo, io.Discard, Options{ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeCurrent, CommitPolicy: CommitPolicyNone}}, RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, SliceExecutor: &countingSliceExecutor{}, PlanRecordFactory: callbackPlanRecordFactory(func(detail *plan.PlanDetail, sliceID string, now time.Time) error {
 		started = true
 		return nil
 	}, nil), CommandRunner: runner}}).Execute(context.Background(), Request{Input: "plan-a"})

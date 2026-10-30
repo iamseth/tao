@@ -1102,7 +1102,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 		}
 
 		options := ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewAgent: AgentClaude}
-		service := NewService(plan.NewFileRepository(plansRoot), out, Options{
+		service := newTestService(plan.NewFileRepository(plansRoot), out, Options{
 			ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 			RunDependencies: RunDependencies{CommandRunner: runner, reviewGitFactory: fixedReviewGit(git), ReviewCreator: creator},
 		})
@@ -1233,7 +1233,7 @@ func TestServiceReviewPublishesWaitingPhaseBeforeContendedLock(t *testing.T) {
 	detail.Dir = planDir
 	detail.State.Repo.Root = t.TempDir()
 	reporter := &recordingInvocationStatusReporter{}
-	service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi}},
 		RunDependencies: RunDependencies{StatusReporter: reporter},
 	})
@@ -1265,7 +1265,7 @@ func TestReviewLockReloadsAuthoritativePlanDetail(t *testing.T) {
 		reviewedDetail = run.Detail
 		return plan.PlanReview{Verdict: plan.ReviewVerdictComment}, nil
 	})
-	service := NewService(repo, io.Discard, testOptions(
+	service := newTestService(repo, io.Discard, testOptions(
 		RunDependencies{ReviewCreator: creator, CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return nil }},
 		func(options *Options) {
 			options.ExecutionMode = ExecutionModeCurrent
@@ -1295,7 +1295,7 @@ func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.
 			commandCalled := false
 			creatorCalled := false
 			var out bytes.Buffer
-			service := NewService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}, &out, testOptions(
+			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}, &out, testOptions(
 				RunDependencies{
 					CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 						commandCalled = true
@@ -1368,7 +1368,7 @@ func TestReviewRejectsPendingSliceWorkBeforeVerificationOrAgent(t *testing.T) {
 			commandCalled := false
 			creatorCalled := false
 			repo := &memoryRunRepository{details: []*plan.PlanDetail{tt.detail, tt.detail}}
-			service := NewService(repo, &out, testOptions(
+			service := newTestService(repo, &out, testOptions(
 				RunDependencies{
 					CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 						commandCalled = true
@@ -1412,7 +1412,7 @@ func TestReviewSettledWorkRunsVerificationAndAgent(t *testing.T) {
 	creatorCalled := false
 	presenterCalled := false
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{detail, detail}}
-	service := NewService(repo, io.Discard, testOptions(
+	service := newTestService(repo, io.Discard, testOptions(
 		RunDependencies{
 			CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
 				commandCalled = true
@@ -1623,14 +1623,14 @@ func TestPrepareReviewExecutionCapturesNoStartingDirtyPaths(t *testing.T) {
 	repoRoot := t.TempDir()
 	repo := plan.NewFileRepository(t.TempDir())
 	git := &fakeReviewGit{status: " M README.md\nR  old.go -> new.go\n"}
-	s := Service{
-		dependencies: RunDependencies{
+	s := newTestService(repo, io.Discard, Options{
+		RunDependencies: RunDependencies{
 			reviewGitFactory:  fixedReviewGit(git),
 			PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) },
 			EventAppender:     repo,
 			LogAppender:       repo,
 		},
-	}
+	})
 	detail := &plan.PlanDetail{
 		State: plan.State{
 			Repo:      plan.Repo{Root: repoRoot},
@@ -1662,7 +1662,7 @@ func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T)
 	detail.State.Plan.LastRunStartingDirty = []string{"README.md"}
 	detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent}
 	repo := unscopedFileRepository(t)
-	execution, err := (Service{dependencies: RunDependencies{reviewGitFactory: fixedReviewGit(&fakeReviewGit{}), PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo}}).prepareReviewExecution(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}})
+	execution, err := newTestService(repo, io.Discard, Options{RunDependencies: RunDependencies{reviewGitFactory: fixedReviewGit(&fakeReviewGit{}), PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) }, EventAppender: repo, LogAppender: repo}}).prepareReviewExecution(detail, ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1709,14 +1709,14 @@ func TestReviewExecutionRootUsesRecordedWorkspacePathWithoutStrategy(t *testing.
 func TestPrepareReviewExecutionUsesRecordedRunCommitPolicy(t *testing.T) {
 	t.Parallel()
 	repo := plan.NewFileRepository(t.TempDir())
-	s := Service{
-		dependencies: RunDependencies{
+	s := newTestService(repo, io.Discard, Options{
+		RunDependencies: RunDependencies{
 			reviewGitFactory:  fixedReviewGit(&fakeReviewGit{}),
 			PlanRecordFactory: func(detail *plan.PlanDetail) (PlanMutationRecord, error) { return repo.PlanRecord(detail) },
 			EventAppender:     repo,
 			LogAppender:       repo,
 		},
-	}
+	})
 	newDetail := func(statePolicy string, events []plan.Event) *plan.PlanDetail {
 		return &plan.PlanDetail{
 			State: plan.State{
@@ -1894,7 +1894,7 @@ func TestResumeReviewReloadsAuthoritativeStateAndRejectsReopenedWork(t *testing.
 	repo := &memoryRunRepository{details: []*plan.PlanDetail{stale, fresh}}
 	commandCalled := false
 	creatorCalled := false
-	service := NewService(repo, io.Discard, Options{
+	service := newTestService(repo, io.Discard, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewEnabled: true}},
 		RunDependencies: RunDependencies{
 			CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
@@ -1952,7 +1952,7 @@ func TestResumeReviewHonorsExistingPlanOwnershipAndPreservesBestEffortReviewFail
 	var warnings bytes.Buffer
 	repo := plan.NewFileRepository(plansRoot)
 	options := ResolvedRunOptions{CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Agent: AgentPi, ReviewEnabled: true}
-	service := NewService(repo, &warnings, Options{
+	service := newTestService(repo, &warnings, Options{
 		ExecutionConfig: ExecutionConfig{ResolvedRunOptions: options},
 		RunDependencies: RunDependencies{
 			RepositoryAdmission: testRepositoryAdmission,

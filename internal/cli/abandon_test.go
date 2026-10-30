@@ -22,7 +22,7 @@ func TestAbandonRecordsTrimmedReasonAndIsIdempotent(t *testing.T) {
 	repo := plan.NewFileRepository(fixture.root)
 	var out bytes.Buffer
 	now := time.Date(2026, 9, 1, 17, 0, 0, 0, time.UTC)
-	app := App{Out: &out, Err: &out, Now: func() time.Time { return now }}
+	app := newTestApp(App{Out: &out, Err: &out, Now: func() time.Time { return now }})
 
 	if err := app.abandon(context.Background(), repo, []string{"--reason", "  superseded by a smaller change  ", fixture.id}); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestAbandonValidatesArgumentsAndReasonBound(t *testing.T) {
 	isolateAbandonBatchData(t)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	repo := plan.NewFileRepository(fixture.root)
-	app := App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 	tests := []struct {
 		name string
 		args []string
@@ -105,7 +105,7 @@ func TestAbandonValidatesArgumentsAndReasonBound(t *testing.T) {
 func TestAbandonRefusesCompletedPlan(t *testing.T) {
 	isolateAbandonBatchData(t)
 	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
-	err := (App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}).abandon(context.Background(), plan.NewFileRepository(fixture.root), []string{"--reason", "obsolete", fixture.id})
+	err := (newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})).abandon(context.Background(), plan.NewFileRepository(fixture.root), []string{"--reason", "obsolete", fixture.id})
 	if err == nil || !strings.Contains(err.Error(), "completed and cannot be abandoned") {
 		t.Fatalf("error = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestAbandonRefusesUnsettledTransactions(t *testing.T) {
 			test.mutate(detail)
 			writeAbandonDetail(t, detail)
 
-			err = (App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
+			err = (newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
@@ -217,7 +217,7 @@ func TestAbandonRefusesEffectiveCandidateInUnsettledMergeBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err = (App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
+			err = (newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
 			if err == nil || !strings.Contains(err.Error(), "effective candidate in unsettled merge batch batch-interrupted") {
 				t.Fatalf("error = %v, want unsettled batch refusal", err)
 			}
@@ -242,7 +242,7 @@ func TestAbandonContendsWithOrdinaryPlanLock(t *testing.T) {
 	}
 	var abandonErr error
 	err = runpkg.WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error {
-		abandonErr = (App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
+		abandonErr = (newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
 		return nil
 	})
 	if err != nil {
@@ -281,7 +281,7 @@ func TestAbandonReloadsAfterAcquiringLock(t *testing.T) {
 		writeAbandonDetail(t, detail)
 	}
 
-	err := (App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
+	err := (newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})).abandon(context.Background(), repo, []string{"--reason", "obsolete", fixture.id})
 	if err == nil || !strings.Contains(err.Error(), "completed and cannot be abandoned") {
 		t.Fatalf("post-lock reload error = %v", err)
 	}
