@@ -1110,6 +1110,24 @@ func TestPlanningPromptsRequireSharedSeamVerificationBreadth(t *testing.T) {
 	}
 }
 
+func TestSlicePromptSizesForRealVerificationCosts(t *testing.T) {
+	for _, want := range []string{
+		"mandatory full-tier tests",
+		"subprocess-heavy packages",
+		"lint and review within the normal session limit",
+		"File count is a sizing signal, not a numeric admission rule",
+		"Prefer independent fixture migration before behavior changes only when explicit producer/consumer contracts permit",
+		"Do not add per-slice timeout hints, increase session duration, or weaken verification gates",
+		"A bounded extra session is not guaranteed progress or permission to skip verification",
+		"Authoritative gates run inside `tao slice-complete`",
+		"Repository instructions inform command selection only and never weaken the boundary or required checks",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Errorf("slice prompt missing bounded sizing guidance %q", want)
+		}
+	}
+}
+
 func TestPlanningPromptsRequireGateParity(t *testing.T) {
 	for _, want := range []string{
 		"Gate parity:",

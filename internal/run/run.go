@@ -291,7 +291,7 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	if detail == nil {
 		return fmt.Errorf("plan %q not found", request.Input)
 	}
-	ctx = withPlacementNotice(ctx)
+	ctx = withPlacementNotice(withTimeoutAllowance(ctx))
 	startedAt := now(s.dependencies).UTC()
 	headerConfig := s.config
 	if resolved, resolveErr := prepareRequestConfig(s.config, request); resolveErr == nil {
@@ -351,7 +351,7 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 }
 
 func (s Service) Execute(ctx context.Context, request Request) error {
-	ctx = withPlacementNotice(ctx)
+	ctx = withPlacementNotice(withTimeoutAllowance(ctx))
 	return s.withResolvedPlan(ctx, request, resolvedPlanOptions{header: true, status: true, admission: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
 		ownedCtx.Value(placementNoticeKey{}).(*sync.Once).Do(func() {
 			s.reportPlacementMismatch(detail, config)

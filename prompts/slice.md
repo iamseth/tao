@@ -87,7 +87,8 @@ Before any artifact update, check for execution having begun (for example, activ
 - Each slice must be independently reviewable.
 - Each slice should leave the repo in a valid state.
 - Prefer 30–90 minute slices.
-- Keep each slice small enough that implementation, verification, deterministic commit, and review can fit within a normal Tao session timeout; if a slice spans many packages, broad tests, or a large refactor, split it.
+- Keep each slice small enough that implementation, verification, deterministic commit, and review can fit within a normal Tao session timeout; budget for mandatory full-tier tests and subprocess-heavy packages, including lint and review within the normal session limit. If a slice spans many packages, broad tests, or a large refactor, split it. File count is a sizing signal, not a numeric admission rule.
+- Prefer independent fixture migration before behavior changes only when explicit producer/consumer contracts permit: name the shared helper or interface, keep the migration independently passing, and preserve ownership of consumers that must change with behavior. Do not add per-slice timeout hints, increase session duration, or weaken verification gates. A bounded extra session is not guaranteed progress or permission to skip verification.
 - For large or multi-theme requests, prefer multiple independent plans over one long serial plan. Create a separate `tao init --slug ... --json` plan for each theme that can be reviewed and merged independently, and summarize the plan set in your final response.
 - If you intentionally keep multiple themes in one plan, explain why they share one review/merge boundary in `planning-brief.md`.
 - Include verification commands for every slice; every slice must include at least one deterministic verification command.

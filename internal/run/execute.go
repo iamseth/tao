@@ -314,6 +314,8 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		run.Model = plan.ReworkRoundModel(detail.Events, plan.ReworkRoundFromSliceID(slice.ID))
 	}
 	transportRetries := 0
+	timeoutOriginal := timeoutSliceSnapshot(interruptedSlice(detail, slice.ID))
+	timeoutBase := plan.PlanOwnershipBase(detail)
 	for {
 		ReportPhase(ctx, PhaseRunningSlice, &runstatus.SliceDetail{ID: slice.ID, Title: slice.Title})
 		handoffErr := r.runExecutor(ctx, run)
@@ -330,7 +332,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		if errors.As(handoffErr, new(*agent.SessionTimeoutError)) {
 			reloaded, reloadErr := r.reload(ctx, detail)
 			if reloadErr != nil {
-				return nil, reloadErr
+				return nil, fmt.Errorf("%w; reload after timeout: %w", handoffErr, reloadErr)
 			}
 			if plan.SliceCompleted(reloaded, slice.ID) {
 				return r.finishCompletedHandoff(ctx, reloaded, before, slice.ID, logPath, executionRoot)
@@ -340,12 +342,17 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 			r.recordSliceResumeFailure(detail, slice.ID, run.ResumeAttempt, handoffErr)
 		}
 		providerErr := fmt.Errorf("%s failed while running slice %s; see %s: %w", agentLabel(r.execution.Config.Agent), slice.ID, logPath, handoffErr)
-		if !agent.IsRetryableTransportFailure(handoffErr) {
+		timedOut := errors.As(handoffErr, new(*agent.SessionTimeoutError))
+		if !timedOut && !agent.IsRetryableTransportFailure(handoffErr) {
 			return nil, providerErr
 		}
 
 		hasRetry := transportRetries < len(implementationSliceRetryDelays)
-		if hasRetry {
+		if timedOut {
+			allowance := timeoutAllowance(ctx)
+			hasRetry = allowance != nil && !allowance.Load()
+		}
+		if hasRetry && !timedOut {
 			if delayErr := r.execution.Dependencies.TransportRetryDelay(ctx, implementationSliceRetryDelays[transportRetries]); delayErr != nil {
 				return nil, transportRecoveryError(providerErr, fmt.Errorf("wait to resume slice %s: %w", slice.ID, delayErr))
 			}
@@ -365,8 +372,18 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 			return nil, providerErr
 		}
 
-		validation, recoveryAction, recoveryErr := r.preflightTransportResume(ctx, reloaded, slice.ID, executionRoot)
+		var validation plan.VerificationValidationResult
+		var recoveryAction ExecutionBoundaryAction
+		var recoveryErr error
+		if timedOut {
+			validation, recoveryAction, recoveryErr = r.preflightTimeoutResume(ctx, reloaded, timeoutOriginal, timeoutBase, executionRoot)
+		} else {
+			validation, recoveryAction, recoveryErr = r.preflightTransportResume(ctx, reloaded, slice.ID, executionRoot)
+		}
 		if recoveryErr != nil {
+			if timedOut {
+				return nil, fmt.Errorf("%w; automatic timeout continuation refused: %w", providerErr, recoveryErr)
+			}
 			return nil, transportRecoveryError(providerErr, recoveryErr)
 		}
 		resumeAttempt = nextSliceResumeAttempt(reloaded.Events, slice.ID)
@@ -388,7 +405,13 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 			return nil, transportRecoveryError(providerErr, err)
 		}
 		detail = reloaded
-		transportRetries++
+		if timedOut {
+			if !timeoutAllowance(ctx).CompareAndSwap(false, true) {
+				return nil, providerErr
+			}
+		} else {
+			transportRetries++
+		}
 		run = SliceRun{PlanDir: absolutePlanDir(detail.Dir), SliceID: slice.ID, LogPath: logPath, RunPacket: runPacket, RepoRoot: executionRoot, VerificationCommands: slice.Verification.Commands, Resuming: true, ResumeAttempt: resumeAttempt}
 		if plan.IsReworkSliceID(slice.ID) {
 			run.Model = plan.ReworkRoundModel(detail.Events, plan.ReworkRoundFromSliceID(slice.ID))

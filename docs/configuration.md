@@ -224,7 +224,7 @@ explicitly setting it to an empty value is invalid.
 | `TAO_EXECUTION_MODE` | `isolated` | `isolated`, `current` | Use a feature branch/worktree or the launch checkout and branch. |
 | `TAO_AGENT` | `pi` | `pi`, `claude` | Select the agent runtime. |
 | `TAO_REVIEW_AGENT` | empty (inherit) | empty, `pi`, `claude` | Select the plan review runtime independently. Empty/unset inherits the final implementing runtime; the environment overrides saved selectors, and an explicit invocation selector wins. Model selection remains independent. |
-| `TAO_SESSION_TIMEOUT` | `20m` | Non-negative Go duration; `0` disables | Wall-clock limit for run-path agent sessions, not interactive planning; Tao-owned slice completion may overrun it by a bounded grace. |
+| `TAO_SESSION_TIMEOUT` | `20m` | Non-negative Go duration; `0` disables | Wall-clock limit for run-path agent sessions, not interactive planning; Tao-owned slice completion may overrun it by a bounded grace. One eligible typed implementation timeout may receive a fresh session per invocation, shared across slices/coordinated calls and independent of transport retries; duration and grace do not increase. No per-slice hints or continuation setting; see [recovery eligibility and explicit recovery](plan-format.md#slice-lifecycle). |
 | `TAO_SESSION_WARN_PERCENT` | `80` | Integer 0–99; `0` disables | Requests one advisory wrap-up notice for implementation/rework sessions. Unsupported runtimes skip delivery; Pi delivers between turns without extending the deadline. |
 | `TAO_MODEL` | Unset (runtime selection) | Model name | Shared base for unset roles, planning generation, PR work, and standalone merge-message generation. |
 | `TAO_RUN_MODEL` | Unset (resolved base) | Model name | Implementation and rework slices. |

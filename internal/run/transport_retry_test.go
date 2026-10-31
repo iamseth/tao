@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
 
 	"github.com/iamseth/tao/internal/testenv"
@@ -17,6 +18,61 @@ import (
 type retryableTransportTestError struct{ error }
 
 func (retryableTransportTestError) RetryableTransportFailure() {}
+
+func TestImplementationTransportTimeoutBudgetsRemainIndependent(t *testing.T) {
+	timeout := &agent.SessionTimeoutError{Timeout: time.Minute}
+	transport := retryableTransportTestError{error: errors.New("transport failed")}
+	for _, tt := range []struct {
+		name                  string
+		failures              []error
+		wantCalls, wantDelays int
+	}{
+		{"transport timeout transport transport", []error{transport, timeout, transport, transport}, 4, 2},
+		{"timeout transport timeout", []error{timeout, transport, timeout}, 3, 1},
+		{"untyped deadline", []error{context.DeadlineExceeded}, 1, 0},
+		{"deadline prose", []error{errors.New("session timed out: deadline exceeded")}, 1, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			detail := interruptedServiceRunDetail(t, root)
+			detail.State.Repo.BaseCommit = "base"
+			calls, delays := 0, 0
+			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base")
+			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
+				RepositoryAdmission: testRepositoryAdmission,
+				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					if name == "git" && runGitKey(args) == "diff --name-only --no-renames -z base..HEAD" {
+						return nil
+					}
+					return runner(ctx, cwd, name, args, stdout, stderr)
+				},
+				EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
+				TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
+					delays++
+					if delay != time.Duration(delays)*time.Second {
+						t.Fatalf("delay %s", delay)
+					}
+					return nil
+				},
+				SliceExecutor: sliceExecutorFunc(func(_ context.Context, run SliceRun) error {
+					if calls >= len(tt.failures) {
+						t.Fatal("unexpected extra session")
+					}
+					if run.ResumeAttempt != calls+1 {
+						t.Fatalf("resume attempt = %d", run.ResumeAttempt)
+					}
+					err := tt.failures[calls]
+					calls++
+					return err
+				}),
+			}})
+			err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
+			if !errors.Is(err, tt.failures[len(tt.failures)-1]) || calls != tt.wantCalls || delays != tt.wantDelays {
+				t.Fatalf("calls=%d delays=%d error=%v", calls, delays, err)
+			}
+		})
+	}
+}
 
 func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *testing.T) {
 	t.Parallel()

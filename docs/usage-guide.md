@@ -880,10 +880,33 @@ diagnostics, validation, and handoff behavior.
 
 Tao may retry an implementation handoff after at most two explicitly structured
 transport failures. Today only Pi's `provider_transport_failure` diagnostic
-qualifies; generic, authentication, timeout, planning, review, PR, merge, manual,
-and unsafe-boundary failures do not. This is fixed safety policy, not a setting,
-and each retry uses a fresh provider session after Tao rechecks durable plan and
-Git state.
+qualifies; generic and authentication failures do not. Each transport retry uses
+a fresh provider session after Tao rechecks durable plan and Git state.
+
+Separately, a typed implementation session timeout may receive one fresh-session
+continuation per run invocation, shared across slices and coordinated calls,
+including rework. This allowance is independent of the two transport retries and
+durable resume numbering. Tao first reloads state and rechecks selected-slice
+admission, approval evidence, unchanged verification and execution-start
+declarations, and the live Git boundary. Only safe automatic pre-intent work
+qualifies: every changed path (including untracked files) must fit active
+`expected_files` or successfully derived Plan-Owned Files at the stable recorded
+base. Missing ownership evidence or ambiguous status (including renames) refuses.
+
+Persisted blockers/stops, cancellation, budget exhaustion, manual ownership,
+policy `none`, post-intent work, and unsafe boundaries do not receive this
+continuation. Planning, review, PR, and merge sessions never retry. An entry
+`--continue` does not waive a newly persisted stop. Partial work is preserved;
+there is no automatic reset or restoration. Session duration and completion grace
+stay unchanged, and already-completed timed-out slices settle normally from
+validated durable state without spending the allowance. After refusal or
+exhaustion, use explicit recovery under the ordinary boundary rules below.
+
+This is fixed safety policy, not a new setting or per-slice timeout hint. Size
+slices for real full-tier tests, subprocess costs, lint, and review rather than
+relying on continuation: an extra bounded session guarantees neither progress
+nor completion and never permits skipping verification. Timeout and resume
+diagnostics remain non-authoritative.
 
 Do not infer recoverability from provider text, telemetry, or the presence of a
 partial diff. Exact retry timing and event semantics belong in the
