@@ -513,6 +513,7 @@ type reviewPromptData struct {
 	Head         string
 	ChangeType   plan.ChangeType
 	ProposalOnly bool
+	SiblingPlans string
 }
 
 type extractedReview = reviewcontract.Review
@@ -535,7 +536,7 @@ const (
 func renderReviewPrompt(data reviewPromptData) (string, error) {
 	return prompts.Render(prompts.PromptReview, prompts.Data{
 		PlanDir: data.PlanDir, PlanID: data.PlanID, Base: data.Base, Head: data.Head,
-		ChangeType: string(data.ChangeType), ProposalOnly: data.ProposalOnly,
+		ChangeType: string(data.ChangeType), ProposalOnly: data.ProposalOnly, SiblingPlans: data.SiblingPlans,
 	})
 }
 
@@ -858,7 +859,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 		run.ReviewRangePresenter(detail, base, head)
 	}
 	changeType := state.Plan.ChangeType
-	prompt, err := renderReviewPrompt(reviewPromptData{PlanDir: planDir, PlanID: planID, Base: base, Head: head, ChangeType: changeType})
+	prompt, err := renderReviewPrompt(reviewPromptData{PlanDir: planDir, PlanID: planID, Base: base, Head: head, ChangeType: changeType, SiblingPlans: plan.RenderSiblingPlanContext(ctx, detail, nil)})
 	if err != nil {
 		return plan.PlanReview{}, err
 	}

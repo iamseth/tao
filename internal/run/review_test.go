@@ -892,6 +892,73 @@ func TestCreateReviewWithAgentSessionReinspectsFailedCorrectionBeforeClassifying
 	}
 }
 
+func TestReviewSiblingContextSessions(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir() // Explicit plan directory, unrelated to the recorded repository.
+	reviewedAt := time.Date(2026, 6, 28, 12, 30, 0, 0, time.UTC)
+	detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	detail.Dir = filepath.Join(parent, "target")
+	detail.State.Repo.Root = "/recorded/repository"
+	detail.Slices.Slices[0].ExpectedFiles = []string{"selected.go"}
+	detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "002-b", Status: plan.StatusCompleted, ExpectedFiles: []string{"whole.go"}})
+	sibling := runPlanDetail(plan.StatusReviewed, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+	sibling.Dir = filepath.Join(parent, "sibling")
+	sibling.State.Plan.ID = "sibling"
+	sibling.State.Repo.Root = detail.State.Repo.Root
+	sibling.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "sibling-head"}
+	sibling.Slices.Slices[0].ExpectedFiles = []string{"whole.go"}
+	persist := func(d *plan.PlanDetail) {
+		t.Helper()
+		if err := os.MkdirAll(d.Dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]any{"state.json": d.State, "slices.json": d.Slices} {
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d.Dir, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	persist(detail)
+	persist(sibling)
+	invoke := func(input *plan.PlanDetail) string {
+		t.Helper()
+		executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}
+		_, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"})}, ReviewRun{PlanDir: detail.Dir, Detail: input, RepoRoot: detail.State.Repo.Root}, fileReviewRecordFactory(unscopedFileRepository(t)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return executor.requests[0].Prompt
+	}
+	for _, goal := range []string{"initial sibling goal", "fresh sibling goal"} {
+		sibling.Slices.Slices[0].Goal = goal
+		persist(sibling)
+		for _, input := range []*plan.PlanDetail{detail, nil} {
+			prompt := invoke(input)
+			if !strings.Contains(prompt, goal) || !strings.Contains(prompt, "whole.go") || !strings.Contains(prompt, "## Sibling plans") {
+				t.Fatalf("missing fresh whole-plan context for state-only=%v:\n%s", input == nil, prompt)
+			}
+		}
+		if got := plan.RenderSiblingPlanContext(context.Background(), detail, []string{"selected.go"}); got != "" {
+			t.Fatalf("selected scope unexpectedly overlaps: %s", got)
+		}
+	}
+	sibling.Slices.Slices[0].ExpectedFiles = []string{"unrelated.go"}
+	persist(sibling)
+	if prompt := invoke(detail); strings.Contains(prompt, "## Sibling plans") {
+		t.Fatal("no overlap changed review context")
+	}
+	if err := os.Remove(filepath.Join(detail.Dir, "slices.json")); err != nil {
+		t.Fatal(err)
+	}
+	if prompt := invoke(nil); !strings.Contains(prompt, "Coverage gap:") {
+		t.Fatal("unavailable collection was not surfaced")
+	}
+}
+
 func TestCreateReviewWithAgentSessionUsesWorkspaceBaseSHA(t *testing.T) {
 	t.Parallel()
 	planDir := t.TempDir()

@@ -501,6 +501,10 @@ causal claims, or drives routing.
 
 ### `/tao-slice` — turn a plan into executable artifacts
 
+The mandatory `tao validate` handoff check also shows advisory sibling-plan overlap for the whole plan. Acknowledge relevant declared scope and avoid unrelated expansion; overlap is not a validation error or a reason to automatically remove work or amend siblings. Incomplete collection is reported explicitly.
+
+Implementation packets (including plan-bound `tao prompt run`) use the selected slice's declared files; substantive reviews (including plan-bound `tao prompt review`) use the whole plan. Discovery stays beside the resolved plan, within its recorded repository, including when using an explicit `--plans-dir`. Generic unbound prompts are unchanged. These read-only, untrusted declaration snapshots can become stale as sibling plans change or appear; later sessions refresh them, but nothing reserves files or guarantees conflict avoidance. Sibling scope never grants ownership, bypasses gates or approval, or excuses regressions introduced by the reviewed diff.
+
 Converts the current planning conversation into a durable Tao plan: it runs
 `tao init --slug <short-slug> --json` to allocate a plan directory, then writes
 `state.json`, `slices.json`, `plan.md`, `planning-brief.md`, `handoff.md`, and

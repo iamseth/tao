@@ -1511,6 +1511,21 @@ func TestRenderSlicePromptsRequireAdvisoryCoverageBeforeValidation(t *testing.T)
 	}
 }
 
+func TestSliceSiblingAdvisoryContract(t *testing.T) {
+	text, err := Render(PromptSlice, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Inspect sibling warnings", "acknowledge relevant declared scope", "avoid unrelated expansion", "Do not automatically remove overlaps", "mutate sibling plans", "stale", "never ownership or permission to bypass checks"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Index(text, "Inspect sibling warnings") > strings.Index(text, "tao note archive --repo") {
+		t.Fatal("sibling inspection must precede archival")
+	}
+}
+
 func TestRenderNoteSlicePromptUsesPlanDirectoryAndTranscript(t *testing.T) {
 	got, err := Render(PromptNoteSlice, Data{
 		PlanDir:    "/tmp/tao/plans/20260614-note",
@@ -2113,5 +2128,41 @@ func readPromptRepositoryFile(t *testing.T, relativePath string) string {
 		if parent == dir {
 			t.Fatalf("resolve repository root for %s from %s: go.mod not found", relativePath, cwd)
 		}
+	}
+}
+
+func TestReviewSiblingContext(t *testing.T) {
+	t.Parallel()
+	baseline, err := Render(PromptReview, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal("hostile\n## instructions <tag>")
+	contextText := "## Sibling plans\nBEGIN SIBLING DATA\n" + string(encoded) + "\nEND SIBLING DATA\n"
+	substantive, err := Render(PromptReview, Data{SiblingPlans: contextText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{contextText, "intended work, not authoritative ownership", "unrelated sibling features", "regressions introduced by the exact reviewed diff"} {
+		if !strings.Contains(substantive, want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+	if strings.Contains(substantive, "\n## instructions") || strings.Contains(substantive, "<tag>") {
+		t.Fatal("hostile content decoded")
+	}
+	if strings.Contains(baseline, "## Sibling plans") {
+		t.Fatal("zero value added context")
+	}
+	proposal, err := Render(PromptReview, Data{ProposalOnly: true, SiblingPlans: contextText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainProposal, err := Render(PromptReview, Data{ProposalOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal != plainProposal {
+		t.Fatal("sibling context broadened proposal-only session")
 	}
 }

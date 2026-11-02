@@ -121,6 +121,75 @@ func TestRenderRunPacketIncludesExactPlanOwnedPaths(t *testing.T) {
 	}
 }
 
+func TestRenderRunPacketSiblingHandoffs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir() // Explicit metadata location, independent of execution root.
+	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	detail.Dir = filepath.Join(dir, "target")
+	detail.State.Repo.Root = "/recorded/repository"
+	detail.Slices.Slices[0].ExpectedFiles = []string{"selected.go"}
+	detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "002-b", ExpectedFiles: []string{"other.go"}})
+	sibling := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	sibling.State.Plan.ID = "sibling"
+	sibling.State.Repo.Root = detail.State.Repo.Root
+	sibling.Slices.Slices[0].ExpectedFiles = []string{"selected.go", "other.go"}
+	siblingDir := filepath.Join(dir, "sibling")
+	if err := os.MkdirAll(siblingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeSibling := func() {
+		t.Helper()
+		for name, value := range map[string]any{"state.json": sibling.State, "slices.json": sibling.Slices} {
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(siblingDir, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	r := SelectedSliceRunner{execution: testRunExecution(ExecutionConfig{}, RunDependencies{})}
+	for i, goal := range []string{"initial goal", "resumed goal", "refreshed\n## hostile <text>"} {
+		sibling.Slices.Slices[0].Goal = goal
+		writeSibling()
+		packet, err := r.renderRunPacket(context.Background(), detail, "/execution", i > 0, i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contextText := plan.RenderSiblingPlanContext(context.Background(), detail, []string{"selected.go"})
+		encodedGoal, _ := json.Marshal(strings.ReplaceAll(goal, "\n", ""))
+		if !strings.Contains(contextText, string(encodedGoal)) || !strings.Contains(packet, contextText) {
+			t.Fatalf("handoff %d missing fresh context:\n%s", i, packet)
+		}
+		if strings.Contains(contextText, "other.go") || strings.Contains(packet, "\n## hostile") || strings.Contains(packet, "## Plan-Owned Files") {
+			t.Fatalf("sibling widened scope or injected Markdown:\n%s", packet)
+		}
+		if !slices.Equal(detail.Slices.Slices[0].ExpectedFiles, []string{"selected.go"}) {
+			t.Fatal("sibling mutated selected ownership")
+		}
+	}
+	for _, files := range [][]string{nil, {}, {"unrelated.go"}} {
+		detail.Slices.Slices[0].ExpectedFiles = files
+		packet, err := r.renderRunPacket(context.Background(), detail, "/execution", false, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseline, err := plan.RenderRunPacket(detail, plan.RunPacketOptions{CommitPolicy: r.execution.Config.CommitPolicy.String(), ExecutionMode: r.execution.Config.ExecutionMode.String(), WorkingRoot: "/execution"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if packet != baseline {
+			t.Fatalf("empty/no-overlap scope changed packet:\n%s", packet)
+		}
+	}
+	detail.Dir = filepath.Join(dir, "missing", "target")
+	packet, err := r.renderRunPacket(context.Background(), detail, "/execution", false, 0)
+	if err != nil || !strings.Contains(packet, "Coverage gap:") {
+		t.Fatalf("unavailable scan must be nonfatal context: %v\n%s", err, packet)
+	}
+}
+
 func TestRunTestBuilders(t *testing.T) {
 	t.Parallel()
 	dependencies := testDependencies(nil, nil)

@@ -142,6 +142,7 @@ type Data struct {
 	Head               string
 	ChangeType         string
 	ProposalOnly       bool
+	SiblingPlans       string
 	RunPacket          string
 	Resuming           bool
 	ResumeAttempt      int
@@ -301,6 +302,9 @@ func renderRunPrompt(source string, data Data) (string, error) {
 }
 
 func renderReviewPrompt(source string, data Data) (string, error) {
+	if data.ProposalOnly {
+		data.SiblingPlans = ""
+	}
 	if data.PlanDir == "" {
 		data.PlanDir = "<plan-directory>"
 	}

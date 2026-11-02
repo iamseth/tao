@@ -550,11 +550,18 @@ func (r SelectedSliceRunner) renderRunPacket(ctx context.Context, detail *plan.P
 		return "", err
 	}
 	budgetThresholds := budget.Warn()
+	// A non-nil empty scope must not fall back to whole-plan declarations.
+	expectedFiles := []string{}
+	if selected := plan.Derive(detail, time.Time{}).NextSlice; selected != nil {
+		expectedFiles = append(expectedFiles, selected.ExpectedFiles...)
+	}
+	siblingPlans := plan.RenderSiblingPlanContext(ctx, detail, expectedFiles)
 	return plan.RenderRunPacket(detail, plan.RunPacketOptions{
 		CommitPolicy:     r.execution.Config.CommitPolicy.String(),
 		ExecutionMode:    r.execution.Config.ExecutionMode.String(),
 		WorkingRoot:      workingRoot,
 		PlanOwnedFiles:   planOwnedFiles(ctx, r.execution, detail, workingRoot),
+		SiblingPlans:     siblingPlans,
 		Resuming:         resuming,
 		ResumeAttempt:    resumeAttempt,
 		ResumeNote:       r.resumeNote,

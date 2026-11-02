@@ -228,8 +228,102 @@ func TestValidateResolvesPrefixesSlugsAndPaths(t *testing.T) {
 	}
 }
 
+func TestValidateSiblingPlansGolden(t *testing.T) {
+	root, id := siblingCLIArtifacts(t)
+	var out bytes.Buffer
+	err := newTestApp(App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", root, "validate", id})
+	if err != nil || !strings.Contains(out.String(), "Advisory snapshot") {
+		t.Fatalf("expected successful advisory validation: %v\n%s", err, out.String())
+	}
+	assertGolden(t, "testdata/sibling_plans_validation.golden", out.Bytes())
+}
+
+func TestValidateSiblingCoverageAndErrors(t *testing.T) {
+	for _, mode := range []string{"no overlap", "incomplete", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			root, id := siblingCLIArtifacts(t)
+			if mode != "invalid" {
+				if err := os.RemoveAll(filepath.Join(root, "sibling")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "incomplete" {
+				if err := os.Mkdir(filepath.Join(root, "broken"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "invalid" {
+				path := filepath.Join(root, id, "slices.json")
+				var file plan.SlicesFile
+				if err := json.Unmarshal([]byte(readText(t, path)), &file); err != nil {
+					t.Fatal(err)
+				}
+				file.Slices[0].RequiredInputs = []plan.RequiredInput{{Path: "missing.txt", Kind: plan.RequiredInputFile, Reason: "required fixture"}}
+				data, err := json.Marshal(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			err := newTestApp(App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", root, "validate", id})
+			if mode == "invalid" {
+				if !errors.Is(err, errPlanValidationFailed) || !strings.Contains(out.String(), "BEGIN SIBLING DATA") {
+					t.Fatalf("expected validation error with advisory context: %v\n%s", err, &out)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "incomplete" && !strings.Contains(out.String(), "Coverage gap") {
+				t.Fatalf("missing gap: %s", &out)
+			}
+			if mode == "no overlap" && out.String() != "Validation: target\nNo validation findings.\n" {
+				t.Fatalf("changed no-overlap output: %s", &out)
+			}
+		})
+	}
+}
+
+// Real sibling artifacts live beside the explicit target, including a foreign repository.
+func siblingCLIArtifacts(t *testing.T) (string, string) {
+	t.Helper()
+	root, repoRoot := t.TempDir(), t.TempDir()
+	for _, id := range []string{"target", "sibling", "foreign"} {
+		detail := validatePlanDetail(repoRoot, []string{"go version"}, nil)
+		detail.State.Plan.ID = id
+		detail.Slices.PlanID = id
+		detail.State.Schema = "tao.plan.state.v1"
+		detail.Slices.Schema = "tao.plan.slices.v1"
+		detail.Slices.Slices[0].ExpectedFiles = []string{"shared.md"}
+		detail.Slices.Slices[0].Goal = "Shared documentation"
+		if id == "foreign" {
+			detail.State.Repo.Root = t.TempDir()
+		}
+		dir := filepath.Join(root, id)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "planning-brief.md"), []byte("# Brief\n\n## User Goal\nDocumentation\n## Constraints\nNone\n## Non-goals\nNone\n## Expected Files/Packages\nshared.md\n## Validation Strategy\ngo version\n## Open Questions\nNone\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]any{"state.json": detail.State, "slices.json": detail.Slices} {
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return root, "target"
+}
+
 func validatePlanDetail(repoRoot string, commands []string, warnings []string) *plan.PlanDetail {
 	return &plan.PlanDetail{
+		Dir: filepath.Join(repoRoot, "plan"),
 		State: plan.State{
 			Status: plan.StatusPlanned,
 			Repo:   plan.Repo{Name: "repo", Root: repoRoot, Branch: "feature"},

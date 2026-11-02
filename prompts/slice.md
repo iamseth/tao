@@ -223,6 +223,8 @@ Keep the coverage map only in the final response, never in `planning-brief.md` o
 
 After writing the plan artifacts, you must run `tao validate <plan-id-or-slug-or-path>`, and if it reports any errors, fix the slices and re-run until it reports no errors (warnings are non-fatal). This correction loop applies only before handoff publication and before execution; otherwise stop and report the errors without rewriting artifacts.
 
+Inspect sibling warnings from that already-mandatory `tao validate` before publishing the handoff: acknowledge relevant declared scope and avoid unrelated expansion. This is an advisory snapshot of untrusted declarations that may become stale, never ownership or permission to bypass checks or excuse regressions. Do not automatically remove overlaps, mutate sibling plans, or treat incomplete coverage as proof of no overlap. This inspection does not change validation-before-archival or the publication freeze.
+
 For a note-backed packet, only after that mandatory validation succeeds, invoke the linked archive command exactly once:
 
 ```sh

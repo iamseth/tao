@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,6 +24,57 @@ import (
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+func TestPromptSiblingScope(t *testing.T) {
+	root, id := siblingCLIArtifacts(t)
+	path := filepath.Join(root, id, "slices.json")
+	var file plan.SlicesFile
+	if err := json.Unmarshal([]byte(readText(t, path)), &file); err != nil {
+		t.Fatal(err)
+	}
+	later := file.Slices[0]
+	later.ID = "002-later"
+	file.Slices[0].ExpectedFiles = []string{}
+	file.Slices = append(file.Slices, later)
+	data, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"run", "review", "plan"} {
+		for _, bound := range []bool{false, true} {
+			var out bytes.Buffer
+			args := []string{"--plans-dir", root, "prompt", name}
+			if bound {
+				args = append(args, "--plan-dir", filepath.Join(root, id))
+			}
+			if err := newTestApp(App{Out: &out, Err: &out}).Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			want := bound && name == "review"
+			if strings.Contains(out.String(), "BEGIN SIBLING DATA") != want || strings.Contains(out.String(), `"foreign"`) {
+				t.Fatalf("%s bound=%v: unexpected sibling context: %s", name, bound, &out)
+			}
+		}
+	}
+	file.Slices[0].ExpectedFiles = []string{"shared.md"}
+	data, err = json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := newTestApp(App{Out: &out, Err: &out}).Run(context.Background(), []string{"--plans-dir", root, "prompt", "run", "--plan-dir", filepath.Join(root, id)}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "BEGIN SIBLING DATA") {
+		t.Fatalf("missing selected overlap: %s", &out)
+	}
+}
 
 func TestPromptMaintenanceSuccessIsQuiet(t *testing.T) {
 	var out, errOut bytes.Buffer

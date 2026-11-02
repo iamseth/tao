@@ -62,6 +62,9 @@ func TestReviewProposalCorrectionFailureParity(t *testing.T) {
 						if !request.CaptureOutput || !strings.Contains(request.Prompt, "COMMIT PROPOSAL CORRECTION mode") || request.Metrics == nil || request.Metrics.Role != plan.AgentRoleReview {
 							t.Fatalf("correction request = %#v", request)
 						}
+						if strings.Contains(request.Prompt, "## Sibling plans") || strings.Contains(request.Prompt, "unrelated sibling features") {
+							t.Fatal("sibling context broadened correction session")
+						}
 						persisted, err := plan.ReadState(fixture.planDir)
 						if err != nil {
 							t.Fatal(err)

@@ -151,15 +151,25 @@ func (a App) prompt(ctx context.Context, repo plan.Resolver, args []string) erro
 		policy = runtimeconfig.CommitPolicyNone
 	}
 	runPacket := ""
+	siblingPlans := ""
+	if positional[0] == prompts.PromptReview && planDir != "" {
+		if detail, err := repo.ResolvePlan(ctx, planDir); err == nil {
+			siblingPlans = plan.RenderSiblingPlanContext(ctx, detail, nil)
+		}
+	}
 	if positional[0] == prompts.PromptRun && planDir != "" {
 		if detail, err := repo.ResolvePlan(ctx, planDir); err == nil {
-			runPacket, err = plan.RenderRunPacket(detail, plan.RunPacketOptions{CommitPolicy: policy.String(), ExecutionMode: resolved.ExecutionMode.String(), WorkingRoot: ""})
+			expectedFiles := []string{}
+			if selected := plan.Derive(detail, time.Time{}).NextSlice; selected != nil {
+				expectedFiles = append(expectedFiles, selected.ExpectedFiles...)
+			}
+			runPacket, err = plan.RenderRunPacket(detail, plan.RunPacketOptions{CommitPolicy: policy.String(), ExecutionMode: resolved.ExecutionMode.String(), WorkingRoot: "", SiblingPlans: plan.RenderSiblingPlanContext(ctx, detail, expectedFiles)})
 			if err != nil {
 				return err
 			}
 		}
 	}
-	text, err := prompts.Render(positional[0], prompts.Data{PlanDir: planDir, RunPacket: runPacket, CommitEnable: commit, CommitPolicy: policy.String(), ExecutionMode: resolved.ExecutionMode.String(), Arguments: arguments})
+	text, err := prompts.Render(positional[0], prompts.Data{PlanDir: planDir, RunPacket: runPacket, SiblingPlans: siblingPlans, CommitEnable: commit, CommitPolicy: policy.String(), ExecutionMode: resolved.ExecutionMode.String(), Arguments: arguments})
 	if err != nil {
 		return err
 	}

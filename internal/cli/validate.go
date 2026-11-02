@@ -13,8 +13,8 @@ var validateCommand = commandMetadata{
 	name:                  "validate",
 	minPrefix:             "v",
 	usageLines:            []string{"validate (v) <plan-id-or-slug-or-path>"},
-	completionDescription: "Validate plan artifacts and verification commands",
-	long:                  "Validate a plan's artifacts before running or completing it. Tao checks artifact consistency, verification command declarations, and agent budget warnings.",
+	completionDescription: "Validate plan artifacts and verification commands; show advisory sibling overlap",
+	long:                  "Validate a plan's artifacts before running or completing it. Tao checks artifact consistency, verification command declarations, and agent budget warnings. Sibling-plan overlap is shown separately as advisory context, never a validation failure.",
 	examples: "  tao validate my-plan\n" +
 		"  tao validate 20260628-1618-kubectl-style-help",
 	completion: completionContext{
@@ -47,6 +47,11 @@ func (a App) validate(ctx context.Context, repo plan.Resolver, args []string) er
 	result := plan.ValidatePlanVerification(detail)
 	if err := renderPlanValidationWithThresholds(a.Out, detail, result, budget.Warn()); err != nil {
 		return err
+	}
+	if siblings := plan.RenderSiblingPlanContext(ctx, detail, nil); siblings != "" {
+		if err := writef(a.Out, "\n%s", siblings); err != nil {
+			return err
+		}
 	}
 	if result.HasErrors() {
 		return errPlanValidationFailed
