@@ -9,6 +9,24 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-10-26
+
+#### Added
+- You can recover from one safely interrupted implementation timeout per run: Tao starts one fresh implementation session after checking that saved state, live changes, and execution declarations still meet its safety conditions.
+- When `tao slice-blocked` finds failures entirely within a slice’s declared scope, it now refuses before changing the plan unless you pass `--contract-conflict`. For out-of-scope failures, Tao can suggest one amendment command covering all remaining paths.
+- Planning guidance now calls out constructor and test sites that must be included when adding a fail-closed dependency, helping avoid repeated scope blockers.
+
+#### Changed
+- You can use `tao config set` and `tao config unset` in place of deprecated repository-config flag examples; settings guidance now points to the reference for precedence and configuration details.
+- Verification drift guidance now distinguishes tracked, untracked, and mixed worktree changes from identity, index, and declaration changes, and points to documented safe repository verification commands when available.
+
+#### Fixed
+- Dry-run restart previews no longer remove recovery resources or change durable state; real restarts announce removals before executing them.
+- Blocked-continue guidance now suggests amendments only for blocker paths not already covered by the slice’s `expected_files`, avoiding no-op recovery advice.
+
+#### Reliability
+- Runs and mutating merges in the same repository now coordinate through repository-wide admission. Conflicting operations are refused before mutation with guidance to wait or finish the sibling operation, while independent runs and repositories can proceed separately.
+
 ### Week of 2026-10-19
 
 #### Added
