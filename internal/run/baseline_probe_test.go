@@ -18,6 +18,31 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestFailuresOutsidePlanOwnership(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root, detail := sameHeadRerunFixture(t)
+	f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{}))
+	for _, tc := range []struct {
+		output string
+		want   bool
+	}{
+		{"FAIL\texample.org/test/outside\n", true},
+		{"outside/base.go:2:3: broken\n", true},
+		{"owned.txt:2:3: broken\n", false},
+		{"FAIL\tforeign.org/pkg\n", false},
+		{"--- FAIL: TestUnknown (0.00s)\n", false},
+	} {
+		if got := f.failuresOutsidePlanOwnership(context.Background(), detail, root, tc.output); got != tc.want {
+			t.Fatalf("output=%q got=%v", tc.output, got)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if f.failuresOutsidePlanOwnership(ctx, detail, root, "FAIL\texample.org/test/outside\n") {
+		t.Fatal("accepted cancelled context")
+	}
+}
+
 func TestBaselineProbe(t *testing.T) {
 	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
@@ -111,6 +136,7 @@ func TestBaselineProbe(t *testing.T) {
 			detail.State.Workspace.BaseBranch = branch
 			detail.State.Workspace.BaseSHA = base
 			calls := 0
+			headCalls := 0
 			var probeDir string
 			var events []plan.Event
 			runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
@@ -121,6 +147,7 @@ func TestBaselineProbe(t *testing.T) {
 					t.Fatalf("command=%v", args)
 				}
 				if cwd == root {
+					headCalls++ // gate, then same-head rerun when scope evidence permits
 					_, _ = fmt.Fprint(stdout, tc.head)
 					return errors.New("head failed")
 				}
@@ -153,8 +180,23 @@ func TestBaselineProbe(t *testing.T) {
 				_, _ = fmt.Fprint(stdout, tc.base)
 				return tc.baseErr
 			}
-			f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: memoryPlanRecordFactory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })}))
+			factory := memoryPlanRecordFactory
+			if tc.name == "base passes" {
+				factory = func(d *plan.PlanDetail) (PlanMutationRecord, error) { return plan.NewPlanRecord(d.Dir, d) }
+			}
+			f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated}}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: factory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })}))
+			outside := f.failuresOutsidePlanOwnership(context.Background(), detail, root, tc.head)
+			if outside != (tc.calls == 1) {
+				t.Fatalf("failuresOutsidePlanOwnership=%v want %v", outside, tc.calls == 1)
+			}
 			failure := f.verifyCompletedBranch(context.Background(), detail, root)
+			wantHeadCalls := 1
+			if outside {
+				wantHeadCalls++
+			}
+			if headCalls != wantHeadCalls {
+				t.Fatalf("head calls=%d want %d", headCalls, wantHeadCalls)
+			}
 			if failure == nil {
 				t.Fatal("expected failure")
 			}
@@ -187,6 +229,14 @@ func TestBaselineProbe(t *testing.T) {
 				}
 			} else if v.FailureKind != plan.FinalVerificationFailureKindCode || v.Baseline != nil {
 				t.Fatalf("verification=%+v", v)
+			}
+			if tc.name == "base passes" {
+				if err := f.handleFinalVerificationFailure(context.Background(), 1, detail, root, failure); !errors.Is(err, errVerificationRepairScheduled) {
+					t.Fatalf("failing rerun did not schedule repair: %v", err)
+				}
+				if plan.VerificationRepairAttemptCount(detail) != 1 {
+					t.Fatal("missing repair attempt")
+				}
 			}
 			if probeDir != "" {
 				if _, err := os.Stat(probeDir); !errors.Is(err, os.ErrNotExist) {

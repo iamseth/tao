@@ -56,6 +56,7 @@ const (
 	EventTypeReworkRound                = "rework_round"
 	EventTypeReworkStopped              = "rework_stopped"
 	EventTypeFinalVerification          = "final_verification"
+	EventTypeFinalVerificationFlake     = "final_verification_flake"
 	EventTypeVerificationRepairCreated  = "verification_repair_created"
 	EventTypeVerificationRepairStopped  = "verification_repair_stopped"
 	EventTypeMergeVerification          = "merge_verification"

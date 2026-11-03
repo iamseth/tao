@@ -19,6 +19,161 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestVerifyCompletedBranchSameHeadRerun(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root, detail := sameHeadRerunFixture(t)
+	calls := 0
+	var events []plan.Event
+	runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		if name != "sh" {
+			return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+		}
+		calls++
+		if cwd != root || strings.Join(args, " ") != "-c make verify" {
+			t.Fatalf("unexpected gate: %s %v", cwd, args)
+		}
+		if calls == 1 {
+			_, _ = io.WriteString(stdout, "--- FAIL: TestFlake (0.00s)\nFAIL\texample.org/test/outside\n")
+			return errors.New("exit 1")
+		}
+		_, _ = io.WriteString(stdout, "rerun passed")
+		return nil
+	}
+	f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: memoryPlanRecordFactory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })}))
+	if err := f.verifyCompletedBranch(context.Background(), detail, root); err != nil {
+		t.Fatal(err)
+	}
+	v := detail.State.Plan.FinalVerification
+	if calls != 2 || v.Result != "passed" || v.Details != "rerun passed" || v.FailureKind != "" || v.Fingerprint != finalVerificationFingerprint(*v) {
+		t.Fatalf("calls=%d verification=%+v", calls, v)
+	}
+	flakes := 0
+	for _, e := range events {
+		switch e.Type {
+		case "final_verification_flake":
+			flakes++
+			if e.HeadSHA != v.HeadSHA || e.Command != v.Command || e.Fingerprint == "" || e.Fingerprint == v.Fingerprint || e.FailureKind != plan.FinalVerificationFailureKindCode || !strings.Contains(e.Reason, "TestFlake") {
+				t.Fatalf("flake=%+v", e)
+			}
+		case plan.EventTypeVerificationRepairCreated:
+			t.Fatal("scheduled repair")
+		case plan.EventTypeFinalVerification:
+			if e.Result != "passed" {
+				t.Fatalf("result=%s", e.Result)
+			}
+		}
+	}
+	if flakes != 1 || plan.VerificationRepairAttemptCount(detail) != 0 {
+		t.Fatalf("flakes=%d", flakes)
+	}
+}
+
+func TestVerifyCompletedBranchRerunGuardsAndFailureEvidence(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, tc := range []struct {
+		name  string
+		calls int
+		kind  plan.FinalVerificationFailureKind
+	}{
+		{"in scope", 1, plan.FinalVerificationFailureKindCode},
+		{"reverify", 1, plan.FinalVerificationFailureKindCode},
+		{"cap", 1, plan.FinalVerificationFailureKindCode},
+		{"timeout", 1, plan.FinalVerificationFailureKindTimeout},
+		{"cancelled", 1, plan.FinalVerificationFailureKindCancelled},
+		{"tool missing", 1, plan.FinalVerificationFailureKindToolMissing},
+		{"invalid command", 1, plan.FinalVerificationFailureKindInvalidCommand},
+		{"rerun in scope", 2, plan.FinalVerificationFailureKindCode},
+		{"rerun timeout", 2, plan.FinalVerificationFailureKindTimeout},
+		{"rerun cancelled", 2, plan.FinalVerificationFailureKindCancelled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, detail := sameHeadRerunFixture(t)
+			if tc.name == "cap" {
+				for i := range plan.VerificationRepairAttemptCap {
+					binding := plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "old", Fingerprint: "old"}
+					detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: fmt.Sprintf("vr%02d", i+1), Status: plan.StatusCompleted, VerificationRepair: &binding})
+				}
+			}
+			calls := 0
+			var events []plan.Event
+			runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				if name != "sh" {
+					return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+				}
+				// Reverify retains the existing baseline probe; only root calls are reruns.
+				if cwd != root {
+					if tc.name != "reverify" {
+						t.Fatalf("unexpected baseline probe for %s", tc.name)
+					}
+					return nil
+				}
+				calls++
+				output := "--- FAIL: TestFlake (0.00s)\nFAIL\texample.org/test/outside\n"
+				if tc.name == "in scope" || (tc.name == "rerun in scope" && calls == 2) {
+					output = "owned.txt:2:3: broken\n"
+				}
+				_, _ = io.WriteString(stdout, output)
+				if calls == tc.calls {
+					switch tc.kind {
+					case plan.FinalVerificationFailureKindTimeout:
+						return context.DeadlineExceeded
+					case plan.FinalVerificationFailureKindCancelled:
+						return context.Canceled
+					case plan.FinalVerificationFailureKindToolMissing:
+						return exec.Command("sh", "-c", "exit 127").Run()
+					case plan.FinalVerificationFailureKindInvalidCommand:
+						return exec.Command("sh", "-c", "exit 126").Run()
+					}
+				}
+				return errors.New("gate failed")
+			}
+			execution := testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: memoryPlanRecordFactory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })})
+			execution.Request.Reverify = tc.name == "reverify"
+			f := newFinalizer(io.Discard, execution)
+			if err := f.verifyCompletedBranch(context.Background(), detail, root); err == nil {
+				t.Fatal("expected failure")
+			}
+			v := detail.State.Plan.FinalVerification
+			if calls != tc.calls || v.FailureKind != tc.kind || v.Result != "failed" {
+				t.Fatalf("calls=%d verification=%+v", calls, v)
+			}
+			if tc.name == "rerun in scope" && (strings.Contains(v.Details, "TestFlake") || !strings.Contains(v.Details, "owned.txt")) {
+				t.Fatalf("stale evidence: %+v", v)
+			}
+			for _, e := range events {
+				if e.Type == plan.EventTypeFinalVerificationFlake {
+					t.Fatal("unexpected flake event")
+				}
+			}
+		})
+	}
+}
+
+func sameHeadRerunFixture(t *testing.T) (string, *plan.PlanDetail) {
+	t.Helper()
+	root := initSliceCompletionRepo(t)
+	for path, data := range map[string]string{"go.mod": "module example.org/test\n", "Makefile": "verify:\n\tfalse\n", "outside/base.go": "package outside\n"} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runCommitTestGitCommand(t, root, "add", ".")
+	runCommitTestGitCommand(t, root, "commit", "-m", "base")
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Repo.Root = root
+	detail.State.Repo.BaseCommit = "HEAD~1"
+	if err := os.WriteFile(filepath.Join(root, "owned.txt"), []byte("change"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", ".")
+	runCommitTestGitCommand(t, root, "commit", "-m", "head")
+	return root, detail
+}
+
 func TestVerifyCompletedBranchCache(t *testing.T) {
 	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)

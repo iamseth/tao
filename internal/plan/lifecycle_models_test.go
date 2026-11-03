@@ -44,6 +44,7 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 		EventTypeReworkRound,
 		EventTypeReworkStopped,
 		EventTypeFinalVerification,
+		EventTypeFinalVerificationFlake,
 		EventTypeVerificationRepairCreated,
 		EventTypeVerificationRepairStopped,
 		EventTypeMergeVerification,
