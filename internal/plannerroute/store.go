@@ -20,7 +20,8 @@ const MaxRecords = 5000
 
 // Bound contention even when post-planning recording detaches cancellation.
 // Brief polling still lets concurrent writers serialize without needless loss.
-const lockWaitLimit = time.Second
+var lockWaitLimit = time.Second
+
 const lockPollInterval = 10 * time.Millisecond
 
 var (
