@@ -60,6 +60,7 @@ Command hygiene for declared verification commands:
 
 - Use single commands or `&&` chains (including `cd DIR &&` context changes). Do not use `||` fallbacks, redirects, semicolon-separated commands, backticks, or command substitution. These restrictions concern shell syntax, not literal characters in quoted arguments.
 - For zero-match assertions, use `! grep -q` only over known readable search inputs so negated search errors cannot masquerade as success; do not use `grep -c` or `rg -c` as zero-match assertions.
+- Negative search gates must target the exact distinctive form being removed, as a fixed string (`-F`) including its surrounding delimiters, never a phrase that can also occur in text the slice preserves; when the pre-implementation run of such a gate fails as expected, confirm every matching line is one this slice removes.
 - For several checks, prefer a small test or repository script over complex shell composition.
 
 ## Advisory coverage check

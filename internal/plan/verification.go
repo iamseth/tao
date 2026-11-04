@@ -46,6 +46,17 @@ func ValidatePlanVerification(detail *PlanDetail) VerificationValidationResult {
 				Message:  fmt.Sprintf("in_progress slice %s is missing timing.started_at; restore only through Tao's journaled timing repair using matching plan/slice slice_started evidence; absent, zero, or conflicting evidence requires investigation, never a guessed timestamp", slice.ID),
 			})
 		}
+		if slice.Status == StatusPending {
+			for _, command := range slice.Verification.Commands {
+				if match, ok := analyzer.NegativeSearchMatches(command); ok && match.Total >= 2 {
+					result.Findings = append(result.Findings, VerificationFinding{
+						Severity: VerificationFindingWarning, SliceID: slice.ID,
+						Code: "verification_negative_search_ambiguous", Command: command, Path: match.FirstPath,
+						Message: fmt.Sprintf("negative search matches %d lines (%s); if the slice preserves any of these lines the gate cannot pass, so narrow it to the exact removed form with -F including its delimiters", match.Total, strings.Join(match.Locations, ", ")),
+					})
+				}
+			}
+		}
 		result.Findings = append(result.Findings, validateApprovalContract(slice)...)
 		result.Findings = append(result.Findings, validateCheckoutConfinement(slice)...)
 		result.Findings = append(result.Findings, validateRequiredInputs(detail, slice, detail.State.Repo.Root, false)...)
