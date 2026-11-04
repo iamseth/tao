@@ -4,6 +4,8 @@
 // models so the plan package keeps ownership of on-disk schemas and lifecycle
 // state while delegating shell, cwd, path, and failure-classification details.
 //
+// NegativeSearchMatches is an advisory, bounded in-process literal scan that never executes commands or authorizes execution.
+//
 // AnalyzeCommand, ClassifyRun, and ClassifyFailure are advisory; their suggested
 // commands must never authorize execution. MechanicalCorrection is a separate,
 // fail-closed producer of command/cwd candidates, not evidence of a passed gate.

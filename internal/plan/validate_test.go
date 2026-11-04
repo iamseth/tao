@@ -408,6 +408,52 @@ func TestValidatePlanVerificationWarnsForOversizedSliceGuardrails(t *testing.T) 
 	}
 }
 
+func TestValidatePlanVerificationNegativeSearch(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "help.txt"), "fs.String(\"agent\", \"pi\", \"[agent runtime: pi or claude]\")\n\"agent runtime: pi or claude (default pi)\",\n")
+	for _, tt := range []struct {
+		name, command   string
+		completed, want bool
+	}{
+		{name: "ambiguous", command: "! grep -q 'agent runtime: pi or claude' help.txt", want: true},
+		{name: "narrow", command: "! grep -qF '[agent runtime: pi or claude]' help.txt"},
+		{name: "completed", command: "! grep -q 'agent runtime: pi or claude' help.txt", completed: true},
+		{name: "unsupported", command: "! grep -qi 'agent runtime: pi or claude' help.txt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			slice := Slice{ID: "001-search", Status: StatusPending, Verification: Verification{Commands: []string{tt.command}}}
+			if tt.completed {
+				slice.Status = StatusCompleted
+			}
+			detail := &PlanDetail{State: State{Repo: Repo{Root: root}, Plan: PlanState{PendingSlices: []string{slice.ID}}}, Slices: SlicesFile{Slices: []Slice{slice}}}
+			var found []VerificationFinding
+			for _, f := range ValidatePlanVerification(detail).Findings {
+				if f.Code == "verification_negative_search_ambiguous" {
+					found = append(found, f)
+				}
+			}
+			if !tt.want {
+				if len(found) != 0 {
+					t.Fatalf("unexpected findings: %+v", found)
+				}
+				return
+			}
+			if len(found) != 1 {
+				t.Fatalf("want one negative search warning, got %+v", found)
+			}
+			f := found[0]
+			if f.Severity != VerificationFindingWarning || f.Path != "help.txt" || f.Command != tt.command || f.SliceID != slice.ID || !strings.Contains(f.Message, "help.txt:1") || !strings.Contains(f.Message, "help.txt:2") {
+				t.Fatalf("incorrect warning: %+v", f)
+			}
+			for _, f := range ValidateSelectedSliceVerificationAtRoot(detail, root).Findings {
+				if f.Code == "verification_negative_search_ambiguous" {
+					t.Fatalf("preflight emitted advisory: %+v", f)
+				}
+			}
+		})
+	}
+}
+
 func TestValidatePlanVerificationGateParity(t *testing.T) {
 	testenv.SkipIfShort(t)
 	t.Parallel()
