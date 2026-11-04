@@ -16,58 +16,20 @@ import (
 
 // probeBaselineFailure is best-effort evidence collection, never repair authority.
 func (f Finalizer) probeBaselineFailure(ctx context.Context, detail *plan.PlanDetail, executionRoot string, head plan.FinalVerification, combinedOutput string) *plan.FinalVerificationBaseline {
-	if detail == nil || head.FailureKind != plan.FinalVerificationFailureKindCode || plan.VerificationRepairAttemptCount(detail) >= plan.VerificationRepairAttemptCap {
+	if detail == nil || ctx.Err() != nil || head.FailureKind != plan.FinalVerificationFailureKindCode || plan.VerificationRepairAttemptCount(detail) >= plan.VerificationRepairAttemptCap {
+		return nil
+	}
+	if !f.failuresOutsidePlanOwnership(ctx, detail, executionRoot, combinedOutput) {
 		return nil
 	}
 	tests := verifyoutput.FailingTests(combinedOutput)
 	packages := verifyoutput.FailingPackages(combinedOutput)
-	paths := verifyoutput.FailingPaths(combinedOutput)
-	// Extractors cap each set at 64 entries without reporting truncation. A
-	// saturated set cannot prove that every failure is outside plan ownership.
-	// Decline even an exactly-full set rather than probe with incomplete scope.
-	if len(packages) >= 64 || len(paths) >= 64 {
-		return nil
-	}
-	if len(packages) == 0 && len(paths) == 0 {
-		return nil
-	}
-	detector, ok := verifydetect.OpenRoot(executionRoot)
-	if !ok {
-		return nil
-	}
-	var dirs []string
-	for _, pkg := range packages {
-		dir, ok := detector.GoPackageDir(pkg)
-		if !ok {
-			return nil
-		}
-		dirs = append(dirs, dir)
-	}
-	// Missing ownership evidence is not a successfully computed empty set.
-	ownershipBase := plan.PlanOwnershipBase(detail)
-	if ownershipBase == "" {
-		return nil
-	}
-	ownedFiles, err := gitClient(f.execution, executionRoot).ChangedFilesExact(ctx, ownershipBase+"..HEAD")
-	if err != nil {
-		return nil
-	}
-	for _, file := range ownedFiles {
-		if slices.Contains(paths, file) {
-			return nil
-		}
-		for _, dir := range dirs {
-			if dir == "." || strings.HasPrefix(file, dir+"/") {
-				return nil
-			}
-		}
-	}
 	base := plandelta.ResolveBase(ctx, f.execution.Dependencies.reviewGitFactory(executionRoot), detail.State)
 	if base.SHA == "" || base.SHA == head.HeadSHA {
 		return nil
 	}
 	var overlap []string
-	err = gitClient(f.execution, executionRoot).WithDetachedCheckout(ctx, base.SHA, func(dir string) error {
+	err := gitClient(f.execution, executionRoot).WithDetachedCheckout(ctx, base.SHA, func(dir string) error {
 		var stdout, stderr bytes.Buffer
 		runErr := f.execution.Dependencies.CommandRunner(commandrunner.WithVerificationCache(ctx, dir), dir, "sh", []string{"-c", head.Command}, &stdout, &stderr)
 		if runErr == nil || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
@@ -95,4 +57,49 @@ func (f Finalizer) probeBaselineFailure(ctx context.Context, detail *plan.PlanDe
 		overlap = overlap[:64]
 	}
 	return &plan.FinalVerificationBaseline{SHA: base.SHA, Source: string(base.Source), Result: finalVerificationFailed, Signatures: overlap}
+}
+
+// failuresOutsidePlanOwnership requires complete scope and ownership evidence.
+func (f Finalizer) failuresOutsidePlanOwnership(ctx context.Context, detail *plan.PlanDetail, executionRoot string, combinedOutput string) bool {
+	if detail == nil || ctx.Err() != nil {
+		return false
+	}
+	packages := verifyoutput.FailingPackages(combinedOutput)
+	paths := verifyoutput.FailingPaths(combinedOutput)
+	// Saturated extractors cannot prove complete scope, even at exactly 64.
+	if len(packages) >= 64 || len(paths) >= 64 || len(packages)+len(paths) == 0 {
+		return false
+	}
+	detector, ok := verifydetect.OpenRoot(executionRoot)
+	if !ok {
+		return false
+	}
+	var dirs []string
+	for _, pkg := range packages {
+		dir, ok := detector.GoPackageDir(pkg)
+		if !ok {
+			return false
+		}
+		dirs = append(dirs, dir)
+	}
+	// Missing ownership evidence is not a successfully computed empty set.
+	ownershipBase := plan.PlanOwnershipBase(detail)
+	if ownershipBase == "" {
+		return false
+	}
+	ownedFiles, err := gitClient(f.execution, executionRoot).ChangedFilesExact(ctx, ownershipBase+"..HEAD")
+	if err != nil {
+		return false
+	}
+	for _, file := range ownedFiles {
+		if slices.Contains(paths, file) {
+			return false
+		}
+		for _, dir := range dirs {
+			if dir == "." || strings.HasPrefix(file, dir+"/") {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -82,9 +82,26 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	startedAt := now(f.execution)
 	gateCtx := commandrunner.WithVerificationCache(ctx, executionRoot)
 	runErr := f.execution.Dependencies.CommandRunner(gateCtx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
+	combined := combineFinalVerificationOutput(stdout.String(), stderr.String())
+	if runErr != nil {
+		first := verification
+		first.Result = finalVerificationFailed
+		first.FailureKind, first.ExitCode = classifyFinalVerificationFailure(ctx, runErr)
+		if first.FailureKind == plan.FinalVerificationFailureKindCode && !f.execution.Request.Reverify && plan.VerificationRepairAttemptCount(detail) < plan.VerificationRepairAttemptCap && ctx.Err() == nil && f.failuresOutsidePlanOwnership(ctx, detail, executionRoot, combined) {
+			first.Details, first.OutputTruncated = boundedFinalVerificationDetails(combined)
+			first.Fingerprint = finalVerificationFingerprint(first)
+			firstOutput := combined
+			stdout.Reset()
+			stderr.Reset()
+			runErr = f.execution.Dependencies.CommandRunner(gateCtx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
+			combined = combineFinalVerificationOutput(stdout.String(), stderr.String())
+			if runErr == nil {
+				f.appendFinalVerificationFlakeEvent(detail, first, firstOutput)
+			}
+		}
+	}
 	finishedAt := now(f.execution)
 	durationSeconds := max(int64(finishedAt.Sub(startedAt)/time.Second), 0)
-	combined := combineFinalVerificationOutput(stdout.String(), stderr.String())
 	if runErr != nil {
 		verification.Result = finalVerificationFailed
 		verification.FailureKind, verification.ExitCode = classifyFinalVerificationFailure(ctx, runErr)
@@ -114,6 +131,28 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 		return recordErr
 	}
 	return writef(f.outputWriter(), "Final verification: passed (%s)\n", command)
+}
+
+func (f Finalizer) appendFinalVerificationFlakeEvent(detail *plan.PlanDetail, first plan.FinalVerification, output string) {
+	appender := f.execution.Dependencies.EventAppender
+	if detail == nil || appender == nil {
+		return
+	}
+	event := plan.Event{
+		Type:        plan.EventTypeFinalVerificationFlake,
+		Timestamp:   now(f.execution).UTC(),
+		PlanID:      detail.State.Plan.ID,
+		Command:     first.Command,
+		HeadSHA:     first.HeadSHA,
+		Fingerprint: first.Fingerprint,
+		FailureKind: first.FailureKind,
+		ExitCode:    first.ExitCode,
+		Reason:      verifyoutput.Reason(output, first.Details, 1000),
+		Message:     "Final verification passed on same-head rerun",
+	}
+	if err := appender.AppendEvent(detail.Dir, event); err != nil {
+		_, _ = fmt.Fprintf(f.outputWriter(), "Warning: append final verification flake event: %v\n", err)
+	}
 }
 
 func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verification plan.FinalVerification, combinedOutput string, timestamp time.Time, durationSeconds *int64) {
@@ -202,10 +241,10 @@ func finalVerificationCommand(detail *plan.PlanDetail, executionRoot string) str
 }
 
 func classifyFinalVerificationFailure(ctx context.Context, runErr error) (plan.FinalVerificationFailureKind, *int) {
-	switch ctx.Err() {
-	case context.DeadlineExceeded:
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(runErr, context.DeadlineExceeded):
 		return plan.FinalVerificationFailureKindTimeout, finalVerificationExitCode(runErr)
-	case context.Canceled:
+	case errors.Is(ctx.Err(), context.Canceled) || errors.Is(runErr, context.Canceled):
 		return plan.FinalVerificationFailureKindCancelled, finalVerificationExitCode(runErr)
 	}
 	exitCode := finalVerificationExitCode(runErr)

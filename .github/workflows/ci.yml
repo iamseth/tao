@@ -14,7 +14,8 @@ concurrency:
 jobs:
   build-test-lint:
     name: Build, test, and lint
-    runs-on: ubuntu-latest
+    # Keep OS-major upgrades intentional; 26.04 currently fails the bwrap UID-map probe.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       TAO_REQUIRE_CONFINEMENT_TESTS: "1"
@@ -83,7 +84,8 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    # Match the Linux build/test image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out repository

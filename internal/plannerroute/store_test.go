@@ -363,6 +363,10 @@ func TestStoreHeldLockCancellation(t *testing.T) {
 }
 
 func TestStoreConcurrentAppend(t *testing.T) {
+	priorLockWaitLimit := lockWaitLimit
+	lockWaitLimit = 30 * time.Second
+	t.Cleanup(func() { lockWaitLimit = priorLockWaitLimit })
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	r := unlinkedRecord()
