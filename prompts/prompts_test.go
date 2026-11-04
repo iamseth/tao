@@ -69,6 +69,7 @@ func TestSlicingVerificationCommandHygiene(t *testing.T) {
 		{"shell restrictions", "Do not use `||` fallbacks, redirects, semicolon-separated commands, backticks, or command substitution."},
 		{"quoted literals", "These restrictions concern shell syntax, not literal characters in quoted arguments."},
 		{"readable absence inputs", "For zero-match assertions, use `! grep -q` only over known readable search inputs so negated search errors cannot masquerade as success"},
+		{"distinctive negative search", "Negative search gates must target the exact distinctive form being removed, as a fixed string (`-F`) including its surrounding delimiters"},
 		{"reject count assertions", "do not use `grep -c` or `rg -c` as zero-match assertions."},
 		{"simple checks", "For several checks, prefer a small test or repository script over complex shell composition."},
 	}
