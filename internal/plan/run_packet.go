@@ -208,10 +208,14 @@ func writeOperatorAmendments(b *strings.Builder, amendments []SliceAmendment) {
 // formatSliceAmendment renders one operator amendment as a single line:
 // `<RFC3339 amended_at> [<fields joined by ", ">]: <first line of reason>`.
 func formatSliceAmendment(amendment SliceAmendment) string {
-	return fmt.Sprintf("%s [%s]: %s",
+	text := fmt.Sprintf("%s [%s]: %s",
 		amendment.AmendedAt.UTC().Format(time.RFC3339),
 		strings.Join(amendment.Fields, ", "),
 		firstLine(amendment.Reason))
+	for _, pair := range amendment.VerificationCommands {
+		text += fmt.Sprintf("; %s -> %s", firstLine(pair.Old), firstLine(pair.New))
+	}
+	return text
 }
 
 func writeRequiredInputs(b *strings.Builder, inputs []RequiredInput) {

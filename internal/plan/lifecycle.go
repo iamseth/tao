@@ -1254,6 +1254,42 @@ func markSliceSkippedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 // sliceAmendmentMessage is the fixed slice_amended event message.
 const sliceAmendmentMessage = "Slice contract amended by plan edit"
 
+// ApplyVerificationCommandReplacements copies verification and replaces declared
+// commands and their matching step references without changing command count.
+func ApplyVerificationCommandReplacements(verification Verification, replacements []VerificationCommandReplacement) (Verification, error) {
+	pairs, err := normalizeVerificationCommandReplacements(replacements)
+	if err != nil {
+		return Verification{}, err
+	}
+	result := cloneVerification(verification)
+	newCommands := make(map[string]bool)
+	for _, pair := range pairs {
+		index, count := -1, 0
+		for i, command := range verification.Commands {
+			if strings.TrimSpace(command) == pair.New {
+				return Verification{}, fmt.Errorf("new verification command %q is already present", pair.New)
+			}
+			if strings.TrimSpace(command) == pair.Old {
+				index, count = i, count+1
+			}
+		}
+		if count != 1 {
+			return Verification{}, fmt.Errorf("old verification command %q matches %d entries; want exactly one", pair.Old, count)
+		}
+		if newCommands[pair.New] {
+			return Verification{}, fmt.Errorf("new verification command %q is already present", pair.New)
+		}
+		newCommands[pair.New] = true
+		result.Commands[index] = pair.New
+		for i, step := range verification.Steps {
+			if step.Command == pair.Old {
+				result.Steps[i].Command = pair.New
+			}
+		}
+	}
+	return result, nil
+}
+
 // markSliceAmendedWithChanges appends operator-supplied goal, tasks, expected
 // files, and manual checks to one pending or blocked slice without touching
 // its status, blocker note, or execution boundary.
@@ -1280,6 +1316,14 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 		return Event{}, fmt.Errorf("cannot replace the goal of generated verification-repair slice %s; amend may only append expected files, tasks, or manual checks with a recorded reason", sliceID)
 	}
 
+	if slice.VerificationRepair != nil && len(normalized.ReplaceVerificationCommands) > 0 {
+		return Event{}, fmt.Errorf("cannot replace verification commands of generated verification-repair slice %s", sliceID)
+	}
+	verification, err := ApplyVerificationCommandReplacements(slice.Verification, normalized.ReplaceVerificationCommands)
+	if err != nil {
+		return Event{}, err
+	}
+
 	var fields []string
 	goal := slice.Goal
 	if normalized.Goal != "" && normalized.Goal != slice.Goal {
@@ -1303,6 +1347,9 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	if checksChanged {
 		fields = append(fields, "manual_checks")
 	}
+	if len(normalized.ReplaceVerificationCommands) > 0 {
+		fields = append(fields, "verification_commands")
+	}
 	if len(fields) == 0 {
 		return Event{}, fmt.Errorf("amendment does not change slice %s; every requested value is already present", sliceID)
 	}
@@ -1310,19 +1357,21 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	slice.Goal = goal
 	slice.Tasks = tasks
 	slice.ExpectedFiles = expectedFiles
+	slice.Verification = verification
 	slice.Verification.ManualChecks = manualChecks
-	slice.Amendments = append(slice.Amendments, SliceAmendment{AmendedAt: now, Reason: normalized.Reason, Fields: fields})
+	slice.Amendments = append(slice.Amendments, SliceAmendment{AmendedAt: now, Reason: normalized.Reason, Fields: fields, VerificationCommands: slices.Clone(normalized.ReplaceVerificationCommands)})
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 	markPlanEdited(detail, changes, now)
 	event := Event{
-		Type:          EventTypeSliceAmended,
-		Timestamp:     now,
-		PlanID:        detail.State.Plan.ID,
-		SliceID:       sliceID,
-		Reason:        normalized.Reason,
-		AmendedFields: slices.Clone(fields),
-		Message:       sliceAmendmentMessage,
+		Type:                         EventTypeSliceAmended,
+		Timestamp:                    now,
+		PlanID:                       detail.State.Plan.ID,
+		SliceID:                      sliceID,
+		Reason:                       normalized.Reason,
+		AmendedFields:                slices.Clone(fields),
+		ReplacedVerificationCommands: slices.Clone(normalized.ReplaceVerificationCommands),
+		Message:                      sliceAmendmentMessage,
 	}
 	return event, nil
 }

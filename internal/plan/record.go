@@ -347,11 +347,12 @@ func (r *PlanRecord) RemoveSlice(sliceID string, now time.Time) error {
 // blocked slice's contract. Goal replaces the slice goal when non-empty; the
 // list fields append entries that are not already present.
 type SliceAmendmentRequest struct {
-	Reason          string
-	Goal            string
-	AddTasks        []string
-	AllowFiles      []string
-	AddManualChecks []string
+	ReplaceVerificationCommands []VerificationCommandReplacement
+	Reason                      string
+	Goal                        string
+	AddTasks                    []string
+	AllowFiles                  []string
+	AddManualChecks             []string
 }
 
 // normalize trims and bounds the request, dropping blank list entries and
@@ -368,15 +369,41 @@ func (request SliceAmendmentRequest) normalize() (SliceAmendmentRequest, error) 
 		AllowFiles:      trimmedNonEmpty(request.AllowFiles),
 		AddManualChecks: trimmedNonEmpty(request.AddManualChecks),
 	}
+	pairs, err := normalizeVerificationCommandReplacements(request.ReplaceVerificationCommands)
+	if err != nil {
+		return SliceAmendmentRequest{}, err
+	}
+	normalized.ReplaceVerificationCommands = pairs
 	for _, path := range normalized.AllowFiles {
 		if problem := unsafeExpectedFile(path); problem != "" {
 			return SliceAmendmentRequest{}, fmt.Errorf("cannot allow expected file %q: %s", path, problem)
 		}
 	}
-	if normalized.Goal == "" && len(normalized.AddTasks) == 0 && len(normalized.AllowFiles) == 0 && len(normalized.AddManualChecks) == 0 {
-		return SliceAmendmentRequest{}, fmt.Errorf("amendment must supply a goal, task, allowed file, or manual check")
+	if normalized.Goal == "" && len(normalized.AddTasks) == 0 && len(normalized.AllowFiles) == 0 && len(normalized.AddManualChecks) == 0 && len(normalized.ReplaceVerificationCommands) == 0 {
+		return SliceAmendmentRequest{}, fmt.Errorf("amendment must supply a goal, task, allowed file, manual check, or verification-command replacement")
 	}
 	return normalized, nil
+}
+
+func normalizeVerificationCommandReplacements(replacements []VerificationCommandReplacement) ([]VerificationCommandReplacement, error) {
+	var result []VerificationCommandReplacement
+	seen := make(map[string]bool)
+	for _, pair := range replacements {
+		pair.Old = strings.TrimSpace(pair.Old)
+		pair.New = strings.TrimSpace(pair.New)
+		if pair.Old == "" || pair.New == "" {
+			return nil, fmt.Errorf("verification-command replacement requires non-empty old and new commands")
+		}
+		if pair.Old == pair.New {
+			return nil, fmt.Errorf("verification-command replacement must change %q", pair.Old)
+		}
+		if seen[pair.Old] {
+			return nil, fmt.Errorf("duplicate old verification command %q", pair.Old)
+		}
+		seen[pair.Old] = true
+		result = append(result, pair)
+	}
+	return result, nil
 }
 
 func trimmedNonEmpty(values []string) []string {

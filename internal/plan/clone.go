@@ -1,6 +1,9 @@
 package plan
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 func clonePlanDetail(detail *PlanDetail) *PlanDetail {
 	if detail == nil {
@@ -292,6 +295,7 @@ func cloneSliceAmendments(amendments []SliceAmendment) []SliceAmendment {
 	for i, amendment := range amendments {
 		clone[i] = amendment
 		clone[i].Fields = cloneStringSlice(amendment.Fields)
+		clone[i].VerificationCommands = slices.Clone(amendment.VerificationCommands)
 	}
 	return clone
 }
@@ -378,6 +382,7 @@ func cloneEvent(event Event) Event {
 	clone := event
 	clone.Paths = cloneStringSlice(event.Paths)
 	clone.AmendedFields = cloneStringSlice(event.AmendedFields)
+	clone.ReplacedVerificationCommands = slices.Clone(event.ReplacedVerificationCommands)
 	clone.Threshold = cloneFloat64Ptr(event.Threshold)
 	clone.Observed = cloneFloat64Ptr(event.Observed)
 	clone.Baseline = cloneFinalVerificationBaseline(event.Baseline)

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -11,6 +12,100 @@ import (
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+func TestVerificationCommandAmendment(t *testing.T) {
+	detail := blockedAmendDetail()
+	slice := findSlice(detail, "001-a")
+	slice.Verification = Verification{Commands: []string{"old", "keep"}, Source: "contract", Steps: []VerificationStep{{Command: "old", CWD: "sub", Source: "source", Reason: "reason"}, {Command: "keep"}}, ManualChecks: []string{"check"}}
+	slice.VerificationAttempt = &SliceVerificationSnapshot{DeclarationDigest: "old-declaration", Runs: []VerificationRun{{Command: "old"}}}
+	before := cloneSlice(*slice)
+	pairs := []VerificationCommandReplacement{{Old: "old", New: "new"}}
+	request := SliceAmendmentRequest{Reason: "fix gate", ReplaceVerificationCommands: []VerificationCommandReplacement{{Old: " old ", New: " new "}}}
+	event, err := markSliceAmendedWithChanges(detail, newArtifactChangeSet(detail), slice.ID, request, amendTime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := cloneVerification(before.Verification)
+	want.Commands[0] = "new"
+	want.Steps[0].Command = "new"
+	if !reflect.DeepEqual(slice.Verification, want) || !slices.Equal(event.AmendedFields, []string{"verification_commands"}) || !slices.Equal(event.ReplacedVerificationCommands, pairs) || !slices.Equal(slice.Amendments[0].VerificationCommands, pairs) {
+		t.Fatalf("unexpected amendment: %+v event=%+v", slice, event)
+	}
+	after := cloneSlice(*slice)
+	after.Verification = before.Verification
+	after.Amendments = before.Amendments
+	after.Timing = before.Timing
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("amendment changed unrelated slice fields")
+	}
+	detail.Events = append(detail.Events, event)
+	if !sliceAmendmentWasRecorded(detail, slice, request, amendTime()) {
+		t.Fatal("replay not recognized")
+	}
+	detail.Events[0].ReplacedVerificationCommands = []VerificationCommandReplacement{{Old: "different", New: "new"}}
+	if sliceAmendmentWasRecorded(detail, slice, request, amendTime()) {
+		t.Fatal("replay accepted mismatched event pairs")
+	}
+	detail.Events = nil
+	if sliceAmendmentWasRecorded(detail, slice, request, amendTime()) {
+		t.Fatal("replay accepted without event")
+	}
+}
+
+func TestVerificationCommandReplacementRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		commands []string
+		pairs    []VerificationCommandReplacement
+		repair   bool
+	}{
+		{"missing", []string{"other"}, []VerificationCommandReplacement{{"old", "new"}}, false},
+		{"ambiguous", []string{"old", "old"}, []VerificationCommandReplacement{{"old", "new"}}, false},
+		{"empty old", []string{"old"}, []VerificationCommandReplacement{{" ", "new"}}, false},
+		{"empty new", []string{"old"}, []VerificationCommandReplacement{{"old", " "}}, false},
+		{"equal", []string{"old"}, []VerificationCommandReplacement{{"old", " old "}}, false},
+		{"present", []string{"old", "new"}, []VerificationCommandReplacement{{"old", "new"}}, false},
+		{"duplicate old", []string{"old"}, []VerificationCommandReplacement{{"old", "new"}, {" old ", "next"}}, false},
+		{"repair", []string{"old"}, []VerificationCommandReplacement{{"old", "new"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := blockedAmendDetail()
+			slice := findSlice(detail, "001-a")
+			slice.Verification.Commands = tc.commands
+			if tc.repair {
+				slice.VerificationRepair = &VerificationRepairBinding{}
+			}
+			before := clonePlanDetail(detail)
+			_, err := markSliceAmendedWithChanges(detail, newArtifactChangeSet(detail), slice.ID, SliceAmendmentRequest{Reason: "why", ReplaceVerificationCommands: tc.pairs}, amendTime())
+			if err == nil {
+				t.Fatal("expected refusal")
+			}
+			if !reflect.DeepEqual(detail, before) {
+				t.Fatal("refusal mutated input")
+			}
+		})
+	}
+}
+
+func TestApplyVerificationCommandReplacementsCopies(t *testing.T) {
+	input := Verification{Commands: []string{"old"}, Steps: []VerificationStep{{Command: "old"}, {Command: "old", CWD: "other"}}, ManualChecks: []string{"check"}}
+	for _, pairs := range [][]VerificationCommandReplacement{nil, {{Old: "old", New: "new"}}} {
+		before := cloneVerification(input)
+		got, err := ApplyVerificationCommandReplacements(input, pairs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pairs) > 0 && (got.Steps[0].Command != "new" || got.Steps[1].Command != "new") {
+			t.Fatal("matching steps not replaced")
+		}
+		got.Commands[0] = "changed"
+		got.Steps[0].Command = "changed"
+		got.ManualChecks[0] = "changed"
+		if !reflect.DeepEqual(input, before) {
+			t.Fatal("result aliases input")
+		}
+	}
+}
 
 func amendTime() time.Time {
 	return time.Date(2026, 9, 29, 21, 0, 0, 0, time.UTC)
@@ -194,7 +289,7 @@ func TestAmendSliceRefusals(t *testing.T) {
 		}, sliceID: "003-c", request: amendRequest(), want: "cannot replace the goal of generated verification-repair slice 003-c; amend may only append expected files, tasks, or manual checks with a recorded reason"},
 		{name: "abandoned plan", setup: func(d *PlanDetail) { d.State.Status = StatusAbandoned }, sliceID: "001-a", request: amendRequest(), want: "plan edit is abandoned"},
 		{name: "empty reason", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "   ", Goal: "x"}, want: "amendment reason is required"},
-		{name: "no change requested", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "why", AddTasks: []string{"  "}}, want: "amendment must supply a goal, task, allowed file, or manual check"},
+		{name: "no change requested", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "why", AddTasks: []string{"  "}}, want: "amendment must supply a goal, task, allowed file, manual check, or verification-command replacement"},
 		{name: "unsafe allow-file", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "why", AllowFiles: []string{"../outside.go"}}, want: "parent traversal"},
 		{name: "absolute allow-file", sliceID: "001-a", request: SliceAmendmentRequest{Reason: "why", AllowFiles: []string{"/etc/passwd"}}, want: "absolute path"},
 		{name: "all duplicates", setup: func(d *PlanDetail) {
@@ -246,7 +341,19 @@ func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T)
 	testenv.SkipIfShort(t)
 	t.Parallel()
 	dir := t.TempDir()
-	writeEditPlan(t, dir)
+	initial := editPlanDetail()
+	initial.Slices.Slices[2].Verification.Commands = []string{"old"}
+	stateJSON, err := json.Marshal(initial.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slicesJSON, err := json.Marshal(initial.Slices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePlan(t, dir, "edit", string(stateJSON), string(slicesJSON))
+	request := amendRequest()
+	request.ReplaceVerificationCommands = []VerificationCommandReplacement{{Old: "old", New: "new"}}
 	repo := NewFileRepository(dir)
 	detail, err := repo.GetPlan(context.Background(), "edit")
 	if err != nil {
@@ -254,7 +361,7 @@ func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T)
 	}
 	now := amendTime()
 
-	if err := testRepoRecord(repo, detail).AmendSlice("003-c", amendRequest(), now); err != nil {
+	if err := testRepoRecord(repo, detail).AmendSlice("003-c", request, now); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, err := repo.GetPlan(context.Background(), "edit")
@@ -269,15 +376,18 @@ func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T)
 		t.Fatalf("amendments were not persisted: %#v", slice.Amendments)
 	}
 	event := findEventByType(reloaded.Events, EventTypeSliceAmended)
-	if event == nil || event.SliceID != "003-c" || event.Reason != "reviewer needs a helper file" || !slices.Equal(event.AmendedFields, []string{"goal", "tasks", "expected_files", "manual_checks"}) {
+	if event == nil || event.SliceID != "003-c" || event.Reason != "reviewer needs a helper file" || !slices.Equal(event.AmendedFields, []string{"goal", "tasks", "expected_files", "manual_checks", "verification_commands"}) || !slices.Equal(event.ReplacedVerificationCommands, request.ReplaceVerificationCommands) {
 		t.Fatalf("slice_amended event missing or wrong: %#v", reloaded.Events)
 	}
 	if !slices.Equal(reloaded.State.Plan.PendingSlices, []string{"001-a", "002-b", "003-c"}) {
 		t.Fatalf("pending queue changed: %v", reloaded.State.Plan.PendingSlices)
 	}
 
+	if !slices.Equal(slice.Verification.Commands, []string{"new"}) || !slices.Equal(slice.Amendments[0].VerificationCommands, request.ReplaceVerificationCommands) {
+		t.Fatal("replacement not persisted")
+	}
 	replayed := clonePlanDetail(reloaded)
-	mutation, err := amendSliceMutation("003-c", amendRequest(), now.Add(time.Minute))(replayed)
+	mutation, err := amendSliceMutation("003-c", request, now.Add(time.Minute))(replayed)
 	if err != nil {
 		t.Fatal(err)
 	}

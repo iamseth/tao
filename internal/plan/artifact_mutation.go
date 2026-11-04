@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/iamseth/tao/internal/randtoken"
@@ -207,11 +208,16 @@ func sliceAmendmentWasRecorded(detail *PlanDetail, slice *Slice, request SliceAm
 			}
 		}
 	}
+	for _, pair := range normalized.ReplaceVerificationCommands {
+		if !slices.Contains(slice.Verification.Commands, pair.New) || slices.ContainsFunc(slice.Verification.Commands, func(command string) bool { return strings.TrimSpace(command) == pair.Old }) {
+			return false
+		}
+	}
 	for _, amendment := range slice.Amendments {
-		if amendment.Reason != normalized.Reason {
+		if amendment.Reason != normalized.Reason || !slices.Equal(amendment.VerificationCommands, normalized.ReplaceVerificationCommands) {
 			continue
 		}
-		expected := Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, Message: sliceAmendmentMessage}
+		expected := Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, ReplacedVerificationCommands: normalized.ReplaceVerificationCommands, Message: sliceAmendmentMessage}
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) {
 			return true
 		}

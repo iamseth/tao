@@ -86,9 +86,10 @@ func TestRunPacketOperatorAmendments(t *testing.T) {
 			Reason:    "Allow the theme helper file.\nSecond line is omitted.",
 		},
 		{
-			AmendedAt: time.Date(2026, 9, 27, 22, 30, 0, 0, time.UTC),
-			Fields:    []string{"goal"},
-			Reason:    "Narrow the goal.",
+			AmendedAt:            time.Date(2026, 9, 27, 22, 30, 0, 0, time.UTC),
+			Fields:               []string{"goal", "verification_commands"},
+			Reason:               "Narrow the goal.",
+			VerificationCommands: []VerificationCommandReplacement{{Old: "old", New: "new"}, {Old: "other", New: "fixed"}},
 		},
 	}
 
@@ -99,7 +100,7 @@ func TestRunPacketOperatorAmendments(t *testing.T) {
 	want := "- Context: Avoid full artifact reads.\n\n" +
 		"## Operator Amendments\n" +
 		"- 2026-09-27T22:08:53Z [expected_files, tasks]: Allow the theme helper file.\n" +
-		"- 2026-09-27T22:30:00Z [goal]: Narrow the goal.\n\n" +
+		"- 2026-09-27T22:30:00Z [goal, verification_commands]: Narrow the goal.; old -> new; other -> fixed\n\n" +
 		"## Tasks\n"
 	if !strings.Contains(packet, want) {
 		t.Fatalf("expected packet to contain %q:\n%s", want, packet)
