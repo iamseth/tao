@@ -604,6 +604,7 @@ inspect reported paths and preserve intentional work before retrying.
 | An approval-gated pending slice is not approved | `tao approve [--slice ID] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. |
 | `tao show` reports `amend_scope` for rework outside declared scope | Accept with the shown `tao edit amend --allow-file` command, then `tao run <plan-id>`; reject with `tao edit remove <plan-id> <slice-id>` or `tao edit skip` | This pre-session runnable gate does not mark the plan blocked. Any `expected_files` amendment lifts it for that slice; rejection may be re-raised on review. |
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
+| A gate contradicts its own slice contract | `tao edit amend <plan-id> <slice-id> --reason-file FILE --replace-verification-command OLD --with NEW`, then `tao run --continue <plan-id>` | Replacement is one-for-one and visible to the reviewer with the reason and old/new pair; it does not clear the blocker or bypass approval. Generated repair commands stay frozen. |
 | A blocker's fix is a contract change, such as a missing expected file, task, or manual check | `tao edit amend <plan-id> <slice-id> --reason-file FILE [--allow-file PATH] [--add-task TEXT] [--add-manual-check TEXT] [--goal-file FILE]`, then `tao run --continue <plan-id>` | This is the sanctioned way to authorize an out-of-scope file for a blocked repair or rework slice. The amendment is journaled with its reason and shown as Operator Amendments; it never changes slice status, clears the blocker note, or bypasses approval, so `--continue` still decides whether the blocker is resolved. |
 | A `plan_owned` blocker has an unchanged worktree | Fix the named paths in the plan worktree, then rerun `tao run --continue <plan-id>` | Tao refuses with `blocker unchanged since <timestamp>; fix required in <paths>` only when structured plan-owned evidence and the recorded head/worktree fingerprint still match. Changing the fingerprint lifts only this guard; prose-only blockers are unaffected. |
 | A clean isolated automatic slice is blocked on an older execution baseline, and a prerequisite has now produced a strictly newer baseline | `tao run --restart <plan-id>` | `--restart` supersedes that safe blocked boundary and preflights again; it is not a general retry. |
@@ -620,7 +621,11 @@ repair slices are system-owned: they cannot be skipped or removed, and amend may
 stop fields (`verification_repair_stopped` also appears in `tao insights`).
 For ordinary pending or blocked slices, `tao edit amend` records a required reason,
 validates before persisting, refuses an active run lock, and journals the change;
-it never clears blockers or bypasses approval. See [slice edits](plan-format.md#state-lifecycle)
+it never clears blockers or bypasses approval. If a gate contradicts its own slice
+contract, use `tao edit amend <plan-id> <slice-id> --reason-file FILE --replace-verification-command OLD --with NEW`,
+then `tao run --continue <plan-id>`. Replacement is one-for-one, with its reason and
+old/new pair visible to the reviewer; Tao does not judge command equivalence.
+Generated repair slices refuse command replacement. See [slice edits](plan-format.md#state-lifecycle)
 for append/replace semantics. Continue, restart, and explicit verification repair
 are single-shot: later automatic rework rounds in that invocation run as ordinary runs.
 

@@ -16,9 +16,9 @@ import (
 var editCommand = commandMetadata{
 	name:                  "edit",
 	minPrefix:             "e",
-	usageLines:            []string{"edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]..."},
+	usageLines:            []string{"edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]..."},
 	completionDescription: "Edit pending slices in a plan",
-	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
+	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Repeatable --replace-verification-command OLD and --with NEW flags are paired by index for one-for-one replacement, never deleting a command. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal or verification command. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
 	examples: "  tao edit remove my-plan 003-old-slice\n" +
 		"  tao edit skip my-plan 004-optional\n" +
 		"  tao edit move my-plan 005-tests --before 004-docs\n" +
@@ -27,14 +27,16 @@ var editCommand = commandMetadata{
 		{name: "remove", description: "Remove a pending slice from the plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "skip", description: "Mark a pending slice skipped", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "move", description: "Move a pending slice before or after another pending slice", registerFlags: registerEditMoveFlags, completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
-		{name: "amend", description: "Amend a pending or blocked slice's contract with a recorded reason; generated repair slices accept appended files, tasks, and manual checks but never a replacement goal", registerFlags: registerEditAmendFlags, completion: completionContext{
+		{name: "amend", description: "Amend a pending or blocked slice's contract with a recorded reason; verification replacements are one-for-one, never delete commands, and are refused for generated repair slices, as are goal replacements", registerFlags: registerEditAmendFlags, completion: completionContext{
 			positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 			flagValues: map[string]completionFlagValue{
-				"reason-file":      {kind: completionValuePath, label: "path"},
-				"goal-file":        {kind: completionValuePath, label: "path"},
-				"allow-file":       {kind: completionValuePath, label: "path"},
-				"add-task":         {kind: completionValueText, label: "task"},
-				"add-manual-check": {kind: completionValueText, label: "check"},
+				"reason-file":                  {kind: completionValuePath, label: "path"},
+				"goal-file":                    {kind: completionValuePath, label: "path"},
+				"allow-file":                   {kind: completionValuePath, label: "path"},
+				"add-task":                     {kind: completionValueText, label: "task"},
+				"add-manual-check":             {kind: completionValueText, label: "check"},
+				"replace-verification-command": {kind: completionValueText, label: "command"},
+				"with":                         {kind: completionValueText, label: "command"},
 			},
 		}},
 	},
@@ -46,7 +48,7 @@ var editCommand = commandMetadata{
 }
 
 const (
-	editAmendUsage = "tao edit amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]..."
+	editAmendUsage = "tao edit amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]... (one-for-one; never deletes commands; refused for generated repair slices)"
 	editUsage      = "usage: tao edit remove <plan-id-or-slug-or-path> <slice-id> | tao edit skip <plan-id-or-slug-or-path> <slice-id> | " + editAmendUsage + " | tao edit move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)"
 )
 
@@ -121,6 +123,8 @@ func registerEditAmendFlags(fs *flag.FlagSet) {
 	fs.Var(new(stringListFlag), "add-task", "task to append to the slice (repeatable)")
 	fs.Var(new(stringListFlag), "allow-file", "repository-relative expected file to append (repeatable)")
 	fs.Var(new(stringListFlag), "add-manual-check", "manual check to append to the slice (repeatable)")
+	fs.Var(new(stringListFlag), "replace-verification-command", "exact verification command to replace (repeatable, paired by index with --with)")
+	fs.Var(new(stringListFlag), "with", "replacement verification command (repeatable, paired by index with --replace-verification-command)")
 }
 
 func (a App) editMove(ctx context.Context, repo editRepository, args []string) error {
@@ -179,7 +183,11 @@ func (a App) editAmend(ctx context.Context, repo editRepository, args []string) 
 	now := a.now().UTC()
 	var amendedFields []string
 	err = plan.WithRunLock(ctx, record.Detail(), now, func(context.Context) error {
-		result := plan.ValidatePlanVerification(previewAmendedPlan(record.Detail(), sliceID, request))
+		preview, err := previewAmendedPlan(record.Detail(), sliceID, request)
+		if err != nil {
+			return err
+		}
+		result := plan.ValidatePlanVerification(preview)
 		if result.HasErrors() {
 			return fmt.Errorf("amended plan verification is invalid: %s", strings.Join(verificationFindingMessages(result, plan.VerificationFindingError), "; "))
 		}
@@ -236,8 +244,24 @@ func parseEditAmendRequest(fs *flag.FlagSet) (plan.SliceAmendmentRequest, error)
 	if request.AddManualChecks, err = boundedEditList(fs, "add-manual-check", "added manual check"); err != nil {
 		return plan.SliceAmendmentRequest{}, err
 	}
-	if request.Goal == "" && len(request.AddTasks) == 0 && len(request.AllowFiles) == 0 && len(request.AddManualChecks) == 0 {
-		return plan.SliceAmendmentRequest{}, errors.New("edit amend requires at least one contract change: --goal-file, --add-task, --allow-file, or --add-manual-check")
+	olds := *fs.Lookup("replace-verification-command").Value.(*stringListFlag)
+	news := *fs.Lookup("with").Value.(*stringListFlag)
+	if len(olds) != len(news) {
+		return plan.SliceAmendmentRequest{}, errors.New("--replace-verification-command and --with require equal counts")
+	}
+	for i, raw := range olds {
+		old, err := agentinput.BoundedText(raw, "verification command to replace")
+		if err != nil {
+			return plan.SliceAmendmentRequest{}, err
+		}
+		replacement, err := agentinput.BoundedText(news[i], "replacement verification command")
+		if err != nil {
+			return plan.SliceAmendmentRequest{}, err
+		}
+		request.ReplaceVerificationCommands = append(request.ReplaceVerificationCommands, plan.VerificationCommandReplacement{Old: old, New: replacement})
+	}
+	if request.Goal == "" && len(request.AddTasks) == 0 && len(request.AllowFiles) == 0 && len(request.AddManualChecks) == 0 && len(request.ReplaceVerificationCommands) == 0 {
+		return plan.SliceAmendmentRequest{}, errors.New("edit amend requires at least one contract change: --goal-file, --add-task, --allow-file, --add-manual-check, or --replace-verification-command")
 	}
 	return request, nil
 }
@@ -268,20 +292,25 @@ func boundedEditList(fs *flag.FlagSet, name string, label string) ([]string, err
 // previewAmendedPlan returns an in-memory copy of detail with the amendment
 // applied to the named slice so the plan can be validated before anything is
 // persisted. The copy shares no slice storage with detail.
-func previewAmendedPlan(detail *plan.PlanDetail, sliceID string, request plan.SliceAmendmentRequest) *plan.PlanDetail {
+func previewAmendedPlan(detail *plan.PlanDetail, sliceID string, request plan.SliceAmendmentRequest) (*plan.PlanDetail, error) {
 	preview := *detail
 	preview.Slices.Slices = slices.Clone(detail.Slices.Slices)
 	slice := findAmendedSlice(&preview, sliceID)
 	if slice == nil {
-		return &preview
+		return &preview, nil
 	}
+	verification, err := plan.ApplyVerificationCommandReplacements(slice.Verification, request.ReplaceVerificationCommands)
+	if err != nil {
+		return nil, err
+	}
+	slice.Verification = verification
 	if goal := strings.TrimSpace(request.Goal); goal != "" {
 		slice.Goal = goal
 	}
 	slice.Tasks = appendMissingEditValues(slice.Tasks, request.AddTasks)
 	slice.ExpectedFiles = appendMissingEditValues(slice.ExpectedFiles, request.AllowFiles)
 	slice.Verification.ManualChecks = appendMissingEditValues(slice.Verification.ManualChecks, request.AddManualChecks)
-	return &preview
+	return &preview, nil
 }
 
 func appendMissingEditValues(existing []string, additions []string) []string {

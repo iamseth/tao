@@ -58,9 +58,16 @@ type Slice struct {
 // slice's contract made through `tao edit amend`. Amendments are structured
 // operator evidence, distinct from agent-authored Ruling: notes.
 type SliceAmendment struct {
-	AmendedAt time.Time `json:"amended_at"`
-	Reason    string    `json:"reason"`
-	Fields    []string  `json:"fields"`
+	VerificationCommands []VerificationCommandReplacement `json:"verification_commands,omitempty"`
+	AmendedAt            time.Time                        `json:"amended_at"`
+	Reason               string                           `json:"reason"`
+	Fields               []string                         `json:"fields"`
+}
+
+// VerificationCommandReplacement records a one-for-one declared gate change.
+type VerificationCommandReplacement struct {
+	Old string `json:"old"`
+	New string `json:"new"`
 }
 
 // SliceExecutionStart protects the branch and HEAD prepared for automatic work.

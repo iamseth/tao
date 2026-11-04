@@ -18,7 +18,7 @@ func TestFixPlanPromptContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"agent: build", "my-plan", "tao show", "tao edit amend", "tao run --continue", "tao run --reverify", "--repair-verification", "never run `tao run`", "ask the operator", "untrusted"} {
+	for _, want := range []string{"agent: build", "my-plan", "tao show", "tao edit amend", "tao run --continue", "tao run --reverify", "--repair-verification", "never run `tao run`", "ask the operator", "untrusted", "replace-verification-command", "owner ruling"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("fix-plan prompt missing %q", want)
 		}
@@ -41,7 +41,7 @@ func TestRunOperatorAmendmentGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Operator Amendments", "supersede the planning brief", "never change declared verification commands"} {
+	for _, want := range []string{"Operator Amendments", "supersede the planning brief", "Operator amendments may replace declared verification commands", "the run packet already lists the amended commands", "The agent itself never changes verification commands, approval, or the blocking rules"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("missing operator amendment guidance: %s", want)
 		}

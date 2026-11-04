@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
 
@@ -379,6 +381,111 @@ func TestEditAmendAppendsContractChangesToBlockedSlice(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no slice_amended event for 002-b in %v", eventTypes(updated.Events))
+	}
+}
+
+func TestParseEditAmendReplacementPairs(t *testing.T) {
+	fs := flag.NewFlagSet("amend", flag.ContinueOnError)
+	registerEditAmendFlags(fs)
+	if err := fs.Parse([]string{"--reason-file", writeAmendInput(t, "reason.txt", "Correct gates"),
+		"--replace-verification-command", " old one ", "--replace-verification-command", "old two",
+		"--with", "new one", "--with", " new two "}); err != nil {
+		t.Fatal(err)
+	}
+	request, err := parseEditAmendRequest(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []plan.VerificationCommandReplacement{{Old: "old one", New: "new one"}, {Old: "old two", New: "new two"}}
+	if !slices.Equal(request.ReplaceVerificationCommands, want) {
+		t.Fatalf("pairs = %+v", request.ReplaceVerificationCommands)
+	}
+}
+
+type diskAmendRepository struct {
+	*plantest.Repository
+	detail *plan.PlanDetail
+}
+
+func (r diskAmendRepository) ResolvePlanRecord(_ context.Context, _ string) (*plan.PlanRecord, error) {
+	return plan.NewPlanRecord(r.detail.Dir, r.detail)
+}
+
+func TestEditAmendVerificationCommands(t *testing.T) {
+	const old = `! grep -q 'never change declared verification commands' prompts/run.md`
+	const replacement = `! grep -q 'obsolete rule' prompts/run.md && grep -q "Operator Amendments" prompts/run.md`
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		repair    bool
+		wantError bool
+	}{
+		{"round trip", []string{"--replace-verification-command", old, "--with", replacement}, false, false},
+		{"unequal counts", []string{"--replace-verification-command", old}, false, true},
+		{"missing old", []string{"--replace-verification-command", "missing", "--with", replacement}, false, true},
+		{"repair", []string{"--replace-verification-command", old, "--with", replacement}, true, true},
+		{"empty new", []string{"--replace-verification-command", old, "--with", " "}, false, true},
+		{"oversized old", []string{"--replace-verification-command", strings.Repeat("x", agentinput.MaxTextRunes+1), "--with", replacement}, false, true},
+		{"oversized new", []string{"--replace-verification-command", old, "--with", strings.Repeat("x", agentinput.MaxTextRunes+1)}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, detail := amendPlanRepo(t)
+			s := sliceByID(detail, "002-b")
+			s.Verification.Commands = []string{old}
+			if tc.repair {
+				s.VerificationRepair = &plan.VerificationRepairBinding{Command: old, HeadSHA: "head", Fingerprint: "failure"}
+			}
+			repo := diskAmendRepository{Repository: plantest.NewRepository(), detail: detail}
+			repo.AddDetail(detail)
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			app := newTestApp(App{Out: &out, Err: io.Discard, Repository: func(_ string) Repository { return repo }})
+			args := []string{"edit", "amend", detail.State.Plan.ID, "002-b", "--reason-file", writeAmendInput(t, "reason.txt", "Correct the negative grep gate")}
+			err = app.Run(context.Background(), append(args, tc.args...))
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("expected refusal")
+				}
+				after, marshalErr := json.Marshal(detail)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if !bytes.Equal(before, after) {
+					t.Fatal("refusal mutated plan")
+				}
+				if _, statErr := os.Stat(filepath.Join(detail.Dir, "slices.json")); !os.IsNotExist(statErr) {
+					t.Fatalf("refusal persisted slices: %v", statErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(detail.Dir, "slices.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &detail.Slices); err != nil {
+				t.Fatal(err)
+			}
+			s = sliceByID(detail, "002-b")
+			if !slices.Equal(s.Verification.Commands, []string{replacement}) || s.Status != plan.StatusBlocked {
+				t.Fatalf("amended slice: %+v", s)
+			}
+			if result := plan.ValidatePlanVerification(detail); result.HasErrors() {
+				t.Fatalf("invalid amended plan: %+v", result)
+			}
+			out.Reset()
+			if err := app.Run(context.Background(), []string{"show", detail.State.Plan.ID}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), old+" -> "+replacement) {
+				t.Fatalf("show missing replacement: %s", out.String())
+			}
+		})
 	}
 }
 

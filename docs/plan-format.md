@@ -221,11 +221,11 @@ First-class plan edits mutate only pending work:
 - `tao edit remove PLAN SLICE` removes a pending slice from `slices.json` and `plan.pending_slices`.
 - `tao edit skip PLAN SLICE` removes a pending slice from `plan.pending_slices` and keeps its slice record with status `skipped`.
 - `tao edit move PLAN SLICE --before ID` and `--after ID` reorder only `plan.pending_slices`.
-- `tao edit amend PLAN SLICE --reason-file FILE [--goal-file FILE] [--add-task TEXT ...] [--allow-file PATH ...] [--add-manual-check TEXT ...]` replaces `goal` and appends to `tasks`, `expected_files`, and `verification.manual_checks` on a pending or blocked slice, recording the reason in `slice.amendments` and a `slice_amended` event. Amend never changes slice status, clears `blocker_note`, bypasses approval, or removes list entries.
+- `tao edit amend PLAN SLICE --reason-file FILE [--goal-file FILE] [--add-task TEXT ...] [--allow-file PATH ...] [--add-manual-check TEXT ...] [--replace-verification-command OLD --with NEW ...]` replaces `goal`, replaces verification commands one-for-one, and appends to `tasks`, `expected_files`, and `verification.manual_checks` on a pending or blocked slice, recording the reason in `slice.amendments` and a `slice_amended` event. Amend never changes slice status, clears `blocker_note`, bypasses approval, or removes list entries.
 
-Remove, skip, and move remain pending-only: they must reject completed, in-progress, blocked, missing, or dependency-invalid slices. Amend applies to pending or blocked slices, including generated repair slices for appends only, and rejects every other status. All edit mutations keep `state.json` and `slices.json` consistent. Generated final-verification repair slices are system-owned: a slice with a non-null `verification_repair` binding must refuse `tao edit skip` and `tao edit remove`; `tao edit amend` refuses only goal replacement and may append expected files, tasks, or manual checks with a recorded reason. The goal, verification commands, and repair binding stay frozen rather than weakening or deleting repair history.
+Remove, skip, and move remain pending-only: they must reject completed, in-progress, blocked, missing, or dependency-invalid slices. Amend applies to pending or blocked slices, including generated repair slices for appends only, and rejects every other status. All edit mutations keep `state.json` and `slices.json` consistent. Generated final-verification repair slices are system-owned: a slice with a non-null `verification_repair` binding must refuse `tao edit skip` and `tao edit remove`; `tao edit amend` refuses goal replacement and `--replace-verification-command` and may append expected files, tasks, or manual checks with a recorded reason. The goal, verification commands, and repair binding stay frozen rather than weakening or deleting repair history.
 
-Operator amendments are structured evidence in `slice.amendments`, each entry carrying `amended_at`, the bounded `reason`, and the changed `fields` in fixed order `goal`, `tasks`, `expected_files`, `manual_checks`. They are labeled "Operator Amendments" wherever rendered and are never stored as agent-authored `Ruling:` notes, which remain advisory.
+Operator amendments are structured evidence in `slice.amendments`, each entry carrying `amended_at`, the bounded `reason`, and the changed `fields` in fixed order `goal`, `tasks`, `expected_files`, `manual_checks`, `verification_commands`. Command replacements also carry per-amendment `replaced_verification_commands` old/new pairs. Repeatable `--replace-verification-command OLD --with NEW` flags are paired by index: OLD must match exactly one declared command after trimming surrounding whitespace, and NEW must be non-empty, different, and not already declared. Duplicate OLD values and unequal flag counts are refused; command count stays unchanged. Matching `verification.steps` commands are rewritten while preserving cwd, source, and reason. They are labeled "Operator Amendments" wherever rendered and are never stored as agent-authored `Ruling:` notes, which remain advisory.
 
 ### Final-verification repair evidence
 
@@ -274,9 +274,10 @@ completion authority. Gates run inside `tao slice-complete`, so any handling of
 known disposable side effects belongs inside the declared command. Boundary drift
 after passing gates still refuses new intent; timing alone does not prove causation.
 See [repository-owned safe entrypoints](usage-guide.md#repository-owned-safe-verification-entrypoints)
-for the wrapper contract. This guidance changes no schema, adds no
-verification-command amendment API, does not automatically repair existing plans,
-and does not permit hand-editing frozen artifacts. Frozen-intent recovery remains
+for the wrapper contract. Operator amendments can replace commands one-for-one
+through `tao edit amend --replace-verification-command OLD --with NEW` with a
+recorded reason; Tao does not judge command equivalence. This guidance does not
+automatically repair existing plans or permit hand-editing frozen artifacts. Frozen-intent recovery remains
 exact recovery without rerunning gates. PLAN mode stays read-only and validation
 stays passive, not a gate dry run. Passing tests do not authorize changes to the
 worktree, index, identity, or verification declaration. Safe wrappers cannot
@@ -571,7 +572,7 @@ Current well-known event types include:
 | `slice_removed` | Pending slice removed by `tao edit remove`. |
 | `slice_skipped` | Pending slice skipped by `tao edit skip`. |
 | `slices_reordered` | Pending queue reordered by `tao edit move`. |
-| `slice_amended` | Pending or blocked slice contract amended by `tao edit amend`; carries `slice_id`, the bounded `reason`, and `amended_fields`. The amended content lives in `slices.json`. |
+| `slice_amended` | Pending or blocked slice contract amended by `tao edit amend`; carries `slice_id`, the bounded `reason`, and `amended_fields`, plus `replaced_verification_commands` old/new pairs for command replacements. Other amended content lives in `slices.json`. |
 | `slice_approved` | Approval-gated slice was approved. |
 | `pull_request_created` | Pull request created or discovered and its exact source head recorded after run finalization. |
 | `finalization_failed` | Bounded proposal-repair or pull-request-finalization failure evidence was recorded for an exact boundary. |
@@ -645,7 +646,7 @@ lifecycle mutation settle. There is no separate commit-intent event: retry state
 must be read from the slice artifact, while the event remains the append-only
 completion boundary.
 
-Edit events record first-class `tao edit` mutations. Detailed historical slice content belongs in `slices.json`, not duplicated in event payloads. A `slice_amended` event names only the changed fields; the appended values and the per-amendment audit entry live in `slice.amendments`, and the event never marks the slice unblocked.
+Edit events record first-class `tao edit` mutations. Detailed historical slice content belongs in `slices.json`, not duplicated in event payloads. A `slice_amended` event names only the changed fields except for `replaced_verification_commands`, which records the old/new command pairs. The amended content and per-amendment audit entry live in `slices.json` and `slice.amendments`, respectively; the event never marks the slice unblocked.
 
 A `pull_request_created` event includes the usual event fields plus `pull_request` with the same `number`, `url`, `created_at`, `branch`, and `head_sha` fields recorded in `state.json`.
 

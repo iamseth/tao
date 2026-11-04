@@ -185,9 +185,10 @@ func TestRenderShowSliceAmendments(t *testing.T) {
 				Reason:    "Allow the theme helper file so the blocked slice can continue without hand-editing slices.json.",
 			},
 			{
-				AmendedAt: now.Add(-30 * time.Second),
-				Fields:    []string{"goal"},
-				Reason:    "Narrow the goal.",
+				AmendedAt:            now.Add(-30 * time.Second),
+				Fields:               []string{"goal"},
+				Reason:               "Narrow the goal.",
+				VerificationCommands: []plan.VerificationCommandReplacement{{Old: "old", New: "new"}},
 			},
 		},
 		Timing: plan.SliceTiming{StartedAt: &started},
@@ -206,7 +207,7 @@ func TestRenderShowSliceAmendments(t *testing.T) {
 		"  Amendments:\n" +
 		"              2026-09-26T11:58:30Z [expected_files, tasks]: Allow the theme helper\n" +
 		"              file so the blocked slice can continue without hand-editing slices.json.\n" +
-		"              2026-09-26T11:59:30Z [goal]: Narrow the goal.\n" +
+		"              2026-09-26T11:59:30Z [goal]: Narrow the goal.; old -> new\n" +
 		"  Blocker Reason: Missing expected file.\n"
 	if got := out.String(); got != want {
 		t.Fatalf("slice output = %q, want %q", got, want)
