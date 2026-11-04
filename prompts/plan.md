@@ -46,6 +46,12 @@ For note-backed planning:
 - Do not invent requirements. Mark assumptions and unresolved questions clearly.
 - Stop asking when the plan is specific enough for `/tao-slice`.
 
+## Scope evidence
+
+Before asserting an existing identifier's file location, use targeted line-numbered repository searches and inspect declarations, not merely reference matches. This applies to functions, methods, constants, variables, aliases, and types; choose searches suited to the repository, with no mandatory regex or language-specific detector. Carry inspected declaration locations into Expected Files/Packages; record unresolved locations as uncertainty in Open Questions rather than fact.
+
+When proposing a registry, table, or enumerated-set entry addition, search all packages covered by the proposed verification commands, including recursive or multi-package scopes, tests skipped by short or fast test tiers and relevant testdata. Search beyond symbol names for behavioral assumptions: fixed counts, len offsets (such as len(...)+1), explicit membership lists, ordering, and golden comparisons. Identify concrete affected tests/fixtures and their needed updates in Expected Files/Packages and Slice Guidance, or explain concisely why none need changes. Keep discovery targeted. Unchanged search matches do not require edits or ownership; this is not blanket ownership or permission for unrelated repairs. Prefer definition-derived counts only when independent behavioral coverage survives; retain exact membership/order assertions where they are the contract.
+
 ## Repository verification guidance
 
 Consult relevant repository-owned testing guidance. Prefer `AGENTS.md` while retaining relevant `CLAUDE.md`, `README.md`, local guidance, and build configuration. Choose the documented safe entrypoint, preferably an existing project command, and carry its provenance into Slice Guidance for `verification.source`. Missing safe commands are explicit prerequisites or unresolved planning work, not permission to invent destructive cleanup or replace applicable checks with weaker fallbacks.

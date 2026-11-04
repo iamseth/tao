@@ -1227,6 +1227,76 @@ func TestPlanningPromptsRequireExistingSymbolOwnership(t *testing.T) {
 	}
 }
 
+func TestPlanningPromptsRequireDeclarationEvidence(t *testing.T) {
+	for name, tc := range map[string]struct {
+		prompt string
+		wants  []string
+	}{
+		"plan": {PlanPromptTemplate, []string{
+			"Before asserting an existing identifier's file location",
+			"record unresolved locations as uncertainty in Open Questions rather than fact",
+			"Carry inspected declaration locations into Expected Files/Packages",
+		}},
+		"slice": {SlicePromptTemplate, []string{
+			"Before writing and freezing plan artifacts, recheck existing identifier/file claims",
+			"include declaring files in `expected_files` when implementation must change them",
+			"Resolve uncertain locations before freezing affected scope",
+			"Future identifiers created by earlier slices need not already exist",
+			"preserve the exact producer contracts above",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range append(tc.wants,
+				"targeted line-numbered repository searches",
+				"inspect declarations, not merely reference matches",
+				"functions, methods, constants, variables, aliases, and types",
+				"no mandatory regex or language-specific detector") {
+				if !strings.Contains(tc.prompt, want) {
+					t.Errorf("missing declaration evidence guidance %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanningPromptsRequireEnumeratedSetDiscovery(t *testing.T) {
+	for name, prompt := range map[string]string{"plan": PlanPromptTemplate, "slice": SlicePromptTemplate} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				"registry, table, or enumerated-set entry",
+				"including recursive or multi-package scopes",
+				"tests skipped by short or fast test tiers and relevant testdata",
+				"fixed counts, len offsets (such as len(...)+1), explicit membership lists, ordering, and golden comparisons",
+				"Keep discovery targeted",
+				"Unchanged search matches do not require edits or ownership",
+				"not blanket ownership or permission for unrelated repairs",
+				"Prefer definition-derived counts only when independent behavioral coverage survives",
+				"retain exact membership/order assertions where they are the contract",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("missing enumerated-set discovery guidance %q", want)
+				}
+			}
+		})
+	}
+	for _, want := range []string{
+		"all packages covered by the proposed verification commands",
+		"Identify concrete affected tests/fixtures and their needed updates in Expected Files/Packages and Slice Guidance, or explain concisely why none need changes",
+	} {
+		if !strings.Contains(PlanPromptTemplate, want) {
+			t.Errorf("missing planning consumer scope guidance %q", want)
+		}
+	}
+	for _, want := range []string{
+		"all packages covered by the slice's verification commands",
+		"Own concrete affected tests/fixtures in `expected_files` with explicit update tasks in `tasks`, or explain concisely why none need changes",
+	} {
+		if !strings.Contains(SlicePromptTemplate, want) {
+			t.Errorf("missing slicing consumer ownership guidance %q", want)
+		}
+	}
+}
+
 func TestPlanningPromptsRequireFixtureOwnership(t *testing.T) {
 	for _, want := range []string{
 		"golden or snapshot fixture",
