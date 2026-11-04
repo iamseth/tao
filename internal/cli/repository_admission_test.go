@@ -398,7 +398,8 @@ func TestNewTestAppExclusiveLeaseHandoffs(t *testing.T) {
 			stubMergeServiceRunner(t, service)
 			mergeDetail := cliMergeDetail(t)
 			mergeDetail.State.Repo.Root = root
-			app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
+			registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir()}}
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry { return registry }})
 			invoke := func(app App) error {
 				// Never inherit the holder's context/ownership.
 				if command == "run" {

@@ -220,6 +220,12 @@ type logBatchRegistry struct {
 	*fakeNoteRegistry
 }
 
+func (r logBatchRegistry) RepoForRoot(root string) (taodata.Repo, error) {
+	repo := r.current
+	repo.Root = root
+	return repo, nil
+}
+
 func (r logBatchRegistry) MergeBatchesDir(repo taodata.Repo) string {
 	return filepath.Join(r.dir, repo.ID, "merge-batches")
 }

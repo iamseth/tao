@@ -175,6 +175,23 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		NoSquash:      flagBoolValue(fs, "no-squash"),
 	}
 	return mergepkg.WithRepositoryAdmission(ctx, a.RepositoryAdmission, detail, options.RecordOnly && !restart, func(ctx context.Context) error {
+		registry, ok := a.registry().(singleMergeBatchRegistry)
+		if !ok {
+			return errors.New("single merge requires merge-batch registry paths")
+		}
+		registered, err := registry.RepoForRoot(detail.State.Repo.Root)
+		if err != nil {
+			return err
+		}
+		batchesDir := registry.MergeBatchesDir(registered)
+		store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(registered))
+		workspace, err := mergepkg.NewBatchWorkspace(registered.Root, batchesDir, a.mergeRunner())
+		if err != nil {
+			return err
+		}
+		if err := mergepkg.RequireNoPreLandingBatch(ctx, store, workspace, detail.State.Plan.ID, options.RecordOnly && !restart); err != nil {
+			return err
+		}
 		return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
 			// Reload by exact directory after acquisition so every merge gate and
 			// mutation uses state protected from concurrent lifecycle drivers.
@@ -222,6 +239,12 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 			return renderMergeSuccess(a.Out, refreshed)
 		})
 	})
+}
+
+type singleMergeBatchRegistry interface {
+	RepoForRoot(string) (taodata.Repo, error)
+	MergeBatchesDir(taodata.Repo) string
+	ActiveMergeBatchPath(taodata.Repo) string
 }
 
 type mergeBatchRegistry interface {

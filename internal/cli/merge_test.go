@@ -415,6 +415,105 @@ func TestMergeCommandApprovedPlanSuccess(t *testing.T) {
 	}
 }
 
+func TestSingleMergeBatchGuard(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, tt := range []struct {
+		name                                                     string
+		args                                                     []string
+		candidate, ejected, landed, corrupt, missingPaths, allow bool
+	}{
+		{name: "candidate", candidate: true},
+		{name: "noncandidate"},
+		{name: "force", args: []string{"--force"}},
+		{name: "restart", args: []string{"--restart"}},
+		{name: "restart record noncandidate", args: []string{"--restart", "--record-only"}},
+		{name: "record candidate", args: []string{"--record-only"}, candidate: true},
+		{name: "record forced candidate", args: []string{"--record-only", "--force"}, candidate: true},
+		{name: "record ejected", args: []string{"--record-only"}, candidate: true, ejected: true},
+		{name: "record noncandidate", args: []string{"--record-only"}, allow: true},
+		{name: "landed", candidate: true, landed: true, allow: true},
+		{name: "corrupt identity", corrupt: true},
+		{name: "registry without batch paths", missingPaths: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail := cliMergeDetail(t)
+			registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo", Root: detail.State.Repo.Root}}}
+			store := mergepkg.NewBatchStore(registry.MergeBatchesDir(registry.current), registry.ActiveMergeBatchPath(registry.current))
+			state := mergepkg.BatchState{Schema: mergepkg.BatchStateSchema, ID: "batch-guard", Status: mergepkg.BatchStatusPlanned}
+			if tt.candidate {
+				state.Candidates = []mergepkg.BatchCandidate{{PlanID: detail.State.Plan.ID}}
+			}
+			if tt.ejected {
+				state.Candidates[0].Deferred = &mergepkg.BatchDeferral{PlanID: detail.State.Plan.ID}
+				state.Ejection = &mergepkg.BatchEjection{PlanID: detail.State.Plan.ID, Status: "pending"}
+			}
+			if tt.landed {
+				state.Landing = &mergepkg.BatchLanding{}
+				state.LandedSHA = "landed-sha"
+				state.Status = mergepkg.BatchStatusCompleted
+			}
+			if err := store.SaveSnapshot(state); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetActive(state.ID); err != nil {
+				t.Fatal(err)
+			}
+			if tt.corrupt {
+				if err := os.WriteFile(registry.ActiveMergeBatchPath(registry.current), []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			service := &fakeCLIMergeService{}
+			constructed, commands := 0, 0
+			original := newMergeServiceRunner
+			newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string, ...string) (mergeServiceRunner, error) {
+				constructed++
+				return service, nil
+			}
+			t.Cleanup(func() { newMergeServiceRunner = original })
+			var out bytes.Buffer
+			app := newTestApp(App{Out: &out, Err: &out,
+				Registry: func() NoteRegistry {
+					if tt.missingPaths {
+						return registry.fakeNoteRegistry
+					}
+					return registry
+				},
+				Repository:    func(string) Repository { return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}} },
+				CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { commands++; return nil },
+			})
+			err := app.Run(context.Background(), append(append([]string{"merge"}, tt.args...), "plan-a"))
+			if tt.allow {
+				if err != nil || constructed != 1 || service.calls != 1 {
+					t.Fatalf("allowed merge: err=%v constructed=%d calls=%d", err, constructed, service.calls)
+				}
+				return
+			}
+			if constructed != 0 || commands != 0 || service.calls != 0 || service.restartCalls != 0 {
+				t.Fatalf("refusal reached service or Git: constructed=%d commands=%d service=%+v", constructed, commands, service)
+			}
+			var refusal *mergepkg.SingleMergeBatchRefusal
+			if tt.corrupt || tt.missingPaths {
+				if err == nil || errors.As(err, &refusal) {
+					t.Fatalf("want diagnostic error, got %v", err)
+				}
+				return
+			}
+			if !errors.As(err, &refusal) {
+				t.Fatalf("want batch refusal, got %v", err)
+			}
+			if refusal.BatchID != state.ID || refusal.Status != state.Status || refusal.PlanID != detail.State.Plan.ID || refusal.Candidate != tt.candidate || refusal.Ejected != tt.ejected {
+				t.Fatalf("refusal = %+v", refusal)
+			}
+			for _, want := range []string{state.ID, "tao merge --all"} {
+				if !strings.Contains(err.Error()+out.String(), want) {
+					t.Fatalf("missing %q in refusal: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
 func TestMergeCommandRefusesAbandonedPlanBeforeServiceConstruction(t *testing.T) {
 	detail := cliMergeDetail(t)
 	detail.State.Status = plan.StatusAbandoned

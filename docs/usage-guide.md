@@ -1206,6 +1206,18 @@ active run or merge, or wait for it to finish, then retry. Single `--record-only
 is exempt from exclusive admission but retains its existing plan ownership and
 cleanup safeguards. Review and approval alone do not acquire run/merge admission.
 
+Single `tao merge`, including `--restart`, refuses while a pre-landing merge batch is active,
+regardless of which plan is selected; `--force` does not bypass it. Resume with
+`tao merge --all`, or preview discarding pre-landing recovery with
+`tao merge --all --restart --dry-run` then run `tao merge --all --restart`,
+before retrying the single merge. Post-landing batches allow single merges,
+subject to the ordinary merge gates.
+
+`--record-only` refuses for a candidate in the active pre-landing batch,
+including an ejected candidate, because cleanup deletes the pinned branch.
+It is allowed for plans outside the batch, subject to its ordinary safeguards;
+`--force` does not bypass the candidate refusal.
+
 **When to use:** after `tao run` has completed every slice and its broad final
 verification, and you've read the persisted review with `tao review <plan>`.
 Use it for the solo workflow where the review is the human gate instead of a PR.
