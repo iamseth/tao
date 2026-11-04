@@ -647,6 +647,9 @@ func appendOperatorAmendmentsContext(prompt string, detail *plan.PlanDetail) str
 			}
 			reason := strings.Join(strings.Fields(amendment.Reason), " ")
 			entry := "- " + slice.ID + " (" + strings.Join(amendment.Fields, ", ") + "): " + reason
+			for _, pair := range amendment.VerificationCommands {
+				entry += "; " + strings.Join(strings.Fields(pair.Old), " ") + " -> " + strings.Join(strings.Fields(pair.New), " ")
+			}
 			line := boundedReviewContextText(entry, maxReviewRulingBytes) + "\n"
 			// Reserve the omission marker so truncation remains explicit and bounded.
 			if count == maxReviewRulings || context.Len()+len(line)+len(omitted) > maxReviewContextBytes {

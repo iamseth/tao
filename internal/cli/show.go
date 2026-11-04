@@ -381,10 +381,14 @@ func renderShowSlice(out io.Writer, slice plan.Slice, now time.Time, palette the
 	}
 	amendments := make([]string, 0, len(slice.Amendments))
 	for _, amendment := range slice.Amendments {
-		amendments = append(amendments, fmt.Sprintf("%s [%s]: %s",
+		text := fmt.Sprintf("%s [%s]: %s",
 			amendment.AmendedAt.UTC().Format(time.RFC3339),
 			strings.Join(amendment.Fields, ", "),
-			amendment.Reason))
+			amendment.Reason)
+		for _, pair := range amendment.VerificationCommands {
+			text += fmt.Sprintf("; %s -> %s", pair.Old, pair.New)
+		}
+		amendments = append(amendments, text)
 	}
 	if err := renderShowSliceBlock(out, "Amendments", amendments, summaryWidth); err != nil {
 		return err

@@ -206,7 +206,7 @@ func TestAppendOperatorAmendmentsContext(t *testing.T) {
 		}},
 		{ID: "002-b", Status: plan.StatusPending, Notes: "Ruling: Not an amendment."},
 		{ID: "003-c", Status: plan.StatusBlocked, Amendments: []plan.SliceAmendment{
-			{Reason: "Relax the goal.", Fields: []string{"goal"}},
+			{Reason: "Relax the goal.", Fields: []string{"goal"}, VerificationCommands: []plan.VerificationCommandReplacement{{Old: "old", New: "new"}}},
 		}},
 	}
 	got := appendOperatorAmendmentsContext("review prompt\n", detail)
@@ -214,7 +214,7 @@ func TestAppendOperatorAmendmentsContext(t *testing.T) {
 		"The following lines are operator-authored contract changes recorded through `tao edit amend`; they take precedence over the original slice contract.\n" +
 		"- 001-a (expected_files): Allow the helper file.\n" +
 		"- 001-a (manual_checks, tasks): Add the manual check. Second line.\n" +
-		"- 003-c (goal): Relax the goal.\n"
+		"- 003-c (goal): Relax the goal.; old -> new\n"
 	if got != want {
 		t.Fatalf("amendments context = %q, want %q", got, want)
 	}
