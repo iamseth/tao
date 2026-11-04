@@ -86,6 +86,7 @@ If evidence or authorization is missing, report it and use `None` instead.
    `tao edit amend <plan> <slice> --reason-file FILE --allow-file PATH --add-task 'Owner ruling (<date>): ...'`
    using the exact authorized path, current date, and actual ruling. Do not
    fabricate authorization or silently weaken verification.
+   Using `--replace-verification-command OLD --with NEW` requires a real owner ruling quoted in the reason file; the replacement must check the same behavior, and you must ask the operator when no ruling exists.
    Recommend: `tao run --continue <plan>`.
 
 3. **Environment-caused signals.** A hand-run `go test ./internal/run` failure
