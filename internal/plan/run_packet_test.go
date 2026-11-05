@@ -2,11 +2,123 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 )
+
+func TestRunPacketDependencyNotesIncludeFullMultiLineNotes(t *testing.T) {
+	t.Parallel()
+	detail := runPacketDetail()
+	detail.Slices.Slices[0].Notes = "Count: 42\n| first | 20 |\n| second | 22 |"
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, found := strings.Cut(packet, "## Dependency Notes\n")
+	if !found {
+		t.Fatal("missing Dependency Notes section")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	for _, line := range strings.Split(detail.Slices.Slices[0].Notes, "\n") {
+		if !strings.Contains(section, "  > "+line+"\n") {
+			t.Fatalf("missing note line %q in section:\n%s", line, section)
+		}
+	}
+}
+
+func TestRunPacketDependencyNotesClosure(t *testing.T) {
+	t.Parallel()
+	detail := runPacketDetail()
+	// Reverse dependency order to ensure artifact order, not traversal order.
+	detail.Slices.Slices = []Slice{
+		{ID: "B", Status: StatusCompleted, DependsOn: []string{"A"}, Notes: "B note"},
+		{ID: "A", Status: StatusCompleted, DependsOn: []string{"B", "C"}, Notes: "A note"},
+		{ID: "other", Status: StatusCompleted, Notes: "unrelated note"},
+		{ID: "C", DependsOn: []string{"B", "unknown"}},
+	}
+	detail.State.Plan.CompletedSlices = []string{"A", "B", "other"}
+	var b strings.Builder
+	writeDependencyNotes(&b, detail, &detail.Slices.Slices[3])
+	want := "- B\n  > B note\n- A\n  > A note\n"
+	if !strings.HasSuffix(b.String(), want) || strings.Contains(b.String(), "unrelated") {
+		t.Fatalf("unexpected closure/order: %s", b.String())
+	}
+}
+
+func TestRunPacketDependencyNotesEmpty(t *testing.T) {
+	t.Parallel()
+	for _, notes := range []string{"", " \n\t", "pending note"} {
+		t.Run(fmt.Sprintf("notes=%q", notes), func(t *testing.T) {
+			detail := runPacketDetail()
+			detail.Slices.Slices[0].Notes = notes
+			if notes == "pending note" {
+				detail.Slices.Slices[0].Status = StatusPending
+				detail.State.Plan.CompletedSlices = nil
+			}
+			detail.Slices.Slices[1].DependsOn = append(detail.Slices.Slices[1].DependsOn, "unknown")
+			var b strings.Builder
+			writeDependencyNotes(&b, detail, &detail.Slices.Slices[1])
+			if !strings.HasSuffix(b.String(), "\n- none\n") || strings.Contains(b.String(), "- 001-base") {
+				t.Fatalf("unexpected entries: %s", b.String())
+			}
+		})
+	}
+}
+
+func TestRunPacketDependencyNotesBoundsAndPrefixing(t *testing.T) {
+	t.Parallel()
+	detail := runPacketDetail()
+	detail.Slices.Slices[0].Notes = "count\n## Fake\n```\n" + strings.Repeat("é", maxRunPacketFeedbackBytes)
+	packet, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := RenderRunPacket(detail, RunPacketOptions{})
+	if err != nil || packet != again {
+		t.Fatal("renders not byte-identical", err)
+	}
+	var b strings.Builder
+	writeDependencyNotes(&b, detail, &detail.Slices.Slices[1])
+	section := b.String()
+	for _, want := range []string{"\n  > ## Fake\n", "\n  > ```\n", "…\n"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("missing %q: %s", want, section)
+		}
+	}
+	if strings.Contains(section, "\n## Fake") || strings.Contains(section, "\n```") || !utf8.ValidString(section) {
+		t.Fatalf("unsafe note rendering: %s", section)
+	}
+	bounded := boundedRunPacketFeedbackText(detail.Slices.Slices[0].Notes, maxRunPacketFeedbackBytes)
+	if !strings.HasSuffix(section, "  > "+strings.ReplaceAll(bounded, "\n", "\n  > ")+"\n") {
+		t.Fatal("notes did not use the per-entry byte bound")
+	}
+}
+
+func TestRunPacketDependencyNotesSectionCap(t *testing.T) {
+	t.Parallel()
+	for _, notes := range []string{strings.Repeat("x", maxRunPacketFeedbackBytes), strings.Repeat("x\n", maxRunPacketFeedbackBytes)} {
+		detail := runPacketDetail()
+		selected := Slice{ID: "selected"}
+		detail.Slices.Slices = nil
+		detail.State.Plan.CompletedSlices = nil
+		for i := range 10 {
+			id := fmt.Sprintf("dep-%d", i)
+			selected.DependsOn = append(selected.DependsOn, id)
+			detail.State.Plan.CompletedSlices = append(detail.State.Plan.CompletedSlices, id)
+			detail.Slices.Slices = append(detail.Slices.Slices, Slice{ID: id, Status: StatusCompleted, Notes: notes})
+		}
+		var b strings.Builder
+		writeDependencyNotes(&b, detail, &selected)
+		rendered := strings.Count(b.String(), "- dep-")
+		want := fmt.Sprintf("- %d dependency notes omitted; read slices.json\n", 10-rendered)
+		if b.Len() > maxRunPacketDependencyNotesBytes || !strings.HasSuffix(b.String(), want) {
+			t.Fatalf("invalid section cap/omission: bytes=%d, rendered=%d", b.Len(), rendered)
+		}
+	}
+}
 
 func TestRunPacketOptionalSiblingContext(t *testing.T) {
 	t.Parallel()

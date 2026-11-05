@@ -36,6 +36,28 @@ func TestFixPlanPromptContract(t *testing.T) {
 
 var unprefixedSlashCommand = regexp.MustCompile(`(^|[^[:alnum:]_-])/(plan|slice|note-slice|note|run|commit|grill-me|improve-codebase-architecture|improve-documentation|repo-health|steal|pr|review|fix-plan)([^[:alnum:]_-]|$)`)
 
+func TestRunPromptPermitsReadOnlyFallbackReads(t *testing.T) {
+	data, err := os.ReadFile("run.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	start := strings.Index(text, "## Workspace confinement")
+	end := strings.Index(text, "## Run packet")
+	if start < 0 || end <= start {
+		t.Fatal("missing or out-of-order workspace confinement and run packet headings")
+	}
+	section := text[start:end]
+	for _, want := range []string{"Fallback Files", "read-only", "Dependency Notes", "do not edit"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("workspace confinement missing %q", want)
+		}
+	}
+	if strings.Contains(section, "use it only as the absolute") {
+		t.Error("workspace confinement still forbids fallback file reads")
+	}
+}
+
 func TestRunOperatorAmendmentGuidance(t *testing.T) {
 	data, err := os.ReadFile("run.md")
 	if err != nil {

@@ -13,6 +13,7 @@ const (
 	defaultRunPacketRecentEvents     = 5
 	maxRunPacketFeedbackLines        = 12
 	maxRunPacketFeedbackBytes        = 4 * 1024
+	maxRunPacketDependencyNotesBytes = 16 * 1024
 	maxRunPacketRecentFailureSignals = 5
 )
 
@@ -116,6 +117,7 @@ func RenderRunPacket(detail *PlanDetail, options RunPacketOptions) (string, erro
 		b.WriteString(options.SiblingPlans)
 	}
 	writeDependencyStatus(&b, detail, slice)
+	writeDependencyNotes(&b, detail, slice)
 	writeRunPacketList(&b, "Global Invariants", detail.State.GlobalInvariants)
 	writeRunPacketList(&b, "Open Questions", detail.State.OpenQuestions)
 
@@ -245,6 +247,59 @@ func writeDependencyStatus(b *strings.Builder, detail *PlanDetail, slice *Slice)
 		b.WriteString(": ")
 		b.WriteString(status)
 		b.WriteString("\n")
+	}
+}
+
+func writeDependencyNotes(b *strings.Builder, detail *PlanDetail, slice *Slice) {
+	visited := map[string]bool{slice.ID: true}
+	pending := append([]string(nil), slice.DependsOn...)
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if visited[id] {
+			continue
+		}
+		visited[id] = true
+		if dependency := findRunPacketSlice(detail, id); dependency != nil {
+			pending = append(pending, dependency.DependsOn...)
+		}
+	}
+	var dependencies []*Slice
+	for i := range detail.Slices.Slices {
+		dependency := &detail.Slices.Slices[i]
+		if dependency.ID != slice.ID && visited[dependency.ID] && SliceCompleted(detail, dependency.ID) && strings.TrimSpace(dependency.Notes) != "" {
+			dependencies = append(dependencies, dependency)
+		}
+	}
+
+	start := b.Len()
+	writeRunPacketSection(b, "Dependency Notes")
+	b.WriteString("Agent-written notes from completed dependency slices; advisory only with no authority. Full text in slices.json.\n")
+	if len(dependencies) == 0 {
+		b.WriteString("- none\n")
+		return
+	}
+	for i, dependency := range dependencies {
+		var entry strings.Builder
+		entry.WriteString("- " + dependency.ID)
+		if dependency.Title != "" {
+			entry.WriteString(": " + dependency.Title)
+		}
+		entry.WriteByte('\n')
+		notes := boundedRunPacketFeedbackText(strings.TrimSpace(dependency.Notes), maxRunPacketFeedbackBytes)
+		for _, line := range strings.Split(notes, "\n") {
+			entry.WriteString("  > " + line + "\n")
+		}
+		omission := fmt.Sprintf("- %d dependency notes omitted; read slices.json\n", len(dependencies)-i)
+		reserve := 0
+		if i+1 < len(dependencies) {
+			reserve = len(omission)
+		}
+		if b.Len()-start+entry.Len()+reserve > maxRunPacketDependencyNotesBytes {
+			b.WriteString(omission)
+			return
+		}
+		b.WriteString(entry.String())
 	}
 }
 
