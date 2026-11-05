@@ -224,8 +224,10 @@ func (g GitHub) ensureLabel(ctx context.Context, repoRoot, label string) (string
 	var labels []struct {
 		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &labels); err != nil {
-		return "", fmt.Errorf("parse GitHub labels while checking %q: %w", label, err)
+	if trimmed := strings.TrimSpace(output); trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &labels); err != nil {
+			return "", fmt.Errorf("parse GitHub labels while checking %q: %w", label, err)
+		}
 	}
 	for _, existing := range labels {
 		if strings.EqualFold(existing.Name, label) {

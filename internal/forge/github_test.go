@@ -94,6 +94,91 @@ func TestGitHubCreatePreservesEmittedIdentityAndStdoutOnOperationError(t *testin
 	}
 }
 
+func TestGitHubEnsureLabel(t *testing.T) {
+	commandErr := errors.New("command failed")
+	for _, tc := range []struct {
+		name, output, wantLabel, wantError string
+		listErr, createErr                 error
+		create                             bool
+	}{
+		{name: "empty", wantLabel: "feature", create: true},
+		{name: "whitespace", output: " \t\r\n", wantLabel: "feature", create: true},
+		{name: "empty list", output: `[]`, wantLabel: "feature", create: true},
+		{name: "nonmatching", output: `[{"name":"bug"}]`, wantLabel: "feature", create: true},
+		{name: "existing", output: `[{"name":"Feature"}]`, wantLabel: "Feature"},
+		{name: "malformed", output: `{`, wantError: "parse GitHub labels"},
+		{name: "list failure blank", listErr: commandErr, wantError: "check pull request label"},
+		{name: "list failure JSON", output: `[]`, listErr: commandErr, wantError: "check pull request label"},
+		{name: "create failure", output: `[]`, createErr: commandErr, create: true, wantError: "create pull request label"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			github := NewGitHub(forgeRunner(t, &calls, func(args []string, stdout, _ io.Writer) error {
+				switch strings.Join(args, " ") {
+				case "label list --search feature --json name --limit 100":
+					_, _ = io.WriteString(stdout, tc.output)
+					return tc.listErr
+				case "label create feature --color 1D76DB --description Repository change category":
+					return tc.createErr
+				default:
+					t.Fatalf("unexpected gh args: %#v", args)
+					return nil
+				}
+			}))
+			label, err := github.ensureLabel(context.Background(), "/repo", "feature")
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %v, want %q", err, tc.wantError)
+			}
+			if (tc.listErr != nil || tc.createErr != nil) && !errors.Is(err, commandErr) {
+				t.Fatalf("command error not preserved: %v", err)
+			}
+			if label != tc.wantLabel {
+				t.Fatalf("label = %q, want %q", label, tc.wantLabel)
+			}
+			want := []string{"gh label list --search feature --json name --limit 100"}
+			if tc.create {
+				want = append(want, "gh label create feature --color 1D76DB --description Repository change category")
+			}
+			if !reflect.DeepEqual(calls, want) {
+				t.Fatalf("calls = %#v, want %#v", calls, want)
+			}
+		})
+	}
+}
+
+func TestGitHubCreateWithBlankLabelSearch(t *testing.T) {
+	var calls []string
+	github := NewGitHub(forgeRunner(t, &calls, func(args []string, stdout, _ io.Writer) error {
+		switch strings.Join(args, " ") {
+		case "label list --search feature --json name --limit 100":
+		case "label create feature --color 1D76DB --description Repository change category":
+		case "pr create --base main --head feature/a --title title --body-file /tmp/body --label feature --assignee @me":
+			_, _ = io.WriteString(stdout, "https://github.com/iamseth/tao/pull/324\n")
+		default:
+			t.Fatalf("unexpected gh args: %#v", args)
+		}
+		return nil
+	}))
+	outcome := github.Create(context.Background(), CreateRequest{
+		RepoRoot: "/repo", BaseBranch: "main", Branch: "feature/a", Title: "title", BodyFile: "/tmp/body", Label: "feature",
+	})
+	if outcome.OperationErr != nil || outcome.ParseErr != nil || outcome.PullRequest.Number != 324 {
+		t.Fatalf("unexpected creation outcome: %#v", outcome)
+	}
+	want := []string{
+		"gh label list --search feature --json name --limit 100",
+		"gh label create feature --color 1D76DB --description Repository change category",
+		"gh pr create --base main --head feature/a --title title --body-file /tmp/body --label feature --assignee @me",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestGitHubCreateCapturesFallbackAfterCommandReturns(t *testing.T) {
 	beforeCreate := time.Date(2026, 8, 14, 2, 4, 0, 0, time.UTC)
 	afterCreate := beforeCreate.Add(15 * time.Minute)
@@ -151,33 +236,37 @@ func TestGitHubEnsureMetadataLeavesExistingMetadataUnchanged(t *testing.T) {
 }
 
 func TestGitHubEnsureMetadataRepairsLabelAndAssignment(t *testing.T) {
-	var calls []string
-	github := NewGitHub(forgeRunner(t, &calls, func(args []string, stdout, _ io.Writer) error {
-		switch strings.Join(args, " ") {
-		case "api user --jq .login":
-			_, _ = io.WriteString(stdout, "seth\n")
-		case "label list --search feature --json name --limit 100":
-			_, _ = io.WriteString(stdout, `[]`)
-		case "label create feature --color " + pullRequestLabelColor + " --description " + pullRequestLabelDescription:
-		case "pr edit 7 --add-label feature --add-assignee @me":
-		default:
-			t.Fatalf("unexpected gh args: %#v", args)
-		}
-		return nil
-	}))
+	for _, output := range []string{`[]`, "", " \t\r\n"} {
+		t.Run("output="+output, func(t *testing.T) {
+			var calls []string
+			github := NewGitHub(forgeRunner(t, &calls, func(args []string, stdout, _ io.Writer) error {
+				switch strings.Join(args, " ") {
+				case "api user --jq .login":
+					_, _ = io.WriteString(stdout, "seth\n")
+				case "label list --search feature --json name --limit 100":
+					_, _ = io.WriteString(stdout, output)
+				case "label create feature --color " + pullRequestLabelColor + " --description " + pullRequestLabelDescription:
+				case "pr edit 7 --add-label feature --add-assignee @me":
+				default:
+					t.Fatalf("unexpected gh args: %#v", args)
+				}
+				return nil
+			}))
 
-	err := github.EnsureMetadata(context.Background(), MetadataRequest{RepoRoot: "/repo", PullRequest: PullRequest{Number: 7}, Label: "feature"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"gh api user --jq .login",
-		"gh label list --search feature --json name --limit 100",
-		"gh label create feature --color 1D76DB --description Repository change category",
-		"gh pr edit 7 --add-label feature --add-assignee @me",
-	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("calls = %#v, want %#v", calls, want)
+			err := github.EnsureMetadata(context.Background(), MetadataRequest{RepoRoot: "/repo", PullRequest: PullRequest{Number: 7}, Label: "feature"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"gh api user --jq .login",
+				"gh label list --search feature --json name --limit 100",
+				"gh label create feature --color 1D76DB --description Repository change category",
+				"gh pr edit 7 --add-label feature --add-assignee @me",
+			}
+			if !reflect.DeepEqual(calls, want) {
+				t.Fatalf("calls = %#v, want %#v", calls, want)
+			}
+		})
 	}
 }
 
