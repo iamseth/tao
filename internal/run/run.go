@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -284,33 +285,35 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 	if operation == nil {
 		return fmt.Errorf("plan run lock operation is nil")
 	}
-	detail, err := s.repo.ResolvePlan(ctx, request.Input)
-	if err != nil {
-		return err
-	}
-	if detail == nil {
-		return fmt.Errorf("plan %q not found", request.Input)
-	}
 	ctx = withPlacementNotice(withTimeoutAllowance(ctx))
 	startedAt := now(s.dependencies).UTC()
 	headerConfig := s.config
 	if resolved, resolveErr := prepareRequestConfig(s.config, request); resolveErr == nil {
 		headerConfig = resolved
 	}
-	return WithRepositoryAdmission(ctx, detail, s.dependencies.RepositoryAdmission, func(ctx context.Context) error {
-		return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
-			return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, func(statusCtx context.Context) error {
-				return WithPlanRunLock(statusCtx, detail, startedAt, func(ownedCtx context.Context) error {
-					err := operation(ownedCtx)
-					if err != nil {
-						// Diagnostic journaling is never lifecycle or recovery authority.
-						s.journalRunAbort(ownedCtx, detail, err)
-					}
-					return err
+	var initial *plan.PlanDetail
+	err := WithOwnedPlan(ctx, s.repo, request.Input, OwnedPlanOptions{
+		StartedAt: startedAt,
+		Scope: func(ctx context.Context, detail *plan.PlanDetail, runLocked func(context.Context) error) error {
+			initial = detail
+			return WithRepositoryAdmission(ctx, detail, s.dependencies.RepositoryAdmission, func(ctx context.Context) error {
+				return trackRunHeader(ctx, s.dependencies.HeaderReporter, detail, headerConfig, startedAt, func(headerCtx context.Context) error {
+					return trackRunStatus(headerCtx, s.dependencies.StatusReporter, detail, startedAt, runLocked)
 				})
 			})
-		})
+		},
+	}, func(ownedCtx context.Context, _ *plan.PlanDetail) error {
+		err := operation(ownedCtx)
+		if err != nil {
+			// Diagnostic journaling uses entry metadata and finishes under ownership.
+			s.journalRunAbort(ownedCtx, initial, err)
+		}
+		return err
 	})
+	if errors.Is(err, errOwnedPlanAbandoned) {
+		return cannotStartf("%s", err)
+	}
+	return err
 }
 
 func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
@@ -352,7 +355,7 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 
 func (s Service) Execute(ctx context.Context, request Request) error {
 	ctx = withPlacementNotice(withTimeoutAllowance(ctx))
-	return s.withResolvedPlan(ctx, request, resolvedPlanOptions{header: true, status: true, admission: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
+	err := s.withResolvedPlan(ctx, request, resolvedPlanOptions{header: true, status: true, admission: true}, func(ownedCtx context.Context, detail *plan.PlanDetail, config ExecutionConfig) error {
 		ownedCtx.Value(placementNoticeKey{}).(*sync.Once).Do(func() {
 			s.reportPlacementMismatch(detail, config)
 		})
@@ -405,6 +408,10 @@ func (s Service) Execute(ctx context.Context, request Request) error {
 			return s.repo.ResolvePlan(ctx, detail.Dir)
 		}, s.out, execution)
 	})
+	if errors.Is(err, errOwnedPlanAbandoned) {
+		return cannotStartf("%s", err)
+	}
+	return err
 }
 
 type placementNoticeKey struct{}

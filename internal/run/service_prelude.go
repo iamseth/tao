@@ -2,7 +2,6 @@ package run
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/iamseth/tao/internal/plan"
 )
@@ -18,44 +17,28 @@ func (s Service) withResolvedPlan(ctx context.Context, request Request, options 
 	if err != nil {
 		return err
 	}
-	lockDetail, err := s.repo.ResolvePlan(ctx, request.Input)
-	if err != nil {
-		return err
-	}
-	if lockDetail == nil {
-		return fmt.Errorf("plan %q not found", request.Input)
-	}
-	planDir := lockDetail.Dir
 	startedAt := now(s.dependencies).UTC()
-	runLocked := func(ctx context.Context) error {
-		return WithPlanRunLock(ctx, lockDetail, startedAt, func(ownedCtx context.Context) error {
-			// Resolve by the exact directory after acquisition. The pre-lock detail
-			// identifies ownership only: another lifecycle driver may have changed
-			// the plan before this lock was acquired.
-			detail, err := s.repo.ResolvePlan(ownedCtx, planDir)
-			if err != nil {
-				return err
+	return WithOwnedPlan(ctx, s.repo, request.Input, OwnedPlanOptions{
+		StartedAt: startedAt,
+		Scope: func(ctx context.Context, initial *plan.PlanDetail, runLocked func(context.Context) error) error {
+			runWithStatus := func(ctx context.Context) error {
+				if options.status {
+					return trackRunStatus(ctx, s.dependencies.StatusReporter, initial, startedAt, runLocked)
+				}
+				return runLocked(ctx)
 			}
-			if detail == nil {
-				return fmt.Errorf("plan %q not found", planDir)
+			run := func(ctx context.Context) error {
+				if options.header {
+					return trackRunHeader(ctx, s.dependencies.HeaderReporter, initial, config, startedAt, runWithStatus)
+				}
+				return runWithStatus(ctx)
 			}
-			return operation(ownedCtx, detail, config)
-		})
-	}
-	runWithStatus := func(ctx context.Context) error {
-		if options.status {
-			return trackRunStatus(ctx, s.dependencies.StatusReporter, lockDetail, startedAt, runLocked)
-		}
-		return runLocked(ctx)
-	}
-	run := func(ctx context.Context) error {
-		if options.header {
-			return trackRunHeader(ctx, s.dependencies.HeaderReporter, lockDetail, config, startedAt, runWithStatus)
-		}
-		return runWithStatus(ctx)
-	}
-	if options.admission {
-		return WithRepositoryAdmission(ctx, lockDetail, s.dependencies.RepositoryAdmission, run)
-	}
-	return run(ctx)
+			if options.admission {
+				return WithRepositoryAdmission(ctx, initial, s.dependencies.RepositoryAdmission, run)
+			}
+			return run(ctx)
+		},
+	}, func(ownedCtx context.Context, detail *plan.PlanDetail) error {
+		return operation(ownedCtx, detail, config)
+	})
 }

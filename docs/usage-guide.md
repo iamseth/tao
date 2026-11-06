@@ -541,8 +541,10 @@ context — it slices from the conversation, not from a file you pass it.
 ### `/tao-run` and `tao run` — execute slices
 
 Participating Tao binaries hold shared repository admission throughout a run,
-including automatic rework and finalization. Different-plan runs may overlap;
-mutating single and batch merges cannot overlap any run in the same repository,
+including automatic rework and finalization. `tao workspace prepare` also holds
+shared admission through workspace preparation and setup. Different-plan runs and
+workspace preparations may overlap; mutating single and batch merges cannot
+overlap either operation in the same repository,
 even at simultaneous start. A refusal happens before plan mutation and writes no
 plan event. Wait for the active operation to finish, then retry. Diagnostics name
 observed plans, PIDs and phases when available; unknown values are omitted, and
@@ -1626,8 +1628,10 @@ unsettled lifecycle transaction that still needs recovery.
 
 Repository admission uses the canonical Git common directory, so linked
 worktrees and alternate plan directories share one exclusion boundary; unrelated
-repositories remain independent. Shared run leases and exclusive merge leases
-provide race-free exclusion only for participating Tao binaries. Bounded,
+repositories remain independent. Workspace preparation acquires shared Run
+admission before plan ownership and retains both through manager construction,
+preparation (including setup), and output. Shared run leases and exclusive merge
+leases provide race-free exclusion only for participating Tao binaries. Bounded,
 read-only sibling scans can conservatively detect already-live older operations:
 a live run lock or fresh matching status can stop a merge, while a run is stopped
 only by a positively identified fresh merge phase. Scans warn and skip invalid

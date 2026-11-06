@@ -79,6 +79,7 @@ func TestWorkspaceManagerFromCWDKeepsLinkedLaunchPath(t *testing.T) {
 type fakeWorkspaceManager struct {
 	prepareOptions       workspace.PrepareOptions
 	prepareCalled        bool
+	prepareHook          func(context.Context) error
 	prepared             workspace.Metadata
 	status               workspace.Metadata
 	statusExpectedBranch string
@@ -102,6 +103,9 @@ type fakeWorkspaceManager struct {
 func (f *fakeWorkspaceManager) Prepare(ctx context.Context, options workspace.PrepareOptions) (workspace.Metadata, error) {
 	f.prepareCalled = true
 	f.prepareOptions = options
+	if f.prepareHook != nil {
+		return f.prepared, f.prepareHook(ctx)
+	}
 	return f.prepared, ctx.Err()
 }
 

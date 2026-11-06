@@ -160,13 +160,6 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		return err
 	}
 
-	detail, err := repo.ResolvePlan(ctx, positional[0])
-	if err != nil {
-		return err
-	}
-	if detail == nil {
-		return fmt.Errorf("plan %q not found", positional[0])
-	}
 	options := mergepkg.Options{
 		Force:         flagBoolValue(fs, "force"),
 		NoVerify:      flagBoolValue(fs, "no-verify"),
@@ -174,70 +167,56 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		RecordOnly:    flagBoolValue(fs, "record-only"),
 		NoSquash:      flagBoolValue(fs, "no-squash"),
 	}
-	return mergepkg.WithRepositoryAdmission(ctx, a.RepositoryAdmission, detail, options.RecordOnly && !restart, func(ctx context.Context) error {
-		registry, ok := a.registry().(singleMergeBatchRegistry)
-		if !ok {
-			return errors.New("single merge requires merge-batch registry paths")
-		}
-		registered, err := registry.RepoForRoot(detail.State.Repo.Root)
+	return mergepkg.WithSingleOwnedPlan(ctx, repo, positional[0], mergepkg.SingleOwnedPlanOptions{
+		StartedAt: a.now().UTC(), RepositoryAdmission: a.RepositoryAdmission,
+		RecordOnly: options.RecordOnly, Restart: restart,
+		BatchDependencies: func(_ context.Context, root string) (*mergepkg.BatchStore, mergepkg.LandingIntentProbe, error) {
+			registry, ok := a.registry().(singleMergeBatchRegistry)
+			if !ok {
+				return nil, nil, errors.New("single merge requires merge-batch registry paths")
+			}
+			registered, err := registry.RepoForRoot(root)
+			if err != nil {
+				return nil, nil, err
+			}
+			batchesDir := registry.MergeBatchesDir(registered)
+			store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(registered))
+			workspace, err := mergepkg.NewBatchWorkspace(registered.Root, batchesDir, a.mergeRunner())
+			return store, workspace, err
+		},
+	}, func(ownedCtx context.Context, refreshed *plan.PlanDetail) error {
+		service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model, effort)
 		if err != nil {
 			return err
 		}
-		batchesDir := registry.MergeBatchesDir(registered)
-		store := mergepkg.NewBatchStore(batchesDir, registry.ActiveMergeBatchPath(registered))
-		workspace, err := mergepkg.NewBatchWorkspace(registered.Root, batchesDir, a.mergeRunner())
+		if restart {
+			result, err := service.RestartSingleMerge(ownedCtx, refreshed.Dir)
+			if err != nil {
+				return err
+			}
+			return renderSingleMergeRestartResult(a.Out, result)
+		}
+		a = a.withDefaultStatusReporter()
+		invocation := runpkg.StatusInvocation{
+			RepoID: taodata.RepoID(refreshed.State.Repo.Root), RepoName: refreshed.State.Repo.Name,
+			PlanID: refreshed.State.Plan.ID, PlanTitle: refreshed.State.Plan.Title, StartedAt: a.now().UTC(),
+		}
+		operation := func(phases runpkg.PhaseReporter) error {
+			return service.Merge(ownedCtx, refreshed, options, phases)
+		}
+		status := "merge " + invocation.PlanID
+		if reporter, ok := a.StatusReporter.(runpkg.InvocationStatusReporter); ok {
+			err = reporter.TrackInvocation(status, invocation, operation)
+		} else {
+			err = a.StatusReporter.Track(status, func() error { return operation(nil) })
+		}
 		if err != nil {
+			if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
+				return renderErr
+			}
 			return err
 		}
-		if err := mergepkg.RequireNoPreLandingBatch(ctx, store, workspace, detail.State.Plan.ID, options.RecordOnly && !restart); err != nil {
-			return err
-		}
-		return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
-			// Reload by exact directory after acquisition so every merge gate and
-			// mutation uses state protected from concurrent lifecycle drivers.
-			refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
-			if err != nil {
-				return err
-			}
-			if refreshed == nil {
-				return fmt.Errorf("plan %q not found", detail.Dir)
-			}
-			if err := plan.RequireNotAbandoned(refreshed); err != nil {
-				return err
-			}
-			service, err := newMergeServiceRunner(ownedCtx, a, refreshed, model, effort)
-			if err != nil {
-				return err
-			}
-			if restart {
-				result, err := service.RestartSingleMerge(ownedCtx, refreshed.Dir)
-				if err != nil {
-					return err
-				}
-				return renderSingleMergeRestartResult(a.Out, result)
-			}
-			a = a.withDefaultStatusReporter()
-			invocation := runpkg.StatusInvocation{
-				RepoID: taodata.RepoID(refreshed.State.Repo.Root), RepoName: refreshed.State.Repo.Name,
-				PlanID: refreshed.State.Plan.ID, PlanTitle: refreshed.State.Plan.Title, StartedAt: a.now().UTC(),
-			}
-			operation := func(phases runpkg.PhaseReporter) error {
-				return service.Merge(ownedCtx, refreshed, options, phases)
-			}
-			status := "merge " + invocation.PlanID
-			if reporter, ok := a.StatusReporter.(runpkg.InvocationStatusReporter); ok {
-				err = reporter.TrackInvocation(status, invocation, operation)
-			} else {
-				err = a.StatusReporter.Track(status, func() error { return operation(nil) })
-			}
-			if err != nil {
-				if renderErr := renderMergeFailure(a.Out, refreshed, err); renderErr != nil {
-					return renderErr
-				}
-				return err
-			}
-			return renderMergeSuccess(a.Out, refreshed)
-		})
+		return renderMergeSuccess(a.Out, refreshed)
 	})
 }
 

@@ -78,83 +78,67 @@ func (a App) rework(ctx context.Context, repo planRunRepository, args []string) 
 	if _, err := reviewAgentFlagValue(fs, true); err != nil {
 		return err
 	}
-	detail, err := repo.ResolvePlan(ctx, input)
-	if err != nil {
-		return err
-	}
-	if detail == nil {
-		return fmt.Errorf("plan %q not found", input)
-	}
-	a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
-	if err != nil {
-		return err
-	}
-	if runAfter {
-		// Resolve once before any durable reopening or PR triage mutation.
-		options, err = a.resolveCommandOptions(fs, runtimeconfig.CommandRun)
-		if err != nil {
-			return err
-		}
-		if err := a.requireRunHandoffBudgets(); err != nil {
-			return err
-		}
-	}
-
 	now := a.now().UTC()
-	return runpkg.WithRepositoryAdmission(ctx, detail, a.RepositoryAdmission, func(ctx context.Context) error {
-		return runpkg.WithPlanRunLock(ctx, detail, now, func(ownedCtx context.Context) error {
-			// Resolve by the exact directory after acquisition so every gate and
-			// mutation uses authoritative state rather than pre-lock selection data.
-			refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
+	return runpkg.WithOwnedPlan(ctx, repo, input, runpkg.OwnedPlanOptions{
+		StartedAt: now,
+		Scope: func(ctx context.Context, detail *plan.PlanDetail, next func(context.Context) error) error {
+			var err error
+			a, err = a.settingsForPlanRoot(ctx, detail.State.Repo.Root)
 			if err != nil {
-				return err
-			}
-			if refreshed == nil {
-				return fmt.Errorf("plan %q not found", detail.Dir)
-			}
-			if err := plan.RequireNotAbandoned(refreshed); err != nil {
-				return err
-			}
-			record, err := repo.PlanRecord(refreshed)
-			if err != nil {
-				return err
-			}
-			if fromPR {
-				if !runAfter {
-					return a.reworkFromPullRequest(ownedCtx, repo, record, now, authorScope, dryRun, false)
-				}
-				return a.reworkFromPullRequestWithOptions(ownedCtx, repo, record, now, authorScope, dryRun, runAfter, options)
-			}
-
-			var newSlices []plan.Slice
-			if !force {
-				newSlices, err = reworkpkg.Reopen(record, now)
-				if err != nil {
-					return err
-				}
-			} else {
-				findings := reworkpkg.ReviewFindings(refreshed)
-				if len(findings) == 0 {
-					findings = forcedReworkFindings(refreshed)
-				}
-				generationDetail := *refreshed
-				generationDetail.State.UpdatedAt = now
-				newSlices = reworkpkg.GenerateSlices(&generationDetail, findings, nextReworkRound(refreshed))
-				if len(newSlices) == 0 {
-					return fmt.Errorf("rework refused: plan %s has no review findings to convert", reworkPlanID(refreshed))
-				}
-				if err := reopenPlanRecord(record, newSlices, now, true); err != nil {
-					return err
-				}
-			}
-			if err := a.writeReworkResult(record.Detail(), newSlices, runAfter); err != nil {
 				return err
 			}
 			if runAfter {
-				return a.executeCommandRun(ownedCtx, repo, record.Dir(), options)
+				// Resolve once before admission and any durable reopening or PR triage mutation.
+				options, err = a.resolveCommandOptions(fs, runtimeconfig.CommandRun)
+				if err != nil {
+					return err
+				}
+				if err := a.requireRunHandoffBudgets(); err != nil {
+					return err
+				}
 			}
-			return nil
-		})
+			return runpkg.WithRepositoryAdmission(ctx, detail, a.RepositoryAdmission, next)
+		},
+	}, func(ownedCtx context.Context, refreshed *plan.PlanDetail) error {
+		record, err := repo.PlanRecord(refreshed)
+		if err != nil {
+			return err
+		}
+		if fromPR {
+			if !runAfter {
+				return a.reworkFromPullRequest(ownedCtx, repo, record, now, authorScope, dryRun, false)
+			}
+			return a.reworkFromPullRequestWithOptions(ownedCtx, repo, record, now, authorScope, dryRun, runAfter, options)
+		}
+
+		var newSlices []plan.Slice
+		if !force {
+			newSlices, err = reworkpkg.Reopen(record, now)
+			if err != nil {
+				return err
+			}
+		} else {
+			findings := reworkpkg.ReviewFindings(refreshed)
+			if len(findings) == 0 {
+				findings = forcedReworkFindings(refreshed)
+			}
+			generationDetail := *refreshed
+			generationDetail.State.UpdatedAt = now
+			newSlices = reworkpkg.GenerateSlices(&generationDetail, findings, nextReworkRound(refreshed))
+			if len(newSlices) == 0 {
+				return fmt.Errorf("rework refused: plan %s has no review findings to convert", reworkPlanID(refreshed))
+			}
+			if err := reopenPlanRecord(record, newSlices, now, true); err != nil {
+				return err
+			}
+		}
+		if err := a.writeReworkResult(record.Detail(), newSlices, runAfter); err != nil {
+			return err
+		}
+		if runAfter {
+			return a.executeCommandRun(ownedCtx, repo, record.Dir(), options)
+		}
+		return nil
 	})
 }
 

@@ -84,26 +84,12 @@ func (a App) workspacePrepare(ctx context.Context, repo plan.Resolver, args []st
 		return err
 	}
 	planSelector := args[0] //nolint:gosec // G602: args[0] guarded by requirePositionals(args, 1) above
-	detail, err := repo.ResolvePlan(ctx, planSelector)
-	if err != nil {
-		return err
-	}
-	if detail == nil {
-		return fmt.Errorf("plan %q not found", planSelector)
-	}
-	return runpkg.WithPlanRunLock(ctx, detail, a.now().UTC(), func(ownedCtx context.Context) error {
-		// Reload by exact directory after acquisition so abandonment and workspace
-		// preparation use one authoritative, ownership-protected snapshot.
-		refreshed, err := repo.ResolvePlan(ownedCtx, detail.Dir)
-		if err != nil {
-			return err
-		}
-		if refreshed == nil {
-			return fmt.Errorf("plan %q not found", detail.Dir)
-		}
-		if err := plan.RequireNotAbandoned(refreshed); err != nil {
-			return err
-		}
+	return runpkg.WithOwnedPlan(ctx, repo, planSelector, runpkg.OwnedPlanOptions{
+		StartedAt: a.now().UTC(),
+		Scope: func(scopeCtx context.Context, initial *plan.PlanDetail, operation func(context.Context) error) error {
+			return runpkg.WithRepositoryAdmission(scopeCtx, initial, a.RepositoryAdmission, operation)
+		},
+	}, func(ownedCtx context.Context, refreshed *plan.PlanDetail) error {
 		repoRoot := refreshed.State.Repo.Root
 		if repoRoot == "" {
 			return fmt.Errorf("plan %s does not record a repo root", refreshed.State.Plan.ID)

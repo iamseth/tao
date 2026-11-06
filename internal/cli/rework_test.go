@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
+	"github.com/iamseth/tao/internal/repoadmission"
 	reworkpkg "github.com/iamseth/tao/internal/rework"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -446,6 +448,82 @@ func TestReworkReviewAgentAdmissionBeforeMutation(t *testing.T) {
 	}
 }
 
+type reworkResolveRepository struct {
+	planRunRepository
+	resolve func(context.Context, string) (*plan.PlanDetail, error)
+}
+
+func (r reworkResolveRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
+	return r.resolve(ctx, input)
+}
+
+func TestReworkOwnershipReload(t *testing.T) {
+	for _, abandon := range []bool{false, true} {
+		t.Run(fmt.Sprintf("abandoned=%t", abandon), func(t *testing.T) {
+			root := t.TempDir()
+			const id = "rework-reload"
+			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix"}}))
+			base := plan.NewFileRepository(root)
+			before := readReworkArtifacts(t, dir)
+			calls := 0
+			repo := reworkResolveRepository{planRunRepository: base, resolve: func(ctx context.Context, input string) (*plan.PlanDetail, error) {
+				calls++
+				want := "selector"
+				if calls == 2 {
+					want = dir
+					if _, err := os.Stat(filepath.Join(dir, ".run.lock")); err != nil {
+						t.Fatalf("reload without lock: %v", err)
+					}
+				}
+				if input != want {
+					t.Fatalf("resolve %d = %q, want %q", calls, input, want)
+				}
+				detail, err := base.ResolvePlan(ctx, id)
+				if err == nil && calls == 2 && abandon {
+					detail.State.Status = plan.StatusAbandoned
+				}
+				return detail, err
+			}}
+			app := newTestApp(App{Out: io.Discard})
+			err := app.rework(context.Background(), repo, []string{"selector"})
+			if abandon {
+				if err == nil || !strings.Contains(err.Error(), "is abandoned") || errors.Is(err, runpkg.ErrCannotStart) {
+					t.Fatalf("raw abandonment = %v", err)
+				}
+				if readReworkArtifacts(t, dir) != before {
+					t.Fatal("abandonment mutated artifacts")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 {
+				t.Fatalf("resolutions = %d", calls)
+			}
+			if _, err := os.Stat(filepath.Join(dir, ".run.lock")); !os.IsNotExist(err) {
+				t.Fatalf("lock not released: %v", err)
+			}
+		})
+	}
+}
+
+func TestReworkCancellationAtAdmissionDoesNotReopen(t *testing.T) {
+	root := t.TempDir()
+	const id = "rework-canceled"
+	dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix"}}))
+	before := readReworkArtifacts(t, dir)
+	app := newTestApp(App{Out: io.Discard, RepositoryAdmission: func(ctx context.Context, _ repoadmission.Request, next func(context.Context) error) error {
+		ctx, cancel := context.WithCancel(ctx)
+		cancel()
+		return next(ctx)
+	}})
+	if err := app.rework(context.Background(), plan.NewFileRepository(root), []string{id}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation = %v", err)
+	}
+	if readReworkArtifacts(t, dir) != before {
+		t.Fatal("cancellation reopened plan")
+	}
+}
+
 func TestReworkRunRetainsLockOwnershipForNestedRun(t *testing.T) {
 	root := t.TempDir()
 	planID := "20260628-1200-rework-run-lock"
@@ -599,6 +677,7 @@ func hasPendingReworkSlice(detail *plan.PlanDetail) bool {
 }
 
 func TestReworkRunCarriesOptionsThroughBothHandoffs(t *testing.T) {
+	testenv.SkipIfShort(t)
 	for _, fromPR := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "from-pr"}[fromPR], func(t *testing.T) {
 			root := t.TempDir()
@@ -615,7 +694,11 @@ func TestReworkRunCarriesOptionsThroughBothHandoffs(t *testing.T) {
 				stubCLIReworkPRPipeline(t, []forge.ReviewThread{thread}, []reworkpkg.PRThreadClassification{{ThreadNodeID: "thread", Kind: reworkpkg.PRThreadKindChange, Rationale: "fix"}})
 				args = []string{"--from-pr", "--run", id}
 			}
-			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}, map[string]string{"models.run_model": `"repo-run"`}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
+			repoRoot := cliReworkPlanRepoRoot(t, dir)
+			if out, err := exec.Command("git", "init", repoRoot).CombinedOutput(); err != nil { // #nosec G204 -- test-owned repository.
+				t.Fatalf("init: %s: %v", out, err)
+			}
+			app := newTestApp(App{RepositoryAdmission: repoadmission.With, Out: io.Discard, RuntimeEnv: composedSnapshotWith(map[string]string{runtimeconfig.EnvModel: "captured", runtimeconfig.EnvAutoRework: "false", runtimeconfig.EnvRunHeader: "false"}, map[string]string{"models.run_model": `"repo-run"`}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
 			t.Setenv(runtimeconfig.EnvModel, "changed")
 			old := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = old })
@@ -625,13 +708,29 @@ func TestReworkRunCarriesOptionsThroughBothHandoffs(t *testing.T) {
 				if request.Models.Base != "captured" || request.Models.Run != "repo-run" {
 					t.Fatalf("request=%+v", request)
 				}
-				return service.WithPlanRunLock(ctx, request, func(context.Context) error { return context.Canceled })
+				return service.WithPlanRunLock(ctx, request, func(context.Context) error {
+					err := repoadmission.With(context.Background(), repoadmission.Request{Root: repoRoot, Mode: repoadmission.Merge}, func(context.Context) error {
+						t.Fatal("nested run lost outer admission")
+						return nil
+					})
+					var busy *repoadmission.ContentionError
+					if !errors.As(err, &busy) {
+						t.Fatalf("exclusive admission = %v", err)
+					}
+					if err := repoadmission.With(context.Background(), repoadmission.Request{Root: repoRoot, Mode: repoadmission.Run}, func(context.Context) error { return nil }); err != nil {
+						t.Fatalf("compatible admission = %v", err)
+					}
+					return context.Canceled
+				})
 			}
 			if err := app.rework(context.Background(), plan.NewFileRepository(root), args); !errors.Is(err, context.Canceled) {
 				t.Fatalf("handoff cancellation=%v", err)
 			}
 			if calls != 1 {
 				t.Fatalf("execution=%d", calls)
+			}
+			if err := repoadmission.With(context.Background(), repoadmission.Request{Root: repoRoot, Mode: repoadmission.Merge}, func(context.Context) error { return nil }); err != nil {
+				t.Fatalf("admission not released after nested failure: %v", err)
 			}
 		})
 	}
@@ -648,18 +747,23 @@ func TestReworkRunRejectsConsumedSnapshotBeforeReopening(t *testing.T) {
 			const id = "20260628-1200-admission"
 			dir := writeCLIReworkPlan(t, root, id, plan.StatusCompleted, reworkReview(plan.ReviewVerdictChangesRequested, []plan.ReviewFinding{{File: "file.go", Message: "fix this"}}))
 			before := readReworkArtifacts(t, dir)
-			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
+			app := newTestApp(App{RepositoryAdmission: func(context.Context, repoadmission.Request, func(context.Context) error) error {
+				t.Fatal("invalid configuration reached repository admission")
+				return nil
+			}, Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(map[string]string{key: "invalid"}),
 				ProcessStarter: func(context.Context, string, string, []string) (runpkg.Process, error) {
 					t.Fatal("provider called after rejected admission")
 					return nil, nil
 				},
 			})
-			err := app.rework(context.Background(), plan.NewFileRepository(root), []string{"--run", id})
-			if err == nil || !strings.Contains(err.Error(), key) {
-				t.Fatalf("consumed value not rejected: %v", err)
-			}
-			if readReworkArtifacts(t, dir) != before {
-				t.Fatal("rejected run configuration reopened the plan")
+			for _, args := range [][]string{{"--run", id}, {"--from-pr", "--run", id}} {
+				err := app.rework(context.Background(), plan.NewFileRepository(root), args)
+				if err == nil || !strings.Contains(err.Error(), key) {
+					t.Fatalf("consumed value not rejected: %v", err)
+				}
+				if readReworkArtifacts(t, dir) != before {
+					t.Fatal("rejected run configuration reopened the plan")
+				}
 			}
 		})
 	}

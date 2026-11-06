@@ -1145,6 +1145,9 @@ func TestReviewAndResumeRejectAbandonedPlanBeforeVerificationOrAgent(t *testing.
 			} else {
 				err = service.ResumeReview(context.Background(), request)
 			}
+			if errors.Is(err, ErrCannotStart) {
+				t.Fatalf("review abandonment must remain a raw refusal: %v", err)
+			}
 			if err == nil || !strings.Contains(err.Error(), "plan plan-a is abandoned: superseded by safer work") {
 				t.Fatalf("%s error = %v", operation, err)
 			}

@@ -78,7 +78,7 @@ func TestRepositoryAdmissionRefusesCLIEntries(t *testing.T) {
 	if out, err := exec.Command("git", "init", root).CombinedOutput(); err != nil { // #nosec G204 -- test-owned temporary repository.
 		t.Fatalf("init: %s: %v", out, err)
 	}
-	for _, command := range []string{"run", "rework", "merge", "merge-force", "merge-restart", "merge-no-squash", "merge-all", "merge-all-restart"} {
+	for _, command := range []string{"workspace-prepare", "run", "rework", "merge", "merge-force", "merge-restart", "merge-no-squash", "merge-all", "merge-all-restart"} {
 		t.Run(command, func(t *testing.T) {
 			plans := t.TempDir()
 			const id = "20260628-1200-admission"
@@ -100,6 +100,10 @@ func TestRepositoryAdmissionRefusesCLIEntries(t *testing.T) {
 			app := App{Out: io.Discard, Err: io.Discard, RuntimeEnv: snapshotWith(nil)} // Production refusal is the subject.
 			registry := logBatchRegistry{&fakeNoteRegistry{dir: t.TempDir(), current: taodata.Repo{ID: "repo", Root: root}}}
 			app.Registry = func() NoteRegistry { return registry }
+			app.WorkspaceManager = func(string) (WorkspaceManager, error) {
+				t.Error("admission refusal reached manager construction")
+				return &fakeWorkspaceManager{}, nil
+			}
 			mode := repoadmission.Merge
 			if strings.HasPrefix(command, "merge") {
 				mode = repoadmission.Run
@@ -107,10 +111,35 @@ func TestRepositoryAdmissionRefusesCLIEntries(t *testing.T) {
 			err = repoadmission.With(context.Background(), repoadmission.Request{Root: root, Mode: mode}, func(context.Context) error {
 				var err error
 				switch command {
+				case "workspace-prepare":
+					// A pre-held plan lock must not mask repository contention.
+					err = run.WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error {
+						calls := 0
+						resolver := admissionWorkspaceResolver(func(ctx context.Context, input string) (*plan.PlanDetail, error) {
+							calls++
+							return repo.ResolvePlan(ctx, input)
+						})
+						prepareErr := app.workspacePrepare(context.Background(), resolver, []string{id})
+						if calls != 1 {
+							t.Errorf("refusal resolved %d times", calls)
+						}
+						return prepareErr
+					})
 				case "run":
 					err = app.run(context.Background(), repo, []string{id})
 				case "rework":
-					err = app.rework(context.Background(), repo, []string{"--run", id})
+					err = run.WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error {
+						calls := 0
+						resolver := reworkResolveRepository{planRunRepository: repo, resolve: func(ctx context.Context, input string) (*plan.PlanDetail, error) {
+							calls++
+							return repo.ResolvePlan(ctx, input)
+						}}
+						reworkErr := app.rework(context.Background(), resolver, []string{"--run", id})
+						if calls != 1 {
+							t.Errorf("refusal resolved %d times", calls)
+						}
+						return reworkErr
+					})
 				default:
 					args := []string{id}
 					switch command {
@@ -138,6 +167,101 @@ func TestRepositoryAdmissionRefusesCLIEntries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Prepare includes workspace setup; the hook pauses that entire manager call.
+func TestWorkspacePrepareAdmissionLifetime(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := t.TempDir()
+	if out, err := exec.Command("git", "init", root).CombinedOutput(); err != nil { // #nosec G204 -- test-owned repository.
+		t.Fatalf("init: %s: %v", out, err)
+	}
+	for _, outcome := range []string{"success", "error", "cancel"} {
+		t.Run(outcome, func(t *testing.T) {
+			detail := workspacePlanDetail("plan-a", plan.StatusPlanned)
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = root
+			calls := 0
+			repo := admissionWorkspaceResolver(func(_ context.Context, input string) (*plan.PlanDetail, error) {
+				calls++
+				if calls == 2 && input != detail.Dir {
+					t.Fatalf("reload = %q", input)
+				}
+				return detail, nil
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			wantErr := errors.New("setup failed")
+			entered, release := make(chan struct{}), make(chan struct{})
+			manager := &fakeWorkspaceManager{prepareHook: func(ctx context.Context) error {
+				close(entered)
+				<-release
+				if outcome == "error" {
+					return wantErr
+				}
+				return ctx.Err()
+			}}
+			app := App{Out: io.Discard, Err: io.Discard, WorkspaceManager: func(string) (WorkspaceManager, error) {
+				return manager, nil
+			}} // Nil guard intentionally exercises production admission.
+			done := make(chan error, 1)
+			go func() { done <- app.workspacePrepare(ctx, repo, []string{"plan-a"}) }()
+			select {
+			case <-entered:
+			case err := <-done:
+				t.Fatalf("prepare did not enter: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("prepare did not enter")
+			}
+			merge := func() error {
+				return repoadmission.With(context.Background(), repoadmission.Request{Root: root, Mode: repoadmission.Merge}, func(context.Context) error { return nil })
+			}
+			var busy *repoadmission.ContentionError
+			if err := merge(); !errors.As(err, &busy) {
+				t.Errorf("setup did not retain admission: %v", err)
+			}
+			if err := repoadmission.With(context.Background(), repoadmission.Request{Root: root, Mode: repoadmission.Run}, func(context.Context) error { return nil }); err != nil {
+				t.Errorf("compatible shared admission: %v", err)
+			}
+			if err := run.WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error { return nil }); !errors.Is(err, plan.ErrRunLocked) {
+				t.Errorf("setup did not retain plan lock: %v", err)
+			}
+			if outcome == "cancel" {
+				cancel()
+			}
+			close(release)
+			err := <-done
+			switch outcome {
+			case "success":
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "error":
+				if err != wantErr { //nolint:errorlint // Preparation failures must retain exact identity through both ownership boundaries.
+					t.Fatalf("error identity: %v", err)
+				}
+			case "cancel":
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation: %v", err)
+				}
+			}
+			if calls != 2 {
+				t.Fatalf("resolve calls = %d", calls)
+			}
+			if err := merge(); err != nil {
+				t.Fatalf("admission leaked: %v", err)
+			}
+			if err := run.WithPlanRunLock(context.Background(), detail, time.Now(), func(context.Context) error { return nil }); err != nil {
+				t.Fatalf("plan lock leaked: %v", err)
+			}
+		})
+	}
+}
+
+type admissionWorkspaceResolver func(context.Context, string) (*plan.PlanDetail, error)
+
+func (r admissionWorkspaceResolver) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
+	return r(ctx, input)
 }
 
 func TestRepositoryAdmissionRefusesPromotedExecution(t *testing.T) {

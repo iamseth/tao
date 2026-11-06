@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agent/logrecord"
@@ -71,7 +72,16 @@ func TestMergeModelSelection(t *testing.T) {
 					check(a, model, effort...)
 					return &fakeCLIMergeBatchRunner{}, nil
 				}
-				newMergeServiceRunner = func(_ context.Context, a App, _ *plan.PlanDetail, model string, effort ...string) (mergeServiceRunner, error) {
+				newMergeServiceRunner = func(_ context.Context, a App, refreshed *plan.PlanDetail, model string, effort ...string) (mergeServiceRunner, error) {
+					// Model/session wiring remains deferred until domain ownership.
+					lock, err := plan.AcquireRunLock(refreshed.Dir, refreshed.State.Plan.ID, time.Now())
+					if err == nil {
+						_ = lock.Release()
+						t.Fatal("model factory ran outside plan ownership")
+					}
+					if !errors.Is(err, plan.ErrRunLocked) {
+						t.Fatal(err)
+					}
 					calls++
 					check(a, model, effort...)
 					return &fakeCLIMergeService{}, nil

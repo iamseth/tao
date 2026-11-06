@@ -154,6 +154,10 @@ func TestRepositoryAdmissionRetainsOuterOwnership(t *testing.T) {
 			t.Fatalf("same plan: %v", err)
 		}
 		for range 3 {
+			// Repeated execution refusals must not release the outer ownership.
+			if err := service.Execute(owned, Request{Input: first.Dir}); !errors.Is(err, ErrCannotStart) {
+				t.Fatalf("nested execute: %v", err)
+			}
 			if err := service.WithPlanRunLock(owned, Request{Input: first.Dir}, func(context.Context) error { return nil }); err != nil {
 				t.Fatal(err)
 			}

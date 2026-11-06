@@ -95,6 +95,97 @@ func TestServiceExecuteFailsFastWhenPlanRunLockHeld(t *testing.T) {
 	}
 }
 
+func TestServiceOwnershipAbandonmentRace(t *testing.T) {
+	for _, outer := range []bool{false, true} {
+		t.Run(map[bool]string{false: "execute", true: "outer"}[outer], func(t *testing.T) {
+			initial := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+			initial.Dir = t.TempDir()
+			refreshed := *initial
+			refreshed.State = initial.State
+			refreshed.State.Status = plan.StatusAbandoned
+			repo := &memoryRunRepository{details: []*plan.PlanDetail{initial}}
+			service := newTestService(repo, io.Discard, testOptions(RunDependencies{StatusReporter: callbackStatusReporter(func() {
+				repo.details = []*plan.PlanDetail{&refreshed}
+			})}))
+			var err error
+			if outer {
+				err = service.WithPlanRunLock(context.Background(), Request{Input: initial.Dir}, func(context.Context) error {
+					t.Error("operation reached abandoned plan")
+					return nil
+				})
+			} else {
+				err = service.Execute(context.Background(), Request{Input: initial.Dir})
+			}
+			if !errors.Is(err, ErrCannotStart) || !strings.Contains(err.Error(), "abandoned") {
+				t.Fatalf("abandonment classification = %v", err)
+			}
+		})
+	}
+}
+
+func TestResolvedPlanPreservesCallbackError(t *testing.T) {
+	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	detail.Dir = t.TempDir()
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, testOptions(RunDependencies{}))
+	want := errors.New("callback failed")
+	for _, admission := range []bool{false, true} {
+		got := service.withResolvedPlan(context.Background(), Request{Input: detail.Dir}, resolvedPlanOptions{admission: admission}, func(context.Context, *plan.PlanDetail, ExecutionConfig) error { return want })
+		if got != want { //nolint:errorlint // Callback identity is part of the boundary contract.
+			t.Fatalf("callback error = %v, want original", got)
+		}
+		lock, err := plan.AcquireRunLock(detail.Dir, detail.State.Plan.ID, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = lock.Release()
+	}
+}
+
+func TestServiceOwnershipCanceledAcquisition(t *testing.T) {
+	for _, outer := range []bool{false, true} {
+		detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+		detail.Dir = t.TempDir()
+		ctx, cancel := context.WithCancel(context.Background())
+		repo := &memoryRunRepository{details: []*plan.PlanDetail{detail}}
+		service := newTestService(repo, io.Discard, testOptions(RunDependencies{StatusReporter: callbackStatusReporter(cancel)}))
+		var err error
+		if outer {
+			err = service.WithPlanRunLock(ctx, Request{Input: detail.Dir}, func(context.Context) error { t.Fatal("canceled callback entered"); return nil })
+		} else {
+			err = service.Execute(ctx, Request{Input: detail.Dir})
+		}
+		cancel()
+		if !errors.Is(err, context.Canceled) || errors.Is(err, ErrCannotStart) {
+			t.Fatalf("canceled acquisition = %v", err)
+		}
+		if repo.calls != 1 {
+			t.Fatalf("canceled acquisition reloaded: %d", repo.calls)
+		}
+		lock, err := plan.AcquireRunLock(detail.Dir, detail.State.Plan.ID, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = lock.Release()
+	}
+}
+
+func TestServiceOuterOwnershipReleasesOnPanic(t *testing.T) {
+	detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	detail.Dir = t.TempDir()
+	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, testOptions(RunDependencies{}))
+	func() {
+		defer func() {
+			if recover() != "operation panic" {
+				t.Error("panic not preserved")
+			}
+		}()
+		_ = service.WithPlanRunLock(context.Background(), Request{Input: detail.Dir}, func(context.Context) error { panic("operation panic") })
+	}()
+	if err := service.WithPlanRunLock(context.Background(), Request{Input: detail.Dir}, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("panic retained ownership: %v", err)
+	}
+}
+
 type callbackStatusReporter func()
 
 func (r callbackStatusReporter) Track(_ string, operation func() error) error {

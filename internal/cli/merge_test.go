@@ -553,6 +553,7 @@ func TestMergeCommandReloadsUnderLockBeforeSquashOrNoSquashMutation(t *testing.T
 	}{
 		{name: "squash"},
 		{name: "no squash", args: []string{"--no-squash"}},
+		{name: "restart record only", args: []string{"--restart", "--record-only"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			isolateAbandonBatchData(t)
@@ -564,7 +565,13 @@ func TestMergeCommandReloadsUnderLockBeforeSquashOrNoSquashMutation(t *testing.T
 				release:  make(chan struct{}),
 			}
 			service := &fakeCLIMergeService{}
-			stubMergeServiceRunner(t, service)
+			constructed := false
+			original := newMergeServiceRunner
+			newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string, ...string) (mergeServiceRunner, error) {
+				constructed = true
+				return service, nil
+			}
+			t.Cleanup(func() { newMergeServiceRunner = original })
 			var mergeOut bytes.Buffer
 			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &mergeOut, Err: &mergeOut})
 			mergeDone := make(chan error, 1)
@@ -582,8 +589,11 @@ func TestMergeCommandReloadsUnderLockBeforeSquashOrNoSquashMutation(t *testing.T
 			if mergeErr == nil || !strings.Contains(mergeErr.Error(), "plan "+fixture.id+" is abandoned: superseded concurrently") {
 				t.Fatalf("merge error = %v, want reloaded abandonment refusal", mergeErr)
 			}
-			if service.calls != 0 {
-				t.Fatalf("merge reached agent or Git mutation service %d times", service.calls)
+			if constructed || service.calls != 0 {
+				t.Fatalf("merge constructed=%t, mutation calls=%d", constructed, service.calls)
+			}
+			if repo.calls != 2 || repo.reload != fixture.dir {
+				t.Fatalf("resolve calls=%d reload=%q", repo.calls, repo.reload)
 			}
 			if strings.Contains(mergeOut.String(), "Merge completed") {
 				t.Fatalf("refused merge reported success: %q", mergeOut.String())
@@ -597,6 +607,7 @@ type mergeResolveRaceRepository struct {
 	resolved chan struct{}
 	release  chan struct{}
 	calls    int
+	reload   string
 }
 
 func (r *mergeResolveRaceRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
@@ -605,6 +616,9 @@ func (r *mergeResolveRaceRepository) ResolvePlan(ctx context.Context, input stri
 		return nil, err
 	}
 	r.calls++
+	if r.calls == 2 {
+		r.reload = input
+	}
 	if r.calls == 1 {
 		close(r.resolved)
 		select {

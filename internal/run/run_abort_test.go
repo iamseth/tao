@@ -23,9 +23,11 @@ type abortRepository struct {
 	appendErr       error
 	resolveErr      error
 	resolveFromDisk bool
+	resolveInputs   []string
 }
 
 func (r *abortRepository) ResolvePlan(ctx context.Context, input string) (*plan.PlanDetail, error) {
+	r.resolveInputs = append(r.resolveInputs, input)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -131,6 +133,44 @@ func TestServiceJournalsRunAbort(t *testing.T) {
 				t.Fatalf("log: %s", data)
 			}
 		})
+	}
+}
+
+func TestRunAbortUsesEntrySnapshotAfterExactReload(t *testing.T) {
+	initial := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
+	initial.Dir = t.TempDir()
+	slice := "entry-slice"
+	initial.State.Plan.CurrentSlice = &slice
+	refreshed := *initial
+	refreshed.State = initial.State
+	otherSlice := "refreshed-slice"
+	refreshed.State.Plan.CurrentSlice = &otherSlice
+	repo := &abortRepository{memoryRunRepository: &memoryRunRepository{details: []*plan.PlanDetail{initial}}}
+	service := newTestService(repo, io.Discard, testOptions(RunDependencies{StatusReporter: callbackStatusReporter(func() {
+		repo.details = []*plan.PlanDetail{&refreshed}
+	})}))
+	service.dependencies.CommandRunner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		return errors.New("no head")
+	}
+	want := errors.New("callback failure")
+	got := service.WithPlanRunLock(context.Background(), Request{Input: "plan-a"}, func(context.Context) error { return want })
+	if got != want { //nolint:errorlint // Preserve exact callback error identity.
+		t.Fatalf("error = %v", got)
+	}
+	if len(repo.resolveInputs) != 2 || repo.resolveInputs[0] != "plan-a" || repo.resolveInputs[1] != initial.Dir {
+		t.Fatalf("resolution inputs = %v", repo.resolveInputs)
+	}
+	found := false
+	for _, event := range repo.events {
+		if event.Type == plan.EventTypeRunAborted {
+			found = true
+			if event.SliceID != slice || event.AbortKind != plan.RunAbortKindOther {
+				t.Fatalf("abort context = %+v", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing run_aborted")
 	}
 }
 
