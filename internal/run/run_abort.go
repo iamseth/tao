@@ -58,5 +58,5 @@ func (s Service) journalRunAbort(ctx context.Context, detail *plan.PlanDetail, e
 		return
 	}
 	defer func() { _ = log.Close() }()
-	_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao run exited (" + event.AbortKind + "): " + event.Message})
+	_ = logrecord.Write(log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: "tao run exited (" + event.AbortKind + "): " + err.Error()})
 }

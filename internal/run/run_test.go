@@ -1623,6 +1623,9 @@ func TestServiceExecuteRoutesCommitIntentWithoutAgent(t *testing.T) {
 		CommandRunner:       (&scriptedGitRunner{CallCount: &gitCalls}).Run,
 		SliceExecutor:       sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
 	}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
+	if err != nil && (strings.Contains(err.Error(), "changed_paths=none") || strings.Contains(err.Error(), "live_HEAD=")) {
+		t.Fatalf("post-intent output implies uninspected Git facts: %v", err)
+	}
 	if err == nil || !strings.Contains(err.Error(), "interrupted post-intent completion transaction") || !strings.Contains(err.Error(), "rerun tao slice-complete") || !strings.Contains(err.Error(), "do not rerun the implementation agent") {
 		t.Fatalf("error = %v, want post-intent slice-complete-only recovery guidance", err)
 	}

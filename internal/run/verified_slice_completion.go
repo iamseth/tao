@@ -34,6 +34,9 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 		return err
 	}
 	defer func() { _ = release() }()
+	// Publish the locked transaction's last known view for callers' diagnostics
+	// and cleanup, without a second recovery-loading read after settlement.
+	callerDetail := request.Record.Detail()
 	if err := reloadCompletionRequest(ctx, &request); err != nil {
 		return err
 	}
@@ -41,6 +44,12 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return err
 	}
+	defer func() {
+		current := completionSlice(request.Record.Detail(), request.SliceID)
+		if current != nil && current.CommitIntent != nil {
+			*callerDetail = *request.Record.Detail()
+		}
+	}()
 	slice := completionSlice(detail, request.SliceID)
 	if slice == nil {
 		return fmt.Errorf("slice %s not found", request.SliceID)
@@ -54,6 +63,7 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 		}
 		return s.recoverVerifiedCompletion(ctx, request, *slice.CommitIntent)
 	}
+	request.Notes = strings.TrimSpace(request.Notes)
 	if err := admitVerifiedCompletion(request); err != nil {
 		return err
 	}
@@ -151,6 +161,9 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	intent := plan.SliceCommitIntent{Hash: hash, Policy: policy, StartingBranch: before.branch, StartingHead: before.head, Message: message, CreatedAt: snapshot.RecordedAt, Verification: &snapshot}
 	if err := lifetime.Check(); err != nil {
 		return err
+	}
+	if err := retainCompletionInputs(request, intent); err != nil {
+		return fmt.Errorf("retain completion recovery inputs before intent: %w", err)
 	}
 	if err := persistSliceCommitIntent(request, intent); err != nil {
 		return err

@@ -938,10 +938,20 @@ another direct driver from racing that recovery:
   notes/results inputs, or restore the recorded boundary. Tao does not claim the
   dirt as a resumed automatic run.
 - **After `commit_intent`:** do not rerun implementation or create a commit by
-  hand. Retry `tao slice-complete` with the original inputs so its deterministic
-  transaction can recover or settle the exact commit. If the replay fails while
-  staging, the error names the worktree that must change before the replay
-  can succeed; Tao does not retry or fall back.
+  hand. Copy and run the exact `tao slice-complete` command printed before the
+  diagnostic facts. It uses retained local inputs to recover or settle the exact
+  transaction without rerunning gates or the implementation agent. Recovery is
+  explicit: `tao run --continue` does not settle it automatically. If retained
+  inputs are missing, corrupt, or from a legacy transaction, Tao explains the
+  limitation instead of promising a runnable command; supply the original notes
+  and any historical verification inputs. Permanently lost legacy inputs cannot
+  be reconstructed. If replay fails while staging, the error names the worktree
+  that must change before replay can succeed; Tao does not retry or fall back.
+  Post-intent run diagnostics do not inspect live Git: omitted branch, HEAD, or
+  changed-path fields are not evidence of corruption or a clean worktree.
+  `run_aborted` events retain a bounded first-line summary; the local
+  `agent-run.log` preserves the full error and recovery instructions in framed
+  diagnostic records. Neither log nor event grants recovery authority.
 - **Changed or unsafe boundary:** a different root, branch, or HEAD, an active
   Git operation, conflicts, or ambiguous status is a refusal. Inspect the named
   paths and restore the recorded boundary before rerunning Tao.

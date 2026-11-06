@@ -100,6 +100,22 @@ func TestCompleteVerifiedCrashMatrix(t *testing.T) {
 				if before.VerificationAttempt == nil || before.Completion != nil || (before.CommitIntent == nil) != (point == "snapshot") {
 					t.Fatalf("incorrect crash boundary: %+v", before)
 				}
+				if before.CommitIntent != nil {
+					detail := reloadVerifiedCompletion(t, request).Detail()
+					if _, err := CompletionRecoveryCommand(detail, request.SliceID); err != nil {
+						t.Fatal(err)
+					}
+					files, err := retainedCompletionFiles(detail, request.SliceID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					inputs, err := LoadVerifiedCompletionInputs(files)
+					if err != nil {
+						t.Fatal(err)
+					}
+					request.Notes = inputs.Notes
+					request.CommitProposal = nil
+				}
 				// Historical-shaped files are still acceptable advisory input. They
 				// never overwrite observed results, even when they claim failure.
 				claimsFile := filepath.Join(t.TempDir(), "legacy-results.json")

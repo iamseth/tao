@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/filelock"
 	"github.com/iamseth/tao/internal/plan"
 
@@ -57,6 +58,7 @@ func TestServiceJournalsRunAbort(t *testing.T) {
 		appendFails, resolveFails bool
 	}{
 		{name: "leak", err: fmt.Errorf("wrapped: %w", ControlCheckoutLeakError{ControlRoot: strings.Repeat("x", 600) + "\nignored"}), kind: plan.RunAbortKindControlCheckoutLeak},
+		{name: "multiline controls", err: errors.New(strings.Repeat("reason ", 120) + "\nrerun tao slice-complete --notes-file 'retained notes'\n\x1b[31m\x00do not rerun agent"), kind: plan.RunAbortKindOther},
 		{name: "canceled", err: context.Canceled, kind: plan.RunAbortKindCanceled},
 		{name: "deadline", err: fmt.Errorf("wrapped: %w", context.DeadlineExceeded), kind: plan.RunAbortKindCanceled},
 		{name: "text is not authority", err: errors.New("context canceled control checkout leak"), kind: plan.RunAbortKindOther},
@@ -129,7 +131,15 @@ func TestServiceJournalsRunAbort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(data), "tao run exited ("+tc.kind+"): "+event.Message) || !strings.Contains(string(data), "diagnostic") {
+			record, ok := logrecord.Parse(strings.TrimSuffix(string(data), "\n"))
+			if !ok || record.Type != logrecord.TypeDiagnostic || record.Content != "tao run exited ("+tc.kind+"): "+tc.err.Error() || strings.Count(string(data), "\n") != 1 {
+				t.Fatalf("lost full framed error: %s", data)
+			}
+			var rendered strings.Builder
+			if err := logrecord.Render(&rendered, record); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(rendered.String(), tc.err.Error()) {
 				t.Fatalf("log: %s", data)
 			}
 		})

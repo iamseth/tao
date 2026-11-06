@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -13,8 +14,8 @@ import (
 var sliceCompleteCommand = commandMetadata{
 	name:                  "slice-complete",
 	usageLines:            []string{"slice-complete --plan-dir DIR --slice-id ID --notes-file FILE [--verification-results-file FILE] [--commit-proposal-file FILE]"},
-	completionDescription: "Verify declared gates and complete a slice",
-	long:                  "Execute declared slice gates locally before commit intent, with a fixed ten-minute timeout per command within the unchanged remaining agent-session budget (even when session timeout is disabled). Commands are not sandboxed or cryptographically attested. Optional agent results are advisory claims, never completion authority. Historical intents require their original results inputs and recover without rerunning gates. Tao validates proposals, adds trusted trailers, owns Git, and removes temporary inputs only after success. Final repository verification is unchanged.",
+	completionDescription: "Verify gates, complete a slice, or replay durable intent",
+	long:                  "Execute declared slice gates locally before commit intent, with a fixed ten-minute timeout per command within the unchanged remaining agent-session budget (even when session timeout is disabled). Commands are not sandboxed or cryptographically attested. Optional agent results are advisory claims, never completion authority. Historical intents require their original results inputs and recover without rerunning gates. New verified intents retain local-only completion inputs for explicit recovery with the existing slice-complete command, without rerunning gates or requiring the temporary files. Tao validates proposals, adds trusted trailers, owns Git, and removes caller temporary inputs only after success; retained recovery inputs survive replay. Final repository verification is unchanged.",
 	examples:              "  tao slice-complete --plan-dir /path/to/plan --slice-id 001-example --notes-file /tmp/notes.txt --verification-results-file /tmp/results.json --commit-proposal-file /tmp/proposal.json",
 	registerFlags:         registerSliceCompleteFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
@@ -79,8 +80,17 @@ func (a App) sliceComplete(ctx context.Context, args []string) error {
 		VerificationResults: inputs.VerificationResults, VerificationClaims: inputs.VerificationClaims,
 		CommitProposal: inputs.CommitProposal, Now: a.now().UTC(),
 	}); err != nil {
+		for _, slice := range record.Detail().Slices.Slices {
+			if slice.ID == sliceID && slice.CommitIntent != nil {
+				command, recoveryErr := run.CompletionRecoveryCommand(record.Detail(), sliceID)
+				if recoveryErr != nil {
+					return fmt.Errorf("%w\nExplicit completion recovery: %w", err, recoveryErr)
+				}
+				return fmt.Errorf("%w\nExplicit completion recovery (no gates rerun):\n%s", err, command)
+			}
+		}
 		return err
 	}
-	files.Remove()
+	files.RemoveForPlan(record.Detail(), sliceID)
 	return writef(a.Out, "Slice completed: %s\n", sliceID)
 }

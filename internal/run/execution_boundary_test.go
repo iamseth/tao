@@ -314,8 +314,15 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 			if spy.preparation != 0 || spy.rebase != 0 || spy.dependencies != 0 || spy.persistence != 0 {
 				t.Fatalf("terminal boundary effects = prepare:%d rebase:%d dependencies:%d persistence:%d", spy.preparation, spy.rebase, spy.dependencies, spy.persistence)
 			}
-			if tt.name == "post-intent recovery" && gitCalls != 0 {
-				t.Fatalf("post-intent Git calls = %d, want none", gitCalls)
+			if tt.name == "post-intent recovery" {
+				if gitCalls != 0 {
+					t.Fatalf("post-intent Git calls = %d, want none", gitCalls)
+				}
+				for _, unread := range []string{"live_branch=", "live_HEAD=", "baseline_HEAD=", "changed_paths=none"} {
+					if strings.Contains(err.Error(), unread) {
+						t.Fatalf("unread Git fact in refusal: %v", err)
+					}
+				}
 			}
 		})
 	}

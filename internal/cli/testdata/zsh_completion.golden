@@ -64,7 +64,7 @@ _tao() {
     'a:Approve a gated slice'
     'approve:Approve a gated slice'
     'abandon:Record an intentional terminal plan outcome'
-    'slice-complete:Verify declared gates and complete a slice'
+    'slice-complete:Verify gates, complete a slice, or replay durable intent'
     'slice-blocked:Block a slice after an exceptional stop'
     's:Show plan details and the recommended next action'
     'show:Show plan details and the recommended next action'

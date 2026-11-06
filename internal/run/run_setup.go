@@ -112,7 +112,7 @@ func (s Service) prepareRequestRunExecution(ctx context.Context, detail *plan.Pl
 			if boundary == nil {
 				return execution, fmt.Errorf("blocked restart has no selected slice")
 			}
-			return execution, interruptedSliceRunError(boundary.Diagnostics.Facts.SliceID, *boundary)
+			return execution, interruptedSliceRunErrorWithDetail(detail, boundary.Diagnostics.Facts.SliceID, *boundary)
 		}
 		if !settledRetry {
 			if slice == nil || slice.ExecutionStart == nil {
@@ -141,7 +141,7 @@ func (s Service) prepareRequestRunExecution(ctx context.Context, detail *plan.Pl
 	execution.ExecutionBoundary = boundary
 	if boundary != nil && !boundary.AllowWorkspacePreparation {
 		if !boundary.AllowAgentHandoff {
-			return execution, interruptedSliceRunError(boundary.Diagnostics.Facts.SliceID, *boundary)
+			return execution, interruptedSliceRunErrorWithDetail(detail, boundary.Diagnostics.Facts.SliceID, *boundary)
 		}
 		execution.ExecutionRoot = boundary.FixedRoot
 		execution.StartingBranch = boundary.StartingBranch
@@ -253,13 +253,22 @@ func resolveServiceExecutionRoot(ctx context.Context, detail *plan.PlanDetail, e
 }
 
 func interruptedSliceRunError(sliceID string, action ExecutionBoundaryAction) error {
+	return interruptedSliceRunErrorWithDetail(nil, sliceID, action)
+}
+
+func interruptedSliceRunErrorWithDetail(detail *plan.PlanDetail, sliceID string, action ExecutionBoundaryAction) error {
 	facts := interruptedSliceDiagnosticFacts(action.Diagnostics.Facts)
 	if action.Disposition == InterruptedSliceRefuse && action.Diagnostics.Facts.BaselineHead != "" {
 		return fmt.Errorf("slice %s cannot be restarted safely: %s (%s); --continue preserves the prior immutable boundary, while --restart requires a clean pre-intent automatic slice and a strictly newer descendant baseline", sliceID, action.Diagnostics.Reason, facts)
 	}
 	switch action.EffectiveDisposition {
 	case InterruptedSliceCompletionRecovery:
-		return fmt.Errorf("slice %s has an interrupted post-intent completion transaction: %s (%s); rerun tao slice-complete with the original notes and verification inputs; do not rerun the implementation agent or commit the automatic slice by hand", sliceID, action.Diagnostics.Reason, facts)
+		command, err := CompletionRecoveryCommand(detail, sliceID)
+		guidance := "Run this explicit recovery command (no gates or implementation agent are rerun):\n" + command
+		if err != nil {
+			guidance = fmt.Sprintf("Cannot provide a retained-input replay command: %v; rerun tao slice-complete with the original notes and any historical verification inputs; if those inputs are lost, Tao cannot reconstruct them.", err)
+		}
+		return fmt.Errorf("slice %s has an interrupted post-intent completion transaction. %s\nRecovery is explicit; do not rerun the implementation agent or commit the automatic slice by hand.\nReason: %s (%s)", sliceID, guidance, action.Diagnostics.Reason, facts)
 	case InterruptedSliceManualCompletion:
 		return fmt.Errorf("slice %s requires manual completion: %s (%s); inspect and verify the current-checkout work, then run tao slice-complete with its notes and verification inputs or restore the recorded boundary; Tao will not attribute these changes to a resumed agent", sliceID, action.Diagnostics.Reason, facts)
 	default:
@@ -270,19 +279,22 @@ func interruptedSliceRunError(sliceID string, action ExecutionBoundaryAction) er
 func interruptedSliceDiagnosticFacts(facts InterruptedSliceFacts) string {
 	fields := []string{
 		fmt.Sprintf("recorded_root=%q", facts.RecordedRoot),
-		fmt.Sprintf("live_root=%q", facts.LiveRoot),
 		fmt.Sprintf("recorded_branch=%q", facts.RecordedBranch),
-		fmt.Sprintf("live_branch=%q", facts.Branch),
 		fmt.Sprintf("recorded_HEAD=%q", facts.RecordedHead),
-		fmt.Sprintf("live_HEAD=%q", facts.Head),
-		fmt.Sprintf("baseline_branch=%q", facts.BaselineBranch),
-		fmt.Sprintf("baseline_HEAD=%q", facts.BaselineHead),
 		fmt.Sprintf("policy=%q", facts.CommitPolicy),
 		fmt.Sprintf("workspace=%q", facts.WorkspaceStrategy),
 	}
+	for _, field := range []struct{ name, value string }{
+		{"live_root", facts.LiveRoot}, {"live_branch", facts.Branch}, {"live_HEAD", facts.Head},
+		{"baseline_branch", facts.BaselineBranch}, {"baseline_HEAD", facts.BaselineHead},
+	} {
+		if field.value != "" {
+			fields = append(fields, fmt.Sprintf("%s=%q", field.name, field.value))
+		}
+	}
 	if len(facts.ChangedPaths) > 0 {
 		fields = append(fields, "changed_paths="+strings.Join(facts.ChangedPaths, ","))
-	} else {
+	} else if !facts.IntentPresent && !facts.CompletionPresent && facts.Head != "" && facts.Branch != "" {
 		fields = append(fields, "changed_paths=none")
 	}
 	return strings.Join(fields, " ")

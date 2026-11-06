@@ -201,6 +201,16 @@ func TestCompletionInputsStayRelativeToLinkedCheckoutCaller(t *testing.T) {
 	}
 }
 
+func TestSliceCompletionInputFilesPlanAwareCleanupWithoutRetainedInputs(t *testing.T) {
+	files := writeCompletionInputFiles(t, "notes", "[]")
+	files.RemoveForPlan(&plan.PlanDetail{Dir: t.TempDir()}, "missing")
+	for _, path := range []string{files.NotesFile, files.VerificationResultsFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("caller input not removed: %v", err)
+		}
+	}
+}
+
 func TestSliceCompletionInputFilesRemoveIsBestEffort(t *testing.T) {
 	t.Parallel()
 	files := writeCompletionInputFiles(t, "ok", `[]`)

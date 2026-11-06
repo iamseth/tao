@@ -50,6 +50,26 @@ func verifiedCompletionFixture(t *testing.T, policy CommitPolicy, commands ...st
 	return SliceCompletionRequest{Record: record, SliceID: "001-a", Notes: "verified completion", CommitProposal: sliceCompletionProposal(), Now: time.Now().UTC()}
 }
 
+func TestVerifiedCompletionRetainedInputBounds(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, kind := range []string{"notes", "proposal"} {
+		t.Run(kind, func(t *testing.T) {
+			request := verifiedCompletionFixture(t, CommitPolicyNone, "true")
+			if kind == "notes" {
+				request.Notes = strings.Repeat("x", int(maxCompletionNotesBytes)+1)
+			} else {
+				request.CommitProposal.What = strings.Repeat("x", int(maxCompletionNotesBytes)+1)
+			}
+			if err := (SliceCompletionService{}).CompleteVerified(context.Background(), request); err == nil {
+				t.Fatal("accepted oversized retained input")
+			}
+			if reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0].CommitIntent != nil {
+				t.Fatal("oversized input authorized intent")
+			}
+		})
+	}
+}
+
 func TestVerifiedCompletionFixtureOwnerEnvIsolation(t *testing.T) {
 	for _, initial := range []struct {
 		name    string

@@ -215,7 +215,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		return nil, err
 	}
 	if !action.AllowAgentHandoff {
-		return nil, interruptedSliceRunError(slice.ID, action)
+		return nil, interruptedSliceRunErrorWithDetail(detail, slice.ID, action)
 	}
 	if err := checkSelectedApprovalEvidence(detail); err != nil {
 		return nil, err
@@ -264,7 +264,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		}
 		resuming = true
 	default:
-		return nil, interruptedSliceRunError(slice.ID, action)
+		return nil, interruptedSliceRunErrorWithDetail(detail, slice.ID, action)
 	}
 	refreshHeader(ctx, detail, r.execution.Config)
 
@@ -275,7 +275,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		}
 	}
 	if !action.AllowAgentHandoff {
-		return nil, interruptedSliceRunError(slice.ID, action)
+		return nil, interruptedSliceRunErrorWithDetail(detail, slice.ID, action)
 	}
 
 	verb := "Running"
@@ -459,7 +459,7 @@ func (r SelectedSliceRunner) preflightTransportResume(ctx context.Context, detai
 		return plan.VerificationValidationResult{}, *action, fmt.Errorf("transport retry retained slice %s but recovery selected slice %s", sliceID, action.Diagnostics.Facts.SliceID)
 	}
 	if action.Disposition != InterruptedSliceResume || action.EffectiveDisposition != InterruptedSliceResume || action.RepairRequirement != ExecutionBoundaryRepairNone || !action.AllowAgentHandoff || action.AllowWorkspacePreparation {
-		return plan.VerificationValidationResult{}, *action, interruptedSliceRunError(sliceID, *action)
+		return plan.VerificationValidationResult{}, *action, interruptedSliceRunErrorWithDetail(detail, sliceID, *action)
 	}
 	if action.FixedRoot != executionRoot {
 		return plan.VerificationValidationResult{}, *action, fmt.Errorf("slice %s recovery root changed from %q to %q before transport retry", sliceID, executionRoot, action.FixedRoot)
@@ -523,7 +523,7 @@ func (r SelectedSliceRunner) reinspectRecoveryAction(ctx context.Context, detail
 		return ExecutionBoundaryAction{}, fmt.Errorf("slice %s recovery boundary changed before agent handoff (branch, HEAD, worktree status, or Git operation drifted)", expected.Diagnostics.Facts.SliceID)
 	}
 	if !actual.AllowAgentHandoff {
-		return ExecutionBoundaryAction{}, interruptedSliceRunError(expected.Diagnostics.Facts.SliceID, *actual)
+		return ExecutionBoundaryAction{}, interruptedSliceRunErrorWithDetail(detail, expected.Diagnostics.Facts.SliceID, *actual)
 	}
 	return *actual, nil
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/iamseth/tao/internal/agentinput"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/run"
 
 	"github.com/iamseth/tao/internal/testenv"
 )
@@ -195,6 +196,71 @@ func TestSliceCompleteFailureRepairAndRecovery(t *testing.T) {
 	}
 }
 
+func TestSliceCompleteLostTemporaryInputs(t *testing.T) {
+	testenv.SkipIfShort(t)
+	record, args := newVerifiedCLICompletion(t, "slice", "true")
+	root := record.Detail().Slices.Slices[0].ExecutionRoot
+	writeCLICommitFile(t, root, "work.go", "package work\n")
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
+	app.CommandRunner = func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+		if name == "git" && strings.Contains(strings.Join(argv, " "), " commit ") {
+			return errors.New("injected post-intent failure")
+		}
+		return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
+	}
+	err := app.Run(context.Background(), args)
+	if err == nil || reloadCLICompletion(t, record).Slices.Slices[0].CommitIntent == nil {
+		t.Fatalf("expected durable interruption: %v", err)
+	}
+	for _, path := range []string{args[6], args[8]} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if retry := app.Run(context.Background(), args); retry == nil || !strings.Contains(retry.Error(), "read notes file") {
+		t.Fatalf("expected lost-input failure: %v", retry)
+	}
+	if !strings.Contains(err.Error(), "tao slice-complete --plan-dir") {
+		t.Fatalf("no durable replay command after input loss: %v", err)
+	}
+	detail := reloadCLICompletion(t, record)
+	command, recoveryErr := run.CompletionRecoveryCommand(detail, "001-a")
+	if recoveryErr != nil {
+		t.Fatal(recoveryErr)
+	}
+	// Simple fixture paths allow extracting the single quoted retained notes argument.
+	parts := strings.Split(command, " --notes-file ")
+	notesPath := strings.Trim(parts[1], "'")
+	args = append(args[:6:6], notesPath)
+	app.CommandRunner = func(ctx context.Context, cwd, name string, argv []string, stdout, stderr io.Writer) error {
+		if name == "sh" {
+			t.Fatal("replay reran gates")
+		}
+		return commandrunner.DefaultLocal(ctx, cwd, name, argv, stdout, stderr)
+	}
+	for range 2 {
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(notesPath); err != nil {
+			t.Fatal("replay removed retained notes", err)
+		}
+	}
+	completed := reloadCLICompletion(t, record)
+	count := 0
+	for _, event := range completed.Events {
+		if event.Type == plan.EventTypeSliceCompleted {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("completion events = %d", count)
+	}
+	if completed.Slices.Slices[0].CommitIntent.Hash != detail.Slices.Slices[0].CommitIntent.Hash {
+		t.Fatal("frozen evidence changed")
+	}
+}
+
 func TestSliceCompleteMechanicalCorrection(t *testing.T) {
 	testenv.SkipIfShort(t)
 	record, args := newVerifiedCLICompletion(t, "none", "go test pkg/example_test.go")
@@ -314,7 +380,7 @@ func TestSliceCompleteHelpAndCompletion(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"slice-complete", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"[--verification-results-file FILE]", "ten-minute", "unchanged remaining agent-session", "not sandboxed", "Final repository verification is unchanged"} {
+	for _, want := range []string{"[--verification-results-file FILE]", "ten-minute", "unchanged remaining agent-session", "not sandboxed", "local-only completion inputs", "retained recovery inputs survive replay", "Final repository verification is unchanged"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help missing %q", want)
 		}
