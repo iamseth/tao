@@ -19,11 +19,11 @@ Skipped-source warnings:
   - delta [repo-d]: skipped plan store
 
 ## Repository-qualified patterns
-- `lint_test_files`: 1 — repository evidence: alpha [repo-a]
-- `test_failure`: 2 — repository evidence: alpha [repo-a]
-- `build_failure`: 3 — repository evidence: alpha [repo-a]
-- `other`: 4 — repository evidence: alpha [repo-a]
-- `invalid_verification_command`: 5 — repository evidence: alpha [repo-a]
+- `contract_conflict`: 1 — repository evidence: alpha [repo-a]
+- `verification_environment`: 2 — repository evidence: alpha [repo-a]
+- `out_of_scope_gate_failure`: 3 — repository evidence: alpha [repo-a]
+- `lint_test_files`: 4 — repository evidence: alpha [repo-a]
+- `test_failure`: 5 — repository evidence: alpha [repo-a]
 
 ## Rework loops
 - `alpha [repo-a]/rework-1`: 3 rounds — stopped: same finding repeated; attempt cap reached

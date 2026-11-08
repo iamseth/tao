@@ -220,6 +220,7 @@ func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
 	t.Parallel()
 	for _, event := range []Event{
 		{Type: EventTypeSliceBlocked, Reason: "legacy prose"},
+		{Type: EventTypeSliceBlocked, BlockerCategory: "contract_conflict"},
 		{Type: EventTypeSliceBlocked, Command: "go test ./...", Paths: []string{"a.go", "b.go"}, BlockerClassification: BlockerClassificationPlanOwned, HeadSHA: "head", Fingerprint: "fingerprint"},
 	} {
 		data, err := json.Marshal(event)
@@ -233,6 +234,9 @@ func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
 		if !reflect.DeepEqual(got, event) {
 			t.Fatalf("round trip = %+v, want %+v", got, event)
 		}
+		if strings.Contains(string(data), `"blocker_category"`) != (event.BlockerCategory != "") {
+			t.Fatalf("unexpected category presence in %s", data)
+		}
 		for _, field := range []string{`"paths"`, `"blocker_classification"`} {
 			if strings.Contains(string(data), field) != (event.BlockerClassification != "") {
 				t.Fatalf("unexpected field %s presence in %s", field, data)
@@ -243,7 +247,7 @@ func TestEventBlockerEvidenceJSONCompatibility(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"type":"slice_blocked","reason":"old blocker"}`), &legacy); err != nil {
 		t.Fatal(err)
 	}
-	if legacy.Paths != nil || legacy.BlockerClassification != "" {
+	if legacy.Paths != nil || legacy.BlockerClassification != "" || legacy.BlockerCategory != "" {
 		t.Fatalf("legacy event gained evidence: %+v", legacy)
 	}
 }

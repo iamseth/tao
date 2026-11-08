@@ -281,7 +281,7 @@ func representativeInsightsReport() insights.Report {
 			},
 		},
 	}
-	for i, reason := range []string{"lint_test_files", "test_failure", "build_failure", "other", "invalid_verification_command", "timeout"} {
+	for i, reason := range []string{"contract_conflict", "verification_environment", "out_of_scope_gate_failure", "lint_test_files", "test_failure", "build_failure", "other", "invalid_verification_command", "timeout"} {
 		report.BlockedReasons = append(report.BlockedReasons, insights.ReasonBucket{
 			Reason: reason, Count: i + 1, Exemplars: []string{fmt.Sprintf("example %d", i+1), "second example"},
 			QualifiedExemplars: []insights.EvidenceExemplar{{RepositoryID: "repo-a", RepositoryName: "alpha", Value: fmt.Sprintf("example %d", i+1)}},
@@ -333,7 +333,7 @@ func representativeScorecard() insights.Scorecard {
 					},
 				},
 				Reliability: insights.ReliabilityOutcomes{
-					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}, {Label: "blocked_lint_test_files", Count: 2}, {Label: "blocked_other", Count: 3}},
+					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}, {Label: "blocked_lint_test_files", Count: 2}, {Label: "blocked_other", Count: 3}, {Label: "blocked_contract_conflict", Count: 1}, {Label: "blocked_invalid_verification_command", Count: 1}, {Label: "blocked_out_of_scope_gate_failure", Count: 1}, {Label: "blocked_verification_environment", Count: 1}},
 					Quality:        []insights.LabelCount{{Label: "verification_failed", Count: 1}},
 				},
 			},
@@ -562,6 +562,7 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 	now := time.Now()
 	events := `{"type":"slice_blocked","command":"go build ./...","paths":["private.go"],"reason":"external service unreachable"}` + "\n" +
 		`{"type":"slice_blocked","reason":"neutral dependency precheck"}` + "\n" +
+		structuredBlockerHistory() +
 		`{"type":"session_timeout"}` + "\n" +
 		`{"type":"agent_metrics","metrics":{"session_id":"one","output_tokens":42,"cost":1.5}}` + "\n"
 	if err := os.WriteFile(filepath.Join(planDir, "events.jsonl"), []byte(events), 0o600); err != nil {
@@ -600,6 +601,7 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 		"All-repository insights (3 registered; 1 scanned, 1 empty, 1 unreadable, 0 skipped)",
 		"alpha [repo-a]: scanned", "middle [repo-m]: empty", "zeta [repo-z]: unreadable",
 		"Skipped-source warnings:", "build_failure: 1", "other: 1", "alpha [repo-a]: external service unreachable",
+		"contract_conflict: 1", "invalid_verification_command: 1", "out_of_scope_gate_failure: 1", "verification_environment: 1",
 		"Structured event counters:", "session_timeout: 1", "Global session telemetry:",
 		"output tokens (1 sessions): p50=42", "cutoff: plan activity within the last 30 days",
 		"missing-tool: 1 occurrences across 1 plans / 1 repositories",
@@ -693,10 +695,64 @@ func TestInsightsAllReposEmptyHistoryAndDigestCap(t *testing.T) {
 	}
 }
 
+func structuredBlockerHistory() string {
+	return `{"type":"slice_blocked","blocker_category":"contract_conflict","command":"make verify","reason":"service is not unreachable\u001b[31m\n"}` + "\n" +
+		`{"type":"slice_blocked","blocker_category":"invalid_verification_command","command":"pnpm test","reason":"service is not unreachable"}` + "\n" +
+		`{"type":"slice_blocked","blocker_category":"out_of_scope_gate_failure","command":"uv run pytest","reason":"service is not unreachable"}` + "\n" +
+		`{"type":"slice_blocked","blocker_category":"verification_environment","command":"cd X && go test ./...","reason":"service is not unreachable"}` + "\n" +
+		`{"type":"unrelated","blocker_category":"contract_conflict"}` + "\n"
+}
+
+func TestInsightsStructuredBlockerRenderingAgreement(t *testing.T) {
+	dir := t.TempDir()
+	history := `{"type":"plan_created","agent":"pi","timestamp":"2026-01-01T00:00:00Z"}` + "\n" + structuredBlockerHistory() + `{"type":"slice_blocked","reason":"service is not unreachable","blocker_category":"private-unknown"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(history), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := fakeRepository{summaries: []plan.PlanSummary{{ID: "one", Dir: dir, Status: plan.StatusCompleted}}}
+	current, err := insights.Aggregate(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := taodata.NewRegistry(t.TempDir())
+	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo-a", Name: "alpha", Root: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the same CLI collection path for both repository scopes and all formats.
+	for _, all := range []bool{false, true} {
+		for _, format := range []string{"", "--digest", "--scorecard"} {
+			var out bytes.Buffer
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})
+			t.Setenv("TAO_DATA_HOME", registry.DataHome)
+			args := []string{"insights"}
+			if all {
+				args = append(args, "--all-repos")
+			}
+			if format != "" {
+				args = append(args, format)
+			}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			for _, bucket := range current.BlockedReasons {
+				if bucket.Count != 1 || !strings.Contains(out.String(), bucket.Reason) {
+					t.Fatalf("%v: missing category %+v: %s", args, bucket, out.String())
+				}
+			}
+			for _, private := range []string{"private-unknown", "make verify", "pnpm test", "uv run pytest", "cd X", "\x1b"} {
+				if strings.Contains(out.String(), private) {
+					t.Fatalf("%v leaked %q", args, private)
+				}
+			}
+		}
+	}
+}
+
 func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing.T) {
 	dir := t.TempDir()
 	events := `{"type":"slice_blocked","command":"golangci-lint run ./...","paths":["private_test.go"],"reason":"external service unreachable"}` + "\n" +
 		`{"type":"slice_blocked","reason":"pnpm dependency precheck"}` + "\n" +
+		structuredBlockerHistory() +
 		`{"type":"session_timeout"}` + "\n" +
 		`{"type":"agent_metrics","metrics":{"session_id":"one","output_tokens":42,"cost":1.5}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600); err != nil {
@@ -710,7 +766,7 @@ func TestInsightsCommandAggregatesHistoryAndDigestHandlesEmptyHistory(t *testing
 	if err := app.Run(context.Background(), []string{"insights"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"lint_test_files: 1", "other: 1", "session_timeout: 1", "output tokens (1 sessions): p50=42"} {
+	for _, want := range []string{"lint_test_files: 1", "other: 1", "session_timeout: 1", "output tokens (1 sessions): p50=42", "contract_conflict: 1", "invalid_verification_command: 1", "out_of_scope_gate_failure: 1", "verification_environment: 1"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("command output missing %q:\n%s", want, out.String())
 		}

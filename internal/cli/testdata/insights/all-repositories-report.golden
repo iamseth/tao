@@ -17,18 +17,24 @@ Skipped-source warnings:
   - delta [repo-d]: skipped plan store
 
 Repository-qualified failure patterns:
-  lint_test_files: 1
+  contract_conflict: 1
     - alpha [repo-a]: example 1
-  test_failure: 2
+  verification_environment: 2
     - alpha [repo-a]: example 2
-  build_failure: 3
+  out_of_scope_gate_failure: 3
     - alpha [repo-a]: example 3
-  other: 4
+  lint_test_files: 4
     - alpha [repo-a]: example 4
-  invalid_verification_command: 5
+  test_failure: 5
     - alpha [repo-a]: example 5
-  timeout: 6
+  build_failure: 6
     - alpha [repo-a]: example 6
+  other: 7
+    - alpha [repo-a]: example 7
+  invalid_verification_command: 8
+    - alpha [repo-a]: example 8
+  timeout: 9
+    - alpha [repo-a]: example 9
 
 Repository-qualified rework loops:
   alpha [repo-a]/rework-1: 3 rounds

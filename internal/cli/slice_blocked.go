@@ -17,16 +17,17 @@ import (
 	"github.com/iamseth/tao/internal/run"
 )
 
-const sliceBlockedUsage = "slice-blocked --plan-dir DIR --slice-id ID --reason-file FILE [--resume-note-file FILE] [--gate-command COMMAND --failing-path PATH ...] [--contract-conflict] [--invalid-command COMMAND --invalid-reason REASON [--corrected-command COMMAND]]"
+const sliceBlockedUsage = "slice-blocked --plan-dir DIR --slice-id ID --reason-file FILE [--resume-note-file FILE] [--gate-command COMMAND --failing-path PATH ...] [--contract-conflict] [--category CATEGORY] [--invalid-command COMMAND --invalid-reason REASON [--corrected-command COMMAND]]"
 
 var sliceBlockedCommand = commandMetadata{
 	name:                  "slice-blocked",
 	usageLines:            []string{sliceBlockedUsage},
 	completionDescription: "Block a slice after an exceptional stop",
-	long:                  "Record an exceptional agent stop for a Tao plan slice. Pair --gate-command with repeatable --failing-path (up to 64 repository-relative paths) to record a failing gate; Tao verifies plan ownership from Git and fingerprints the slice's recorded execution worktree when available. Optional invalid-command evidence records a command that failed before tests loaded and a mechanically equivalent correction when available. Both evidence groups may be supplied together. In-scope gate failures must be repaired in the active session unless --contract-conflict records that the slice contract cannot be satisfied.",
+	long:                  "Record an exceptional agent stop for a Tao plan slice. Pair --gate-command with repeatable --failing-path (up to 64 repository-relative paths) to record a failing gate; Tao verifies plan ownership from Git and fingerprints the slice's recorded execution worktree when available. Optional invalid-command evidence records a command that failed before tests loaded and a mechanically equivalent correction when available. Both evidence groups may be supplied together. Optional --category is diagnostic only: contract_conflict, invalid_verification_command, verification_environment, or out_of_scope_gate_failure. Contract-conflict takes precedence over invalid-command evidence; explicit categories must agree with derived categories. In-scope gate failures must be repaired in the active session unless --contract-conflict records that the slice contract cannot be satisfied.",
 	examples:              "  tao slice-blocked --plan-dir /path/to/plan --slice-id 001-example --reason-file /tmp/reason.txt\n  tao slice-blocked --plan-dir /path/to/plan --slice-id 001-example --reason-file /tmp/reason.txt --invalid-command 'go test ./missing' --invalid-reason 'package path does not exist' --corrected-command 'go test ./internal/cli'\n  tao slice-blocked --plan-dir /path/to/plan --slice-id 002-example --reason-file /tmp/reason.txt --gate-command 'go test ./...' --failing-path internal/cli/example.go",
 	registerFlags:         registerSliceBlockedFlags,
 	completion: completionContext{flagValues: map[string]completionFlagValue{
+		"category":          {kind: completionValueText, label: "category"},
 		"corrected-command": {kind: completionValueText, label: "command"},
 		"gate-command":      {kind: completionValueText, label: "command"},
 		"failing-path":      {kind: completionValuePath, label: "path"},
@@ -47,6 +48,7 @@ func registerSliceBlockedFlags(fs *flag.FlagSet) {
 	fs.String("slice-id", "", "slice id to block")
 	fs.String("reason-file", "", "file containing the blocker reason")
 	fs.String("resume-note-file", "", "optional private file containing untrusted advisory continuation context")
+	fs.String("category", "", "diagnostic blocker category: contract_conflict, invalid_verification_command, verification_environment, out_of_scope_gate_failure")
 	fs.String("gate-command", "", "failing verification gate command")
 	fs.Bool("contract-conflict", false, "record the blocker even though every failing path is in slice scope because the slice contract cannot be satisfied")
 	fs.Var(new(stringListFlag), "failing-path", "repository-relative failing path (repeatable)")
@@ -192,6 +194,26 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 		return err
 	}
 
+	category := ""
+	if flagBoolValue(fs, "contract-conflict") {
+		category = "contract_conflict"
+	} else if evidence.provided {
+		category = "invalid_verification_command"
+	}
+	if flagWasProvided(fs, "category") {
+		explicit := flagStringValue(fs, "category")
+		if _, err := agentinput.BoundedText(explicit, "blocker category"); err != nil {
+			return err
+		}
+		if !plan.IsKnownBlockerCategory(explicit) {
+			return errors.New("--category must be a known blocker category")
+		}
+		if category != "" && explicit != category {
+			return errors.New("--category contradicts derived blocker category")
+		}
+		category = explicit
+	}
+
 	repository := a.repository(filepath.Dir(planDir))
 	record, err := repository.ResolvePlanRecord(ctx, planDir)
 	if err != nil {
@@ -215,6 +237,12 @@ func (a App) sliceBlocked(ctx context.Context, args []string) error {
 				}
 			}
 		}
+	}
+	if category != "" && gateEvidence == nil {
+		gateEvidence = &plan.SliceBlockedEvidence{}
+	}
+	if gateEvidence != nil {
+		gateEvidence.BlockerCategory = category
 		err = record.BlockSliceWithEvidence(sliceID, reason, gateEvidence, now)
 	} else {
 		err = record.BlockSlice(sliceID, reason, now)

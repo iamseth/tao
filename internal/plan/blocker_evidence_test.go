@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -8,6 +10,70 @@ import (
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+func TestBlockerCategoryContract(t *testing.T) {
+	for _, category := range []string{"", "contract_conflict", "invalid_verification_command", "verification_environment", "out_of_scope_gate_failure", "unknown", " contract_conflict", "CONTRACT_CONFLICT"} {
+		t.Run(category, func(t *testing.T) {
+			known := category == "contract_conflict" || category == "invalid_verification_command" || category == "verification_environment" || category == "out_of_scope_gate_failure"
+			if IsKnownBlockerCategory(category) != known {
+				t.Fatal("incorrect exact membership")
+			}
+			detail := startSliceDetail(t.TempDir())
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, _, err := markSliceBlocked(detail, "001-a", "blocked", &SliceBlockedEvidence{BlockerCategory: category}, editTime())
+			if category != "" && !known {
+				if err == nil {
+					t.Fatal("invalid category accepted")
+				}
+				after, marshalErr := json.Marshal(detail)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if !bytes.Equal(before, after) {
+					t.Fatal("invalid evidence mutated detail")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.BlockerCategory != category || event.BlockerClassification != "" {
+				t.Fatalf("event = %+v", event)
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(data, []byte(`"blocker_category"`)) != known {
+				t.Fatalf("omit-zero contract: %s", data)
+			}
+			var decoded Event
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(event, decoded) {
+				t.Fatal("event did not roundtrip")
+			}
+			for _, evidence := range []SliceBlockedEvidence{
+				{PlanOwned: true}, {PlanOwned: true, HeadSHA: "head"}, {PlanOwned: true, WorktreeFingerprint: "fingerprint"},
+				{PlanOwned: true, HeadSHA: "head", WorktreeFingerprint: "fingerprint"},
+			} {
+				evidence.BlockerCategory = category
+				event, _, err := markSliceBlocked(detail, "001-a", "blocked", &evidence, editTime())
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantOwned := evidence.HeadSHA != "" && evidence.WorktreeFingerprint != ""
+				if (event.BlockerClassification == BlockerClassificationPlanOwned) != wantOwned {
+					t.Fatal("category changed ownership requirements")
+				}
+			}
+		})
+	}
+}
 
 func TestLatestPlanOwnedBlocker(t *testing.T) {
 	t.Parallel()
@@ -149,7 +215,7 @@ func TestBlockSliceWithEvidencePersists(t *testing.T) {
 	dir := t.TempDir()
 	detail := startSliceDetail(dir)
 	writeStartSliceArtifacts(t, dir, detail)
-	evidence := &SliceBlockedEvidence{GateCommand: "go test ./internal/plan", FailingPaths: []string{` ./internal\plan/a.go `}, PlanOwned: true, HeadSHA: "head", WorktreeFingerprint: "fingerprint"}
+	evidence := &SliceBlockedEvidence{BlockerCategory: "verification_environment", GateCommand: "go test ./internal/plan", FailingPaths: []string{` ./internal\plan/a.go `}, PlanOwned: true, HeadSHA: "head", WorktreeFingerprint: "fingerprint"}
 	if err := testRecord(dir, detail).BlockSliceWithEvidence("001-a", " lint failed ", evidence, editTime()); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +224,7 @@ func TestBlockSliceWithEvidencePersists(t *testing.T) {
 		t.Fatalf("read events: %v, %v", err, warnings)
 	}
 	got := LatestPlanOwnedBlocker(&PlanDetail{Events: events}, "001-a")
-	if got == nil || got.Command != evidence.GateCommand || got.HeadSHA != evidence.HeadSHA || got.Fingerprint != evidence.WorktreeFingerprint || !reflect.DeepEqual(got.Paths, []string{"internal/plan/a.go"}) {
+	if got == nil || got.BlockerCategory != evidence.BlockerCategory || got.Command != evidence.GateCommand || got.HeadSHA != evidence.HeadSHA || got.Fingerprint != evidence.WorktreeFingerprint || !reflect.DeepEqual(got.Paths, []string{"internal/plan/a.go"}) {
 		t.Fatalf("persisted evidence = %+v", got)
 	}
 	if note := readSlicesFile(t, dir).Slices[0].BlockerNote; note != "lint failed" {

@@ -465,6 +465,11 @@ func TestBlockedEvidenceSharedProjection(t *testing.T) {
 		{Type: "slice_blocked", Reason: strings.Repeat("novel ", 500)},
 		{Type: "slice_blocked", Reason: strings.Repeat("novel ", 500)},
 	}
+	for _, category := range []string{"contract_conflict", "invalid_verification_command", "verification_environment", "out_of_scope_gate_failure"} {
+		events = append(events, plan.Event{Type: "slice_blocked", BlockerCategory: category, Command: "make verify", Reason: "service is not unreachable\n\x1b[31m"})
+	}
+	// A diagnostic on an unrelated event must not create blocker evidence.
+	events = append(events, plan.Event{Type: "unrelated", BlockerCategory: "contract_conflict"})
 	var content strings.Builder
 	data := planData{}
 	for i, event := range events {
@@ -503,7 +508,20 @@ func TestBlockedEvidenceSharedProjection(t *testing.T) {
 			t.Fatalf("inconsistent bucket: %+v / %+v", bucket, observation.reliability)
 		}
 	}
-	if total != len(events) || observation.reliability["blocked_other"] != 4 {
+	wantCounts := map[string]int{"other": 4, "dependency": 1, "lint_test_files": 1, "test_failure": 1, "contract_conflict": 1, "invalid_verification_command": 1, "verification_environment": 1, "out_of_scope_gate_failure": 1}
+	gotCounts := make(map[string]int)
+	var order []string
+	for _, bucket := range first.BlockedReasons {
+		gotCounts[bucket.Reason] = bucket.Count
+		order = append(order, bucket.Reason)
+	}
+	if !reflect.DeepEqual(order, []string{"other", "contract_conflict", "dependency", "invalid_verification_command", "lint_test_files", "out_of_scope_gate_failure", "test_failure", "verification_environment"}) {
+		t.Fatalf("category ordering: %v", order)
+	}
+	if !reflect.DeepEqual(gotCounts, wantCounts) {
+		t.Fatalf("categories: %+v", gotCounts)
+	}
+	if total != 11 || observation.reliability["blocked_other"] != 4 {
 		t.Fatalf("counts: %d / %+v", total, observation.reliability)
 	}
 	encoded, err := json.Marshal(first)

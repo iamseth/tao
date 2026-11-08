@@ -4,7 +4,54 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestBlockedEventCategoryPrecedence(t *testing.T) {
+	categories := []string{"contract_conflict", "invalid_verification_command", "verification_environment", "out_of_scope_gate_failure"}
+	for _, command := range []string{"make verify", "pnpm test", "uv run pytest", "cd X && go test ./...", "go test ./...", "golangci-lint run ./...", "go build ./..."} {
+		for _, reason := range []string{"service is not unreachable", "dependency missing"} {
+			event := plan.Event{Type: "slice_blocked", Command: command, Paths: []string{"private_test.go"}, Reason: reason}
+			legacy := blockedEvent(event)
+			wantLegacy := "other"
+			if reason == "dependency missing" {
+				wantLegacy = "dependency"
+			}
+			switch command {
+			case "go test ./...":
+				wantLegacy = "test_test_files"
+			case "golangci-lint run ./...":
+				wantLegacy = "lint_test_files"
+			case "go build ./...":
+				wantLegacy = "build_test_files"
+			}
+			if legacy.category != wantLegacy {
+				t.Fatalf("legacy changed: %+v, want %s", legacy, wantLegacy)
+			}
+			for _, category := range categories {
+				event.BlockerCategory = category
+				got := blockedEvent(event)
+				if got.category != category || got.exemplar != legacy.exemplar {
+					t.Fatalf("%q / %q / %q: %+v", command, reason, category, got)
+				}
+			}
+			for _, category := range []string{"", "unknown", strings.Repeat("x", 10000), "contract_conflict\n", "contract_conflict\x00", "CONTRACT_CONFLICT", " contract_conflict"} {
+				event.BlockerCategory = category
+				if got := blockedEvent(event); got != legacy {
+					t.Fatalf("invalid category changed fallback: %+v", got)
+				}
+			}
+		}
+	}
+	counts := make(map[string]int)
+	for i := range 1000 {
+		counts[blockedEvent(plan.Event{BlockerCategory: fmt.Sprintf("private-%d", i)}).category]++
+	}
+	if len(counts) != 1 || counts["other"] != 1000 {
+		t.Fatalf("unbounded categories: %+v", counts)
+	}
+}
 
 func TestBlockedClassification(t *testing.T) {
 	tests := []struct {

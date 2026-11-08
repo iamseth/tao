@@ -1005,6 +1005,7 @@ const BlockerClassificationPlanOwned = "plan_owned"
 // SliceBlockedEvidence carries caller-collected verification evidence. Git-based
 // ownership must be established by the caller, not inferred from blocker prose.
 type SliceBlockedEvidence struct {
+	BlockerCategory     string
 	GateCommand         string
 	FailingPaths        []string
 	PlanOwned           bool
@@ -1038,6 +1039,7 @@ type Event struct {
 	FinalizationFailure          *FinalizationFailure             `json:"finalization_failure,omitempty"`
 	Command                      string                           `json:"command,omitempty"`
 	Paths                        []string                         `json:"paths,omitempty"`
+	BlockerCategory              string                           `json:"blocker_category,omitempty"`
 	BlockerClassification        string                           `json:"blocker_classification,omitempty"`
 	HeadSHA                      string                           `json:"head_sha,omitempty"`
 	ClaimedResult                string                           `json:"claimed_result,omitempty"`

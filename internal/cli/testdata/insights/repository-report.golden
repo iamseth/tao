@@ -1,23 +1,32 @@
 Repository insights (9 plans scanned, 2 skipped)
 
 Failure patterns:
-  lint_test_files: 1
+  contract_conflict: 1
     - example 1
     - second example
-  test_failure: 2
+  verification_environment: 2
     - example 2
     - second example
-  build_failure: 3
+  out_of_scope_gate_failure: 3
     - example 3
     - second example
-  other: 4
+  lint_test_files: 4
     - example 4
     - second example
-  invalid_verification_command: 5
+  test_failure: 5
     - example 5
     - second example
-  timeout: 6
+  build_failure: 6
     - example 6
+    - second example
+  other: 7
+    - example 7
+    - second example
+  invalid_verification_command: 8
+    - example 8
+    - second example
+  timeout: 9
+    - example 9
     - second example
 
 Rework-loop plans:

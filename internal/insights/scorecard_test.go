@@ -198,7 +198,7 @@ func TestScorecardPartialHistoryAndHistogramBounds(t *testing.T) {
 		{Type: "plan_reopened"},
 	}
 	for i := 0; i < 100; i++ {
-		consumeEvent(&data, plan.Event{Type: "slice_blocked", Reason: fmt.Sprintf("reason-%d", i)}, i)
+		consumeEvent(&data, plan.Event{Type: "slice_blocked", Reason: fmt.Sprintf("reason-%d", i), BlockerCategory: fmt.Sprintf("private-category-%d", i)}, i)
 		data.lifecycle = append(data.lifecycle, plan.Event{Type: "finalization_failed", FinalizationFailure: &plan.FinalizationFailure{Category: fmt.Sprintf("category-%d", i)}})
 	}
 	got := observePlan(sourceIdentity{}, plan.PlanSummary{Reviewed: true, ReviewVerdict: "approve"}, data, now)
@@ -353,6 +353,23 @@ func TestScorecardMissingMeasurementsCannotQualifyInversions(t *testing.T) {
 		if measured == scorecardMinimumSamples && (len(inversions) != 1 || inversions[0].Metric != "median_cost_matured_completed") {
 			t.Fatalf("measured zero costs did not qualify inversion: %+v", inversions)
 		}
+	}
+}
+
+func TestStructuredBlockerReliability(t *testing.T) {
+	data := planData{}
+	for i, category := range []string{"verification_environment", "out_of_scope_gate_failure", "invalid_verification_command", "contract_conflict"} {
+		consumeEvent(&data, plan.Event{Type: "slice_blocked", BlockerCategory: category, Reason: "no dependency missing", Command: "pnpm test"}, i)
+	}
+	consumeEvent(&data, plan.Event{Type: "plan_created", BlockerCategory: "contract_conflict"}, 5)
+	consumeEvent(&data, plan.Event{Type: "final_verification", Result: "failed", FailureKind: plan.FinalVerificationFailureKindCode}, 6)
+	observation := observePlan(sourceIdentity{}, plan.PlanSummary{}, data, time.Now())
+	observation.treatment = NormalizePlannerLabel("pi")
+	observation.matured = true
+	reliability := buildScorecard([]planObservation{observation}).Cohorts[0].Outcomes.Reliability
+	want := []LabelCount{{Label: "blocked_contract_conflict", Count: 1}, {Label: "blocked_invalid_verification_command", Count: 1}, {Label: "blocked_out_of_scope_gate_failure", Count: 1}, {Label: "blocked_verification_environment", Count: 1}}
+	if !reflect.DeepEqual(reliability.Infrastructure, want) || !reflect.DeepEqual(reliability.Quality, []LabelCount{{Label: "final_verification_code", Count: 1}}) {
+		t.Fatalf("reliability = %+v", reliability)
 	}
 }
 

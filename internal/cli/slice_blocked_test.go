@@ -26,7 +26,7 @@ import (
 
 func TestSliceBlockedScopeRefusal(t *testing.T) {
 	testenv.SkipIfShort(t)
-	for _, mode := range []string{"owned", "expected unverified", "mixed", "contract conflict", "no evidence"} {
+	for _, mode := range []string{"owned", "expected unverified", "category cannot bypass", "mixed", "contract conflict", "no evidence"} {
 		t.Run(mode, func(t *testing.T) {
 			home, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
@@ -60,7 +60,7 @@ func TestSliceBlockedScopeRefusal(t *testing.T) {
 			}
 			app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
 			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "waiting")}
-			refusal := mode == "owned" || mode == "expected unverified"
+			refusal := mode == "owned" || mode == "expected unverified" || mode == "category cannot bypass"
 			// Seed an actual resume cache through the unchanged evidence-free flow.
 			if refusal {
 				if err := app.Run(context.Background(), append(append([]string{}, args...), "--resume-note-file", writeSliceBlockedReason(t, "last action: inspect"))); err != nil {
@@ -101,7 +101,12 @@ func TestSliceBlockedScopeRefusal(t *testing.T) {
 			if mode == "contract conflict" {
 				args = append(args, "--contract-conflict")
 			}
-			args = append(args, "--invalid-command", "go test ./missing", "--invalid-reason", "missing package", "--resume-note-file", writeSliceBlockedReason(t, "replacement"))
+			if mode == "category cannot bypass" {
+				args = append(args, "--category", "contract_conflict")
+			} else {
+				args = append(args, "--invalid-command", "go test ./missing", "--invalid-reason", "missing package")
+			}
+			args = append(args, "--resume-note-file", writeSliceBlockedReason(t, "replacement"))
 			err = app.Run(context.Background(), args)
 			if refusal {
 				if err == nil || !strings.Contains(err.Error(), "owned.go") || !strings.Contains(err.Error(), "tao slice-complete") || !strings.Contains(err.Error(), "--contract-conflict") {
@@ -203,7 +208,7 @@ func TestSliceBlockedGateEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			detail = resolveSliceBlockedDetail(t, fixture.dir)
-			event := requireSliceBlockedEvent(t, detail.Events, "001-a")
+			event := requireSliceBlockedEvent(t, detail.Events)
 			if event.Command != "go test ./..." || !reflect.DeepEqual(event.Paths, wantPaths) {
 				t.Fatalf("gate evidence = %#v", event)
 			}
@@ -277,7 +282,7 @@ func TestSliceBlockedNonASCIIPathRefusesUnchangedContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocked := resolveSliceBlockedDetail(t, fixture.dir)
-	event := requireSliceBlockedEvent(t, blocked.Events, "001-a")
+	event := requireSliceBlockedEvent(t, blocked.Events)
 	if event.BlockerClassification != plan.BlockerClassificationPlanOwned || !reflect.DeepEqual(event.Paths, []string{path}) || event.Fingerprint == "" {
 		t.Errorf("non-ASCII ownership evidence = %#v", event)
 	}
@@ -451,7 +456,7 @@ func TestSliceBlockedCommandBlocksCurrentSlice(t *testing.T) {
 	if slice.Status != plan.StatusBlocked || slice.BlockerNote != "dependency service is unavailable" {
 		t.Fatalf("blocked slice = %#v", slice)
 	}
-	event := requireSliceBlockedEvent(t, detail.Events, "001-a")
+	event := requireSliceBlockedEvent(t, detail.Events)
 	if event.Reason != slice.BlockerNote || event.Timestamp != blockedAt {
 		t.Fatalf("slice_blocked event = %#v", event)
 	}
@@ -508,6 +513,89 @@ func TestSliceBlockedCommandRepeatIsIdempotent(t *testing.T) {
 	}
 	if got := countSliceBlockedEvents(detail.Events, plan.EventTypeVerificationCommandInvalid, "001-a"); got != 1 {
 		t.Fatalf("verification_command_invalid event count = %d, want 1", got)
+	}
+}
+
+func TestSliceBlockedCategories(t *testing.T) {
+	for _, category := range []string{"contract_conflict", "invalid_verification_command", "verification_environment", "out_of_scope_gate_failure"} {
+		t.Run(category, func(t *testing.T) {
+			fixture := newStartedSliceBlockedFixture(t)
+			app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+			args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "blocked"), "--category", category}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			event := requireSliceBlockedEvent(t, resolveSliceBlockedDetail(t, fixture.dir).Events)
+			if event.BlockerCategory != category || event.BlockerClassification != "" || event.Command != "" || len(event.Paths) != 0 || event.HeadSHA != "" || event.Fingerprint != "" {
+				t.Fatalf("category-only event = %+v", event)
+			}
+			args[len(args)-1] = "verification_environment"
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			after := resolveSliceBlockedDetail(t, fixture.dir)
+			if countSliceBlockedEvents(after.Events, plan.EventTypeSliceBlocked, "001-a") != 1 || !reflect.DeepEqual(event, requireSliceBlockedEvent(t, after.Events)) {
+				t.Fatal("repeat rewrote historical category")
+			}
+		})
+	}
+}
+
+func TestSliceBlockedCategoryValidation(t *testing.T) {
+	for _, extra := range [][]string{
+		{"--category", ""}, {"--category", "unknown"}, {"--category", " contract_conflict"},
+		{"--category", strings.Repeat("x", agentinput.MaxTextRunes+1)},
+		{"--category", "verification_environment", "--contract-conflict"},
+		{"--category", "contract_conflict", "--invalid-command", "make verify", "--invalid-reason", "did not load"},
+		{"--category", "invalid_verification_command", "--contract-conflict", "--invalid-command", "make verify", "--invalid-reason", "did not load"},
+	} {
+		fixture := newStartedSliceBlockedFixture(t)
+		before := resolveSliceBlockedDetail(t, fixture.dir)
+		app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+		args := append([]string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "blocked")}, extra...)
+		if err := app.Run(context.Background(), args); err == nil {
+			t.Fatal("invalid category accepted")
+		}
+		if !reflect.DeepEqual(before, resolveSliceBlockedDetail(t, fixture.dir)) {
+			t.Fatal("invalid category mutated plan")
+		}
+	}
+}
+
+func TestSliceBlockedCategoryPrecedence(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		fixture := newStartedSliceBlockedFixture(t)
+		app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+		args := []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "blocked"), "--contract-conflict", "--invalid-command", "make verify", "--invalid-reason", "did not load tests"}
+		if explicit {
+			args = append(args, "--category", "contract_conflict")
+		}
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		detail := resolveSliceBlockedDetail(t, fixture.dir)
+		if requireSliceBlockedEvent(t, detail.Events).BlockerCategory != "contract_conflict" {
+			t.Fatal("contract conflict did not win")
+		}
+		if countSliceBlockedEvents(detail.Events, plan.EventTypeVerificationCommandInvalid, "001-a") != 1 {
+			t.Fatal("lost invalid-command evidence")
+		}
+	}
+}
+
+func TestSliceBlockedUnsupportedCommandCategory(t *testing.T) {
+	fixture := newStartedSliceBlockedFixture(t)
+	app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+	if err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", writeSliceBlockedReason(t, "not a contract conflict or environment failure"), "--invalid-command", "make verify", "--invalid-reason", "command did not load tests"}); err != nil {
+		t.Fatal(err)
+	}
+	event := requireSliceBlockedEvent(t, resolveSliceBlockedDetail(t, fixture.dir).Events)
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"blocker_category":"invalid_verification_command"`)) {
+		t.Fatalf("missing structured category: %s", data)
 	}
 }
 
@@ -586,7 +674,7 @@ func TestSliceBlockedCommandReportsUnknownAndCompletedSlices(t *testing.T) {
 		fixture := newStartedSliceBlockedFixture(t)
 		reasonFile := writeSliceBlockedReason(t, "blocked")
 		app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
-		err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "missing", "--reason-file", reasonFile})
+		err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "missing", "--reason-file", reasonFile, "--category", "contract_conflict"})
 		if err == nil || !strings.Contains(err.Error(), "slice missing not found") {
 			t.Fatalf("unknown-slice error = %v", err)
 		}
@@ -596,7 +684,7 @@ func TestSliceBlockedCommandReportsUnknownAndCompletedSlices(t *testing.T) {
 		fixture := newRunPlanFixture(t, plan.StatusInReview, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 		reasonFile := writeSliceBlockedReason(t, "blocked")
 		app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
-		err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile})
+		err := app.Run(context.Background(), []string{"slice-blocked", "--plan-dir", fixture.dir, "--slice-id", "001-a", "--reason-file", reasonFile, "--category", "contract_conflict"})
 		if err == nil || !strings.Contains(err.Error(), "slice 001-a is completed and cannot be blocked") {
 			t.Fatalf("completed-slice error = %v", err)
 		}
@@ -614,12 +702,22 @@ func TestSliceBlockedCommandHelpAndMetadataDerivedCompletion(t *testing.T) {
 	}
 
 	out.Reset()
+	if err := app.Run(context.Background(), []string{"slice-blocked", "--help"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, category := range []string{"contract_conflict", "invalid_verification_command", "verification_environment", "out_of_scope_gate_failure"} {
+		if !strings.Contains(out.String(), category) {
+			t.Fatalf("help missing category %s", category)
+		}
+	}
+	out.Reset()
 	if err := app.completion([]string{"zsh"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		zshEntry(t, "slice-blocked", "slice-blocked", ""),
 		zshFlagSpec(t, "slice-blocked", "", "reason-file", ""),
+		zshFlagSpec(t, "slice-blocked", "", "category", ""),
 		zshFlagSpec(t, "slice-blocked", "", "gate-command", ""),
 		"*" + zshFlagSpec(t, "slice-blocked", "", "failing-path", ""),
 		zshFlagSpec(t, "slice-blocked", "", "corrected-command", ""),
@@ -662,8 +760,9 @@ func resolveSliceBlockedDetail(t *testing.T, planDir string) *plan.PlanDetail {
 	return detail
 }
 
-func requireSliceBlockedEvent(t *testing.T, events []plan.Event, sliceID string) plan.Event {
+func requireSliceBlockedEvent(t *testing.T, events []plan.Event) plan.Event {
 	t.Helper()
+	const sliceID = "001-a"
 	for _, event := range events {
 		if event.Type == plan.EventTypeSliceBlocked && event.SliceID == sliceID {
 			return event

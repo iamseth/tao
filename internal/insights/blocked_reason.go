@@ -15,7 +15,10 @@ type blockedEvidence struct {
 
 func blockedEvent(event plan.Event) blockedEvidence {
 	reason := eventReason(event)
-	category := classifyBlocked(event.Command, event.Paths, reason)
+	category := event.BlockerCategory
+	if !plan.IsKnownBlockerCategory(category) {
+		category = classifyBlocked(event.Command, event.Paths, reason)
+	}
 	reason = routingText(reason)
 	if len(reason) > 1024 {
 		reason = strings.ToValidUTF8(reason[:1024], "")

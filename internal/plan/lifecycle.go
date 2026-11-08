@@ -815,6 +815,10 @@ func markSliceBlocked(detail *PlanDetail, sliceID string, reason string, evidenc
 		return Event{}, false, fmt.Errorf("cannot block slice %s while current slice is %s", sliceID, *current)
 	}
 
+	if evidence != nil && evidence.BlockerCategory != "" && !IsKnownBlockerCategory(evidence.BlockerCategory) {
+		return Event{}, false, fmt.Errorf("unknown blocker category")
+	}
+
 	appendEvent := slice.Status != StatusBlocked || !hasSliceBlockedEvent(detail.Events, sliceID)
 	detail.State.Status = StatusBlocked
 	detail.State.UpdatedAt = now
@@ -832,6 +836,7 @@ func markSliceBlocked(detail *PlanDetail, sliceID string, reason string, evidenc
 
 	event := Event{Type: EventTypeSliceBlocked, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Reason: note, Message: "Slice blocked"}
 	if evidence != nil {
+		event.BlockerCategory = evidence.BlockerCategory
 		event.Command = evidence.GateCommand
 		event.Paths = normalizeBlockerPaths(evidence.FailingPaths)
 		event.HeadSHA = evidence.HeadSHA

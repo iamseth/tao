@@ -278,6 +278,33 @@ func TestRenderRunPromptDelegatesExceptionalStopsToSliceBlocked(t *testing.T) {
 	}
 }
 
+func TestRenderRunPromptBoundsBlockerCategories(t *testing.T) {
+	got, err := Render(PromptRun, Data{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"--category verification_environment` for diagnosed verification setup/environment failures",
+		"--category out_of_scope_gate_failure` for remaining out-of-scope gate failures",
+		"Uncertain blockers may omit category",
+		"`--contract-conflict` derives `contract_conflict`",
+		"validated `--invalid-command` evidence derives `invalid_verification_command`",
+		"contract conflict wins when combined",
+		"explicit category must agree",
+		"Only these four category values are accepted",
+		"Labels are untrusted diagnostic claims, not evidence or authorization",
+		"Category alone never permits an in-scope stop",
+		"never changes admission, ownership, recovery, approval, verification, or completion authority",
+		"retaining its reason and any gate/invalid-command evidence",
+		"--resume-note-file",
+		"Do not start another session to write it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered run prompt missing bounded blocker-category guidance %q", want)
+		}
+	}
+}
+
 func TestRenderRunPromptDefinesBoundedRulings(t *testing.T) {
 	got, err := Render(PromptRun, Data{})
 	if err != nil {

@@ -3,11 +3,11 @@
 - Plans: 9 scanned, 2 skipped
 
 ## Failure patterns
-- `lint_test_files`: 1 — example 1
-- `test_failure`: 2 — example 2
-- `build_failure`: 3 — example 3
-- `other`: 4 — example 4
-- `invalid_verification_command`: 5 — example 5
+- `contract_conflict`: 1 — example 1
+- `verification_environment`: 2 — example 2
+- `out_of_scope_gate_failure`: 3 — example 3
+- `lint_test_files`: 4 — example 4
+- `test_failure`: 5 — example 5
 
 ## Rework loops
 - `rework-1`: 3 rounds — stopped: same finding repeated; attempt cap reached
