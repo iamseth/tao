@@ -2723,6 +2723,63 @@ func TestStartSlicePersistsLastRunStartingDirtyAndClearsItOnCleanStart(t *testin
 	}
 }
 
+func TestResumeFailureCompatibilityWrapper(t *testing.T) {
+	detail := interruptedServiceRunDetail(t, t.TempDir())
+	var recorded plan.Event
+	execution := testRunExecution(ExecutionConfig{}, RunDependencies{EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+		recorded = event
+		return nil
+	})})
+	runner := SelectedSliceRunner{execution: execution, out: io.Discard}
+	runner.recordSliceResumeFailure(detail, "001-a", 1, errors.New("transport timeout prose"))
+	assertRecoveryAttribution(t, recorded, "operator", "run_resume")
+}
+
+func TestContinueAttributionIsBestEffortAndNotRepeated(t *testing.T) {
+	for _, telemetry := range []string{"nil", "failure", "success"} {
+		t.Run(telemetry, func(t *testing.T) {
+			detail := interruptedServiceRunDetail(t, t.TempDir())
+			detail.State.Status = plan.StatusBlocked
+			detail.Slices.Slices[0].Status = plan.StatusBlocked
+			detail.Slices.Slices[0].BlockerNote = "dependency"
+			deps := RunDependencies{PlanRecordFactory: memoryPlanRecordFactory}
+			calls := 0
+			if telemetry != "nil" {
+				deps.EventAppender = eventAppenderFunc(func(_ string, event plan.Event) error {
+					calls++
+					assertRecoveryAttribution(t, event, "operator", "run_continue")
+					if event.Type != plan.EventTypeInterventionObserved {
+						t.Fatalf("event = %#v", event)
+					}
+					if telemetry == "failure" {
+						return errors.New("telemetry unavailable")
+					}
+					return nil
+				})
+			}
+			execution := testRunExecution(ExecutionConfig{}, deps)
+			// Exercise the nil seam directly rather than dependency defaulting.
+			execution.Dependencies.EventAppender = deps.EventAppender
+			if err := continueBlockedPlan(execution, detail, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			if err := continueBlockedPlan(execution, detail, time.Now().UTC()); err == nil {
+				t.Fatal("expected already continued refusal")
+			}
+			if detail.State.Status != plan.StatusInProgress || (telemetry != "nil" && calls != 1) {
+				t.Fatalf("status=%s telemetry calls=%d", detail.State.Status, calls)
+			}
+		})
+	}
+}
+
+func assertRecoveryAttribution(t *testing.T, event plan.Event, actor, trigger string) {
+	t.Helper()
+	if event.Actor != actor || event.Trigger != trigger || event.AttributionVersion != 1 {
+		t.Fatalf("%s attempt %d attribution = %q/%q/v%d, want %s/%s/v1", event.Type, event.Attempts, event.Actor, event.Trigger, event.AttributionVersion, actor, trigger)
+	}
+}
+
 func TestRunRecordsRunContextTelemetry(t *testing.T) {
 	t.Parallel()
 	planDir := t.TempDir()
@@ -2756,6 +2813,7 @@ func TestRunRecordsRunContextTelemetry(t *testing.T) {
 	if err := json.Unmarshal(lines[0], &event); err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveryAttribution(t, event, "automatic", "run_context")
 	if event.Type != plan.EventTypeRunContext || event.SliceID != "001-a" || event.Agent != AgentPi.String() || event.CommitPolicy != CommitPolicyNone.String() || !event.RunPacketProvided || event.GuardrailWarnings != 1 {
 		t.Fatalf("unexpected run context event: %+v", event)
 	}

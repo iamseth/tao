@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/intervention"
 	"github.com/iamseth/tao/internal/testenv"
 )
 
@@ -706,6 +707,18 @@ func TestAllocatePlanCreatesCentralPlanDir(t *testing.T) {
 	}
 	if second.ID != "20260531-100007-example-plan-2" {
 		t.Fatalf("second plan ID = %q", second.ID)
+	}
+	for _, allocation := range []PlanAllocation{plan, second} {
+		if covered, err := intervention.ReadCoverage(allocation.Dir, allocation.ID); err != nil || !covered {
+			t.Fatalf("allocation coverage = %v, %v", covered, err)
+		}
+		if covered, err := intervention.ReadCoverage(allocation.Dir, "wrong-id"); err == nil || covered {
+			t.Fatalf("wrong identity coverage = %v, %v", covered, err)
+		}
+		entries, err := os.ReadDir(allocation.Dir)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "intervention-coverage.json" {
+			t.Fatalf("allocation should contain only diagnostic marker: %v, %v", entries, err)
+		}
 	}
 }
 

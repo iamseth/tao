@@ -618,11 +618,21 @@ func testReverifyPlacement(t *testing.T, spelling string) {
 	detail.State.Workspace = &plan.Workspace{Strategy: spelling, Path: root, Branch: branch, HeadSHA: head}
 	detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", CWD: root, HeadSHA: head, Result: finalVerificationFailed, Fingerprint: "prior-failure", VerifiedAt: time.Now().Add(-time.Hour)}
 	sliceCount := len(detail.Slices.Slices)
+	observations := 0
 	execution := testRunExecution(ExecutionConfig{
 		ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated},
 	}, RunDependencies{
 		CommandRunner:     defaultCommandRunner,
 		PlanRecordFactory: memoryPlanRecordFactory,
+		EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+			if event.Type == plan.EventTypeInterventionObserved {
+				observations++
+				if event.Actor != "operator" || event.Trigger != "verification_reverify" || event.AttributionVersion != 1 {
+					t.Errorf("reverify attribution = %+v", event)
+				}
+			}
+			return errors.New("diagnostic write failed")
+		}),
 	})
 	execution.Request = Request{RecoveryMode: RecoveryMode{Reverify: true}}
 	execution.ExecutionRoot = root
@@ -641,6 +651,15 @@ func testReverifyPlacement(t *testing.T, spelling string) {
 	}
 	if len(detail.Slices.Slices) != sliceCount || len(detail.State.Plan.PendingSlices) != 0 {
 		t.Fatalf("reverify changed slices: slices=%d pending=%v", len(detail.Slices.Slices), detail.State.Plan.PendingSlices)
+	}
+	if observations != 1 {
+		t.Fatalf("observations = %d, want one despite diagnostic failure", observations)
+	}
+	if err := finalizer.reverifyCompletedRun(context.Background(), detail); err == nil {
+		t.Fatal("reverify without failed evidence accepted")
+	}
+	if observations != 1 {
+		t.Fatal("refused reverification recorded intervention")
 	}
 }
 

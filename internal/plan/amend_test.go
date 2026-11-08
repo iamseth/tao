@@ -42,6 +42,12 @@ func TestVerificationCommandAmendment(t *testing.T) {
 	if !sliceAmendmentWasRecorded(detail, slice, request, amendTime()) {
 		t.Fatal("replay not recognized")
 	}
+	detail.Events[0] = WithInterventionAttribution(detail.Events[0], "operator", "edit_amend")
+	beforeRetry := clonePlanDetail(detail)
+	mutation, err := amendSliceMutation(slice.ID, request, amendTime().Add(time.Minute))(detail)
+	if err != nil || len(mutation.Events) != 0 || !reflect.DeepEqual(detail, beforeRetry) {
+		t.Fatalf("attributed retry changed historical amendment: %v", err)
+	}
 	detail.Events[0].ReplacedVerificationCommands = []VerificationCommandReplacement{{Old: "different", New: "new"}}
 	if sliceAmendmentWasRecorded(detail, slice, request, amendTime()) {
 		t.Fatal("replay accepted mismatched event pairs")
@@ -190,6 +196,9 @@ func TestAmendBlockedSliceMutatesOnlyRequestedFields(t *testing.T) {
 	if amendment.Reason != "reviewer needs a helper file" || !amendment.AmendedAt.Equal(now) || !slices.Equal(amendment.Fields, wantFields) {
 		t.Fatalf("unexpected amendment: %#v", amendment)
 	}
+	if event.Actor != "operator" || event.Trigger != "edit_amend" || event.AttributionVersion != 1 {
+		t.Fatalf("unexpected attribution: %+v", event)
+	}
 	if event.Type != EventTypeSliceAmended || event.SliceID != "001-a" || event.PlanID != "edit" || event.Reason != "reviewer needs a helper file" || !slices.Equal(event.AmendedFields, wantFields) || event.Message != "Slice contract amended by plan edit" || !event.Timestamp.Equal(now) {
 		t.Fatalf("unexpected event: %#v", event)
 	}
@@ -216,6 +225,9 @@ func TestAmendRepairSliceAppendsOnly(t *testing.T) {
 			}
 			if !slices.Equal(slice.ExpectedFiles, []string{"internal/x/x.go", "internal/x/helper.go"}) || !slices.Equal(slice.Tasks, []string{"Existing task", "Add the helper"}) || !slices.Equal(slice.Verification.ManualChecks, []string{"Existing check", "Confirm the helper is exercised"}) {
 				t.Fatalf("missing appended contract fields: %+v", slice)
+			}
+			if event.Actor != "operator" || event.Trigger != "edit_amend" || event.AttributionVersion != 1 {
+				t.Fatalf("unexpected repair amendment attribution: %+v", event)
 			}
 			fields := []string{"tasks", "expected_files", "manual_checks"}
 			if len(slice.Amendments) != 1 || slice.Amendments[0].Reason != "reviewer needs a helper file" || !slices.Equal(slice.Amendments[0].Fields, fields) || event.Type != EventTypeSliceAmended || !slices.Equal(event.AmendedFields, fields) {
@@ -379,6 +391,9 @@ func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T)
 	if event == nil || event.SliceID != "003-c" || event.Reason != "reviewer needs a helper file" || !slices.Equal(event.AmendedFields, []string{"goal", "tasks", "expected_files", "manual_checks", "verification_commands"}) || !slices.Equal(event.ReplacedVerificationCommands, request.ReplaceVerificationCommands) {
 		t.Fatalf("slice_amended event missing or wrong: %#v", reloaded.Events)
 	}
+	if event.Actor != "operator" || event.Trigger != "edit_amend" || event.AttributionVersion != 1 {
+		t.Fatalf("unexpected persisted attribution: %+v", event)
+	}
 	if !slices.Equal(reloaded.State.Plan.PendingSlices, []string{"001-a", "002-b", "003-c"}) {
 		t.Fatalf("pending queue changed: %v", reloaded.State.Plan.PendingSlices)
 	}
@@ -393,6 +408,18 @@ func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T)
 	}
 	if len(mutation.Events) != 0 || !reflect.DeepEqual(mutation.Slices, reloaded.Slices) || !reflect.DeepEqual(replayed, reloaded) {
 		t.Fatalf("replay was not idempotent: events=%#v slices=%#v", mutation.Events, mutation.Slices)
+	}
+
+	legacy := clonePlanDetail(reloaded)
+	for i := range legacy.Events {
+		legacy.Events[i].Actor = ""
+		legacy.Events[i].Trigger = ""
+		legacy.Events[i].AttributionVersion = 0
+	}
+	beforeLegacy := clonePlanDetail(legacy)
+	legacyMutation, err := amendSliceMutation("003-c", request, now.Add(time.Minute))(legacy)
+	if err != nil || len(legacyMutation.Events) != 0 || !reflect.DeepEqual(legacy, beforeLegacy) {
+		t.Fatalf("legacy retry changed evidence: mutation=%+v err=%v", legacyMutation, err)
 	}
 
 	if err := testRepoRecord(repo, reloaded).AmendSlice("003-c", SliceAmendmentRequest{Reason: "second", AllowFiles: []string{"internal/x/helper.go", "internal/x/second.go"}}, now.Add(time.Hour)); err != nil {

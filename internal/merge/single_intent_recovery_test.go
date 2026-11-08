@@ -219,6 +219,9 @@ func TestRestartSingleMergeClearsOnlyObservedStaleIntent(t *testing.T) {
 		t.Fatalf("stale intent remains: %#v", reloaded.State.Plan.MergeCommitIntent)
 	}
 	restarted := requireSingleMergeRestartEvent(t, reloaded.Events)
+	if restarted.Actor != "operator" || restarted.Trigger != "merge_restart" || restarted.AttributionVersion != 1 {
+		t.Fatalf("restart attribution = %#v", restarted)
+	}
 	if restarted.PriorHead != sourceHead || restarted.BaselineHead != advanced || restarted.Branch != fixture.planBranch || restarted.BaselineBranch != fixture.defaultBranch {
 		t.Fatalf("restart settlement boundary = %#v", restarted)
 	}
@@ -445,6 +448,14 @@ func TestRestartSingleMergeRecordsExactIntendedSquashInsteadOfClearing(t *testin
 	reloaded, err := plan.NewFileRepository(filepath.Dir(planDir)).ResolvePlan(context.Background(), planDir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, event := range reloaded.Events {
+		if event.Actor == "operator" {
+			t.Fatalf("exact settlement is not a restart intervention: %#v", event)
+		}
+		if event.Type == plan.EventTypePlanMerged && (event.Actor != "automatic" || event.Trigger != "merge_complete" || event.AttributionVersion != 1) {
+			t.Fatalf("settlement attribution = %#v", event)
+		}
 	}
 	if !plan.PlanIsMerged(reloaded.Events) || reloaded.State.Plan.MergeCommitIntent != nil {
 		t.Fatalf("exact landing was not recorded: status=%s intent=%#v events=%#v", reloaded.State.Status, reloaded.State.Plan.MergeCommitIntent, reloaded.Events)

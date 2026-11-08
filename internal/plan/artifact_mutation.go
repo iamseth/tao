@@ -158,7 +158,7 @@ func removeSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 		if err := RequireNotAbandoned(detail); err != nil {
 			return lifecycleMutation{}, err
 		}
-		expected := Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}
+		expected := WithInterventionAttribution(Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}, "operator", "edit_remove")
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && findSlice(detail, sliceID) == nil && !slices.Contains(detail.State.Plan.PendingSlices, sliceID) {
 			return unchangedLifecycleMutation(detail), nil
 		}
@@ -217,7 +217,7 @@ func sliceAmendmentWasRecorded(detail *PlanDetail, slice *Slice, request SliceAm
 		if amendment.Reason != normalized.Reason || !slices.Equal(amendment.VerificationCommands, normalized.ReplaceVerificationCommands) {
 			continue
 		}
-		expected := Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, ReplacedVerificationCommands: normalized.ReplaceVerificationCommands, Message: sliceAmendmentMessage}
+		expected := WithInterventionAttribution(Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, ReplacedVerificationCommands: normalized.ReplaceVerificationCommands, Message: sliceAmendmentMessage}, "operator", "edit_amend")
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) {
 			return true
 		}
@@ -230,7 +230,7 @@ func skipSliceMutation(sliceID string, now time.Time) artifactMutationFunc {
 		if err := RequireNotAbandoned(detail); err != nil {
 			return lifecycleMutation{}, err
 		}
-		expected := Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}
+		expected := WithInterventionAttribution(Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}, "operator", "edit_skip")
 		slice := findSlice(detail, sliceID)
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && slice != nil && slice.Status == StatusSkipped && !slices.Contains(detail.State.Plan.PendingSlices, sliceID) {
 			return unchangedLifecycleMutation(detail), nil
@@ -250,7 +250,7 @@ func reorderPendingSlicesMutation(pendingOrder []string, now time.Time) artifact
 		if err := RequireNotAbandoned(detail); err != nil {
 			return lifecycleMutation{}, err
 		}
-		expected := Event{Type: EventTypeSlicesReordered, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Pending slices reordered by plan edit"}
+		expected := WithInterventionAttribution(Event{Type: EventTypeSlicesReordered, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Pending slices reordered by plan edit"}, "operator", "edit_move")
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && slices.Equal(detail.State.Plan.PendingSlices, pendingOrder) {
 			return unchangedLifecycleMutation(detail), nil
 		}
@@ -805,6 +805,11 @@ func semanticEventsWereRecorded(recorded []Event, requested []Event) bool {
 	return eventsWereRecordedBy(recorded, requested, func(event *Event) {
 		event.Timestamp = time.Time{}
 		event.MutationID = ""
+		// Diagnostics may differ across historical retries, but exact journal
+		// replay through eventsWereRecorded must retain all frozen fields.
+		event.Actor = ""
+		event.Trigger = ""
+		event.AttributionVersion = 0
 	})
 }
 

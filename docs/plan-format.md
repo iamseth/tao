@@ -555,6 +555,54 @@ Run-context telemetry is recorded as `run_context` events before each agent slic
 
 ## Events
 
+### Diagnostic intervention attribution
+
+Events may carry optional `actor`, `trigger`, and `attribution_version` fields.
+Version 1 recognizes only these exact pairs:
+
+- `operator`: `run_resume`, `run_continue`, `run_restart`, `edit_amend`,
+  `edit_remove`, `edit_skip`, `edit_move`, `approve`, `rework_manual`,
+  `rework_force`, `rework_pr`, `rework_restart`, `verification_repair_requested`,
+  `verification_reverify`, `merge_restart`, `merge_force`, `merge_resolution_resume`.
+- `automatic`: `run_context`, `transport_retry`, `timeout_continue`, `rework`,
+  `rework_stop`, `verification_repair`, `verification_repair_stop`,
+  `finalization_recovery`, `merge_resolution`, `merge_rollback`, `merge_rearm`,
+  `merge_complete`.
+
+Absent, unsupported, mismatched, or unbounded pairs normalize to
+`unknown`/`unknown` (incomplete attribution); unsupported versions are incomplete.
+Ordinary run/merge invocation is not an operator intervention. These diagnostics
+never identify a human, grant authority, or change lifecycle/next-action results.
+Semantic operation retries ignore attribution, while frozen journal replay retains
+exact historical fields and bytes. Historical events are never rewritten.
+
+The optional `intervention-coverage.json` sidecar contains
+`{"schema":"tao.intervention.coverage.v1","version":1,"plan_id":"<exact plan ID>"}`.
+The codec accepts regular files only, at most 4096 bytes, with a nonempty UTF-8
+plan ID of at most 512 bytes. It writes a private (0600), complete marker atomically
+and exclusively inside an already allocated directory, never replacing a marker
+or creating a plan directory. New plan allocation writes this marker best-effort
+only after successfully creating the directory; existing allocations are untouched.
+Absence means incomplete coverage without an error; malformed, unreadable,
+unsupported, oversized, symlink, or wrong-identity markers mean incomplete
+coverage with diagnostic errors. Neither markers nor attribution are interpreted
+by lifecycle loaders or authorize recovery, approval, merge, or cleanup. Never
+backfill history or infer coverage from timestamps or silence.
+
+The scorecard's diagnostic projection requires a matching supported marker,
+creation evidence, readable valid history, supported relevant operation boundaries,
+and run context for observable execution. The marker alone does not prove coverage.
+Unattended success requires a matured plan with current merge evidence, sufficient
+coverage and no lifetime observed operator action; all matured plans, including
+unknown coverage, remain in its denominator. Unknown counts/shares use all-plan
+and matured populations separately, globally and by displayed cohort/stratum.
+External-agent invocations of operator commands still count as operator actions;
+Tao-owned automatic recovery alone does not disqualify success. Refusals and no-ops
+do not invent successful interventions. Historical or observably incomplete evidence
+stays unknown without migration. Undetectable manual edits, silent log loss and
+unlogged old-binary operations prevent any claim of human-free or tamper-proof
+execution. Attribution never changes recovery eligibility or lifecycle authority.
+
 `events.jsonl` records append-only lifecycle and telemetry events. Event types are additive: the table describes current well-known entries, not a closed enum, and readers retain tolerance for historical or newer event types.
 
 Current well-known event types include:
@@ -600,6 +648,7 @@ Current well-known event types include:
 | `plan_commit_fallback` | Historical/read-only signal that plan-level commit generation fell back to the selected agent; retained for compatible loading and insights, with no current producer. |
 | `plan_commit_guard` | Historical/read-only signal recording the plan-level leftover commit guard result; retained for compatible loading and insights, with no current producer. |
 | `agent_metrics` | Best-effort plan agent usage and measurement availability, attributed by operation role. |
+| `intervention_observed` | Diagnostic-only accepted/successful intervention when no existing event describes it; never lifecycle or recovery authority. |
 
 Legacy planning-session audit events may also appear in older local plans.
 

@@ -296,7 +296,7 @@ func TestReworkDriverRecordsReworkStopped(t *testing.T) {
 					event = candidate
 				}
 			}
-			if event.Type != plan.EventTypeReworkStopped || event.PlanID != planID || event.Round != 0 || event.Attempts != test.attempts || event.Fingerprint != fingerprint || event.Reason != test.wantReason || event.Message != test.wantReason {
+			if event.Actor != "automatic" || event.Trigger != "rework_stop" || event.AttributionVersion != 1 || event.Type != plan.EventTypeReworkStopped || event.PlanID != planID || event.Round != 0 || event.Attempts != test.attempts || event.Fingerprint != fingerprint || event.Reason != test.wantReason || event.Message != test.wantReason {
 				t.Fatalf("rework stopped event = %+v", event)
 			}
 		})
@@ -379,7 +379,7 @@ func TestReworkDriverReopensOnThirdRecurringFileReworkReview(t *testing.T) {
 	if round.Type != plan.EventTypeReworkRound || round.PlanID != planID || round.Round != 4 || round.Attempts != 4 || round.Fingerprint != fingerprint {
 		t.Fatalf("rework_round event = %+v", round)
 	}
-	if reopened.Type != plan.EventTypePlanReopened || reopened.MutationID == "" || reopened.MutationID != round.MutationID {
+	if reopened.Actor != "automatic" || reopened.Trigger != "rework" || reopened.AttributionVersion != 1 || reopened.Type != plan.EventTypePlanReopened || reopened.MutationID == "" || reopened.MutationID != round.MutationID {
 		t.Fatalf("reopen events not settled together: reopened=%+v round=%+v", reopened, round)
 	}
 }
@@ -669,6 +669,18 @@ func TestRunHistoricalLocationStopsStillRequireExplicitRestart(t *testing.T) {
 							t.Fatalf("refusal appended lifecycle evidence: %+v", event)
 						}
 					}
+				}
+				observed := 0
+				for _, event := range repo.events {
+					if event.Type == plan.EventTypeInterventionObserved {
+						observed++
+						if event.Actor != "operator" || event.Trigger != "rework_restart" || event.AttributionVersion != 1 {
+							t.Fatalf("restart attribution = %+v", event)
+						}
+					}
+				}
+				if (restart && observed != 1) || (!restart && observed != 0) {
+					t.Fatalf("restart=%t observations=%d", restart, observed)
 				}
 				if strings.Contains(out.String(), "location advisory") {
 					t.Fatalf("historical location window leaked into live warnings: %s", out.String())

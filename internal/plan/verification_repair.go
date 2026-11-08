@@ -228,7 +228,7 @@ func (r *PlanRecord) AppendVerificationRepair(request VerificationRepairRequest)
 		detail.State.Plan.Timing.LastActivityAt = new(request.CreatedAt)
 		detail.State.Status = StatusInProgress
 		detail.State.UpdatedAt = request.CreatedAt
-		event := Event{Type: EventTypeVerificationRepairCreated, Timestamp: request.CreatedAt, PlanID: detail.State.Plan.ID, SliceID: sliceID, Command: binding.Command, Fingerprint: binding.Fingerprint, Reason: "failed final verification at " + binding.HeadSHA, Message: "Generated final-verification repair slice"}
+		event := WithInterventionAttribution(Event{Type: EventTypeVerificationRepairCreated, Timestamp: request.CreatedAt, PlanID: detail.State.Plan.ID, SliceID: sliceID, Command: binding.Command, Fingerprint: binding.Fingerprint, Reason: "failed final verification at " + binding.HeadSHA, Message: "Generated final-verification repair slice"}, "automatic", "verification_repair")
 		return lifecycleMutation{State: detail.State, Slices: detail.Slices, Events: []Event{event}}, nil
 	})
 }

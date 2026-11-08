@@ -742,6 +742,11 @@ func TestPlanRecordMergedStatus(t *testing.T) {
 	if len(detail.Events) == 0 || detail.Events[len(detail.Events)-1].Type != EventTypePlanMerged {
 		t.Fatalf("expected plan_merged event, got %#v", detail.Events)
 	}
+	for _, event := range detail.Events {
+		if event.Type == EventTypePlanMerged && (event.Actor != "automatic" || event.Trigger != "merge_complete" || event.AttributionVersion != 1) {
+			t.Fatalf("merge attribution = %#v", event)
+		}
+	}
 	if !PlanIsMerged(detail.Events) {
 		t.Fatal("RecordMerged must retain exclusive actual-merge evidence")
 	}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/intervention"
 )
 
 func TestInitJSONRegistersRepoAndAllocatesPlan(t *testing.T) {
@@ -28,6 +30,8 @@ func TestInitJSONRegistersRepoAndAllocatesPlan(t *testing.T) {
 		Schema   string `json:"schema"`
 		DataHome string `json:"data_home"`
 		Repo     struct {
+			Schema    string `json:"schema"`
+			UpdatedAt string `json:"updated_at"`
 			ID        string `json:"id"`
 			Name      string `json:"name"`
 			Root      string `json:"root"`
@@ -39,7 +43,9 @@ func TestInitJSONRegistersRepoAndAllocatesPlan(t *testing.T) {
 			Dir string `json:"dir"`
 		} `json:"plan"`
 	}
-	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, out.String())
 	}
 	if payload.Schema != "tao.init.v1" || payload.DataHome != dataHome {
@@ -59,6 +65,13 @@ func TestInitJSONRegistersRepoAndAllocatesPlan(t *testing.T) {
 	}
 	if info, err := os.Stat(payload.Plan.Dir); err != nil || !info.IsDir() {
 		t.Fatalf("plan dir not created: info=%v err=%v", info, err)
+	}
+	if covered, err := intervention.ReadCoverage(payload.Plan.Dir, payload.Plan.ID); err != nil || !covered {
+		t.Fatalf("init allocation coverage = %v, %v", covered, err)
+	}
+	entries, err := os.ReadDir(payload.Plan.Dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "intervention-coverage.json" {
+		t.Fatalf("init wrote core artifacts or sidecars: %v, %v", entries, err)
 	}
 }
 
@@ -83,6 +96,17 @@ func TestInitDefaultOutputRegistersWithoutPlan(t *testing.T) {
 	plansRoot := filepath.Join(dataHome, "repos")
 	if _, err := os.Stat(plansRoot); err != nil {
 		t.Fatalf("repo registration not written: %v", err)
+	}
+	if err := filepath.WalkDir(plansRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() == "intervention-coverage.json" || entry.Name() == "plans" {
+			t.Errorf("registration allocated plan storage: %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if strings.Contains(text, "plan dir:") {
 		t.Fatalf("default init should not allocate a plan: %s", text)

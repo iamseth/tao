@@ -1478,7 +1478,7 @@ func TestRunReworkRestartStartsFreshRecurringFileWindowBeforeRealServiceExecutio
 		Type: plan.EventTypeReworkStopped, Timestamp: now.Add(-time.Minute), PlanID: planID,
 		Reason: "automatic rework stalled on files recurring across three consecutive reviews: [\"internal/cli/run.go\"]",
 	}}
-	repo := fakeRepository{details: map[string]*plan.PlanDetail{planID: detail, detail.Dir: detail}}
+	repo := &recordingAutoReworkRepository{planRunRepository: fakeRepository{details: map[string]*plan.PlanDetail{planID: detail, detail.Dir: detail}}}
 
 	workStarts := 0
 	var out bytes.Buffer
@@ -1520,6 +1520,18 @@ func TestRunReworkRestartStartsFreshRecurringFileWindowBeforeRealServiceExecutio
 	}
 	if workStarts != 1 || !strings.Contains(out.String(), "Running slice r3") {
 		t.Fatalf("real service did not execute exactly one fresh-window slice: starts=%d output=%q", workStarts, out.String())
+	}
+	observed := 0
+	for _, event := range repo.events {
+		if event.Type == plan.EventTypeInterventionObserved {
+			observed++
+			if event.Actor != "operator" || event.Trigger != "rework_restart" || event.AttributionVersion != 1 {
+				t.Fatalf("restart attribution = %+v", event)
+			}
+		}
+	}
+	if observed != 1 {
+		t.Fatalf("restart observations = %d, want 1", observed)
 	}
 	if reworkpkg.RoundCount(detail) != 3 {
 		t.Fatalf("rework rounds = %d, want historical rounds plus round 3", reworkpkg.RoundCount(detail))

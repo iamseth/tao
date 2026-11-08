@@ -392,8 +392,7 @@ func reopenPlanRecord(record *plan.PlanRecord, newSlices []plan.Slice, now time.
 	if record == nil {
 		return fmt.Errorf("plan record is nil")
 	}
-	detail := record.Detail()
-	if !force || detail == nil || plan.ReopenableStatus(detail.State.Status) {
+	if !force {
 		return record.Reopen(newSlices, now)
 	}
 	return record.ReopenForced(newSlices, now)

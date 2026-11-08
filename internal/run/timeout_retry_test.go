@@ -74,6 +74,16 @@ func TestTimeoutContinuationSuccessfulHandoffAndLateCompletion(t *testing.T) {
 				t.Fatal("resume packet was not regenerated")
 			}
 			for _, e := range events {
+				if e.Type == plan.EventTypeSliceResumeAttempted || e.Type == plan.EventTypeSliceResumeFailed {
+					actor, trigger := "operator", "run_resume"
+					if e.Attempts > 1 {
+						actor, trigger = "automatic", "timeout_continue"
+					}
+					assertRecoveryAttribution(t, e, actor, trigger)
+					if late && (e.Attempts > 1 || e.Type == plan.EventTypeSliceResumeFailed) {
+						t.Fatalf("late completion claimed retry/failure: %#v", e)
+					}
+				}
 				if e.Type == plan.EventTypeSliceStarted {
 					t.Fatal("duplicate slice_started")
 				}

@@ -171,11 +171,11 @@ func TestPullRequestOrchestrationRepairsWrongTypeAndRecordsExactHead(t *testing.
 	})
 	requireOwnedEvent(t, reloaded.Events, plan.EventTypeFinalizationFailureCleared, func(event plan.Event) bool {
 		failure := event.FinalizationFailure
-		return failure != nil && failure.Phase == plan.FinalizationFailurePhasePullRequest && failure.Category == "workspace_dirty" && failure.Branch == fixture.branch && failure.HeadSHA == fixture.head
+		return event.Actor == "automatic" && event.Trigger == "finalization_recovery" && event.AttributionVersion == 1 && failure != nil && failure.Phase == plan.FinalizationFailurePhasePullRequest && failure.Category == "workspace_dirty" && failure.Branch == fixture.branch && failure.HeadSHA == fixture.head
 	})
 	requireOwnedEvent(t, reloaded.Events, plan.EventTypeFinalizationFailureCleared, func(event plan.Event) bool {
 		failure := event.FinalizationFailure
-		return failure != nil && failure.Phase == plan.FinalizationFailurePhaseProposalRepair && failure.Category == "proposal_correction_started" && failure.ReviewBase == fixture.base && failure.ReviewHead == fixture.head
+		return event.Actor == "automatic" && event.Trigger == "finalization_recovery" && event.AttributionVersion == 1 && failure != nil && failure.Phase == plan.FinalizationFailurePhaseProposalRepair && failure.Category == "proposal_correction_started" && failure.ReviewBase == fixture.base && failure.ReviewHead == fixture.head
 	})
 }
 

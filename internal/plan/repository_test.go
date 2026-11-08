@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,48 @@ func TestListPlansActiveUsesStateAndSlices(t *testing.T) {
 	}
 	if plans[0].ID != "active" || plans[0].CurrentSliceID != "001-a" {
 		t.Fatalf("unexpected active summary: %+v", plans[0])
+	}
+	baseline, err := repo.GetPlan(context.Background(), "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "active", "intervention-coverage.json")
+	for _, kind := range []string{"malformed", "unsupported", "supported", "unreadable", "permission-denied"} {
+		t.Run(kind, func(t *testing.T) {
+			data := "not json"
+			switch kind {
+			case "unsupported":
+				data = `{"schema":"tao.intervention.coverage.v1","version":99,"plan_id":"active"}`
+			case "supported":
+				data = `{"schema":"tao.intervention.coverage.v1","version":1,"plan_id":"active"}`
+			}
+			if kind == "unreadable" {
+				// A directory is deterministically unreadable as a marker, even as root.
+				if err := os.Mkdir(marker, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(marker, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "permission-denied" {
+				if err := os.Chmod(marker, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() {
+				if err := os.Remove(marker); err != nil {
+					t.Error(err)
+				}
+			})
+			got, err := repo.GetPlan(context.Background(), "active")
+			if err != nil || !reflect.DeepEqual(got, baseline) {
+				t.Fatalf("marker altered detail/readiness/warnings: err=%v", err)
+			}
+			summaries, err := repo.ListPlans(context.Background(), PlanFilter{ActiveOnly: true})
+			if err != nil || !reflect.DeepEqual(summaries, plans) {
+				t.Fatalf("marker altered summaries: %+v, %v", summaries, err)
+			}
+		})
 	}
 }
 

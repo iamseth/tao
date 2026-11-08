@@ -495,6 +495,31 @@ only; active plans are censored, not counted as failures. Read these limits
 before interpreting differences: the scorecard never declares a winner, makes
 causal claims, or drives routing.
 
+**Unattended (observed)** measures matured plans with current merge evidence,
+sufficient supported attribution coverage, and no observed operator intervention
+over their lifetime. Its denominator is **all matured plans**, including unknown
+coverage, which contributes no success. It uses the same Wilson 95% intervals and
+sparse indicators as other quality rates; it is not proof of no human involvement.
+Unknown-attribution counts and shares are shown for all plans and matured plans,
+globally and in each displayed cohort/stratum. An empty population has no applicable
+share. Compare coverage before comparing rates.
+
+Explicit admitted edits, approvals, and recovery choices count as operator actions
+even when `/fix-plan` or another external agent invokes the commands. Ordinary
+run/merge invocation alone does not count. Tao-owned automatic transport retries,
+timeout continuation, verification repair, rework, and mechanical merge recovery
+remain eligible for unattended success when coverage and merge requirements hold;
+this changes no recovery admission or budget policy.
+
+Coverage eligibility is written best-effort only for newly allocated plans after
+instrumentation rollout. The marker alone is insufficient: supported operation
+attribution and readable, observably complete history are also required. Historical
+plans and absent, malformed, unsupported, or incomplete evidence stay unknown;
+there is no backfill, timestamp cutoff, or inference from silence. Manual edits,
+silent log loss, and unlogged old-binary operations may be undetectable. These are
+local diagnostic observations, not a tamper-proof audit or human-identity record,
+and never authorize lifecycle, recovery, approval, merge, or cleanup.
+
 ### Monthly trends — compare creation cohorts
 
 ```sh

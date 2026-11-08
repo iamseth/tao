@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/iamseth/tao/internal/intervention"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plannerroute"
 )
@@ -217,6 +218,7 @@ type accumulator struct {
 }
 
 type planData struct {
+	intervention     interventionProjection
 	historyPresent   bool
 	historyMalformed bool
 	createdAgent     string
@@ -558,7 +560,12 @@ func finalizeRoutes(report *PlannerRoutingReport, cohorts map[routingCohortKey]*
 }
 
 func readPlanEvents(ctx context.Context, dir string) (planData, error) {
+	if err := ctx.Err(); err != nil {
+		return planData{}, err
+	}
 	data := planData{sessions: make(map[string][]plan.AgentMetricEvent)}
+	data.intervention.planID = filepath.Base(dir)
+	data.intervention.marker, _ = intervention.ReadCoverage(dir, data.intervention.planID)
 	file, err := os.Open(filepath.Join(dir, "events.jsonl")) // #nosec G304 -- plan directories come from the repository listing.
 	if errors.Is(err, os.ErrNotExist) {
 		return data, nil
@@ -606,6 +613,7 @@ func readPlanEvents(ctx context.Context, dir string) (planData, error) {
 }
 
 func consumeEvent(data *planData, event plan.Event, line int) {
+	data.intervention.consume(event)
 	if !event.Timestamp.IsZero() && (data.earliestAt.IsZero() || event.Timestamp.Before(data.earliestAt)) {
 		data.earliestAt = event.Timestamp
 	}

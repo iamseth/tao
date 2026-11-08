@@ -118,6 +118,7 @@ func TestReworkCommandReopensChangesRequestedPlanWithGeneratedSlices(t *testing.
 	if len(detail.State.Plan.CompletedSlices) != 1 || detail.State.Plan.CompletedSlices[0] != "001-done" {
 		t.Fatalf("completed slices changed: %#v", detail.State.Plan.CompletedSlices)
 	}
+	requireReworkAttribution(t, detail.Events, "rework_manual")
 	created := detail.Slices.Slices[len(detail.Slices.Slices)-1]
 	if created.ID != "r101-internal-cli-rework-go" || created.Status != plan.StatusPending || created.Goal != "Handle rework findings" {
 		t.Fatalf("unexpected generated slice: %#v", created)
@@ -682,11 +683,25 @@ func TestReworkCommandForceBypassesReviewAndFindingGate(t *testing.T) {
 			if detail.State.Status != plan.StatusInProgress || !hasPendingReworkSlice(detail) {
 				t.Fatalf("expected forced rework to reopen plan, got status=%q pending=%#v", detail.State.Status, detail.State.Plan.PendingSlices)
 			}
+			requireReworkAttribution(t, detail.Events, "rework_force")
 			if !strings.Contains(out.String(), "Rework slices created for "+planID) {
 				t.Fatalf("unexpected force output %q", out.String())
 			}
 		})
 	}
+}
+
+func requireReworkAttribution(t *testing.T, events []plan.Event, trigger string) {
+	t.Helper()
+	for _, event := range events {
+		if event.Type == plan.EventTypePlanReopened {
+			if event.Actor != "operator" || event.Trigger != trigger || event.AttributionVersion != 1 {
+				t.Fatalf("reopen attribution = %+v", event)
+			}
+			return
+		}
+	}
+	t.Fatal("missing reopen event")
 }
 
 func hasPendingReworkSlice(detail *plan.PlanDetail) bool {

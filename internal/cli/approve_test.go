@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -69,11 +70,26 @@ func TestApproveCommandApprovesCurrentGatedSlice(t *testing.T) {
 	foundEvent := false
 	for _, e := range updated.Events {
 		if e.Type == plan.EventTypeSliceApproved {
+			if e.Actor != "operator" || e.Trigger != "approve" || e.AttributionVersion != 1 {
+				t.Fatalf("unexpected approval attribution: %+v", e)
+			}
 			foundEvent = true
 		}
 	}
 	if !foundEvent {
 		t.Fatalf("expected slice_approved event, got %v", updated.Events)
+	}
+
+	before := append([]plan.Event(nil), updated.Events...)
+	if err := app.Run(context.Background(), []string{"approve", "--by", "agent", planID, "--slice", sliceID}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err = repo.GetPlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, updated.Events) {
+		t.Fatalf("repeated approval changed events: %+v", updated.Events)
 	}
 
 	// Confirm the approved blocked slice is now continuable.

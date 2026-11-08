@@ -54,7 +54,20 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 	if err := appender.AppendVerificationRepair(request); err != nil {
 		return fmt.Errorf("prepare verification repair: %w", err)
 	}
+	if execution.Request.RepairVerification {
+		observeVerificationRecovery(detail, execution, "verification_repair_requested")
+	}
 	return nil
+}
+
+// Observations describe admitted operations, never recovery authority or success.
+func observeVerificationRecovery(detail *plan.PlanDetail, execution runExecution, trigger string) {
+	if appender := execution.Dependencies.EventAppender; appender != nil {
+		event := plan.WithInterventionAttribution(plan.Event{
+			Type: plan.EventTypeInterventionObserved, Timestamp: now(execution).UTC(), PlanID: detail.State.Plan.ID,
+		}, "operator", trigger)
+		_ = appender.AppendEvent(detail.Dir, event)
+	}
 }
 
 func requireReverifyFinalVerificationBoundary(ctx context.Context, detail *plan.PlanDetail, execution runExecution) (*plan.FinalVerification, error) {

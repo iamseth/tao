@@ -157,10 +157,37 @@ func TestRestartBlockedSliceSupersedesExactBoundaryWithDurableEvidence(t *testin
 	if event == nil || event.PriorRoot != "/worktrees/plan-a" || event.PriorBranch != boundary.Branch || event.PriorHead != boundary.Head || event.BaselineBranch != "main" || event.BaselineHead != "new-head" || event.Reason != "dependency landed" {
 		t.Fatalf("restart event = %#v", event)
 	}
+	if event.Actor != "operator" || event.Trigger != "run_restart" || event.AttributionVersion != 1 {
+		t.Fatalf("restart attribution = %#v", event)
+	}
 	before := reloaded
 	staleRecord := testRecord(dir, before)
 	if err := staleRecord.RestartBlockedSlice(BlockedSliceRestartRequest{SliceID: "001-a", PriorRoot: "/worktrees/plan-a", PriorBoundary: boundary, BaselineBranch: "main", BaselineHead: "other", RestartedAt: restarted}); err == nil {
 		t.Fatal("expected retry against superseded boundary to fail")
+	}
+}
+
+func TestRestartAttributionPreservesLegacySemanticMatchingAndExactReplay(t *testing.T) {
+	legacy := Event{Type: EventTypeSliceRestarted, PlanID: "plan-a", SliceID: "001-a", PriorHead: "old", BaselineHead: "new"}
+	attributed := WithInterventionAttribution(legacy, "operator", "run_restart")
+	for _, event := range []Event{legacy, attributed} {
+		if !eventsWereRecorded([]Event{event}, []Event{event}) {
+			t.Fatal("exact replay failed")
+		}
+		if !semanticEventsWereRecorded([]Event{event}, []Event{attributed}) {
+			t.Fatal("diagnostics changed semantic matching")
+		}
+		changed := attributed
+		changed.BaselineHead = "other"
+		if semanticEventsWereRecorded([]Event{event}, []Event{changed}) {
+			t.Fatal("attribution weakened boundary matching")
+		}
+	}
+	if eventsWereRecorded([]Event{legacy}, []Event{attributed}) {
+		t.Fatal("exact replay must not backfill legacy attribution")
+	}
+	if legacy.Actor != "" || legacy.Trigger != "" || legacy.AttributionVersion != 0 {
+		t.Fatal("legacy event changed")
 	}
 }
 
@@ -203,6 +230,9 @@ func TestRestartBlockedSliceSettlesJournalOnExactRetry(t *testing.T) {
 	count := 0
 	for _, event := range detail.Events {
 		if event.Type == EventTypeSliceRestarted {
+			if event.Actor != "operator" || event.Trigger != "run_restart" || event.AttributionVersion != 1 {
+				t.Fatalf("replayed attribution = %#v", event)
+			}
 			count++
 		}
 	}
@@ -694,10 +724,28 @@ func TestReopenFromPullRequestConsumesThreadAcrossCompletedPRCycle(t *testing.T)
 	if err := record.ReopenFromPullRequest(newSlices, []string{"PRRT_change"}, reopenedAt); err != nil {
 		t.Fatal(err)
 	}
-	// Retrying the same atomic transaction is a no-op rather than a duplicate
-	// consumption or reopen.
+	// Model attributed historical evidence; a retry must preserve its exact bytes.
+	var history []byte
+	for _, event := range readRecordTestEvents(t, dir) {
+		if event.Type == EventTypePlanReopened {
+			event = WithInterventionAttribution(event, "operator", "rework_pr")
+		}
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history = append(history, append(data, '\n')...)
+	}
+	eventPath := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(eventPath, history, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := record.ReopenFromPullRequest(newSlices, []string{"PRRT_change"}, reopenedAt); err != nil {
 		t.Fatalf("retry atomic reopen: %v", err)
+	}
+	afterRetry, readErr := os.ReadFile(eventPath) // #nosec G304 -- test-owned temporary event history.
+	if readErr != nil || string(afterRetry) != string(history) {
+		t.Fatalf("retry rewrote history: %v", readErr)
 	}
 
 	state := readStateFile(t, dir)
@@ -939,6 +987,11 @@ func TestReopenFromPullRequestRecordsTheRoundItCreated(t *testing.T) {
 	roundEvents := func() []Event {
 		var rounds []Event
 		for _, event := range readRecordTestEvents(t, dir) {
+			if event.Type == EventTypeReworkRound || event.Type == EventTypePlanReopened {
+				if event.Actor != "operator" || event.Trigger != "rework_pr" || event.AttributionVersion != 1 {
+					t.Fatalf("PR attribution = %#v", event)
+				}
+			}
 			if event.Type == EventTypeReworkRound {
 				rounds = append(rounds, event)
 			}

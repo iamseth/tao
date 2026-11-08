@@ -104,6 +104,7 @@ func (f Finalizer) reverifyCompletedRun(ctx context.Context, detail *plan.PlanDe
 	if _, err := requireReverifyFinalVerificationBoundary(ctx, detail, execution); err != nil {
 		return err
 	}
+	observeVerificationRecovery(detail, execution, "verification_reverify")
 	ReportPhase(ctx, PhaseFinalVerification, nil)
 	if err := f.verifyCompletedBranch(ctx, detail, executionRoot); err != nil {
 		return fmt.Errorf("reverify completed run: %w", err)

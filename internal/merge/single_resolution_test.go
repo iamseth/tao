@@ -563,6 +563,10 @@ func TestMergeRearmsRejectedAttributedStartupForExactLaterExplicitSuccess(t *tes
 	if !ok || startup.Authority != SingleResolutionAuthorityRearmed {
 		t.Fatalf("first merge startup failure = %v", err)
 	}
+	rearmed := events.requireSingle(t, plan.EventTypeSingleMergeRearmed)
+	if rearmed.Actor != "automatic" || rearmed.Trigger != "merge_rearm" || rearmed.AttributionVersion != 1 {
+		t.Fatalf("rearm attribution = %#v", rearmed)
+	}
 	if detail.State.Plan.MergeCommitIntent == nil || detail.State.Plan.MergeCommitIntent.Resolution != nil || events.count(plan.EventTypeSingleMergeRearmed) != 1 {
 		t.Fatalf("rearmed merge state/events = %#v / %#v", detail.State.Plan.MergeCommitIntent, events.events)
 	}

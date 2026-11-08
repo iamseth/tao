@@ -156,6 +156,7 @@ func (p insightsProjection) renderScorecard(out io.Writer) error {
 	b.WriteString("\n## Coverage\n")
 	fmt.Fprintf(&b, "- plans: %d; never started: %d; active: %d; terminal: %d\n", c.Plans, c.NeverStarted, c.Active, c.Terminal)
 	fmt.Fprintf(&b, "- matured: %d; censored: %d\n", c.Matured, c.Censored)
+	renderUnknownAttribution(&b, c.UnknownAttributionPlans, c.Plans, c.MaturedUnknownAttributionPlans, c.Matured)
 	fmt.Fprintf(&b, "- treatment confidence: high=%d; low=%d; ambiguous=%d; missing=%d\n", c.TreatmentHigh, c.TreatmentLow, c.TreatmentAmbiguous, c.TreatmentMissing)
 	fmt.Fprintf(&b, "- planning-metrics coverage: %d/%d plans\n", c.PlanningMetricsPlans, c.Plans)
 	fmt.Fprintf(&b, "- role attribution: %d attributed; %d unattributed sessions\n", c.RoleAttributedSessions, c.UnattributedSessions)
@@ -171,6 +172,7 @@ func (p insightsProjection) renderScorecard(out io.Writer) error {
 	}
 	b.WriteString("\nObservational evidence, not a causal ranking. Runtime-only labels do not establish provider or model.\n")
 	b.WriteString("Outcome rates use matured plans; active plans inside the maturity window are censored, not failures. Started is coverage across all plans. Rate intervals are Wilson 95%.\n")
+	b.WriteString("Unattended (observed) counts matured plans that reached merge with sufficient attribution coverage and no observed operator intervention over their lifetime; not proof of no human involvement. Unknown coverage stays in the denominator and contributes no success. External-agent operator commands count; Tao-owned automatic recovery alone does not. Manual edits and silent log loss may be undetectable.\n")
 	b.WriteString("\n## Cohorts\n")
 	if len(s.Cohorts) == 0 {
 		b.WriteString("none\n")
@@ -228,6 +230,7 @@ func renderScorecardCohort(b *strings.Builder, cohort insights.TreatmentCohort) 
 	fmt.Fprintf(b, "\n### Cohort: %s\n", scorecardText(cohort.Key))
 	fmt.Fprintf(b, "- runtime: %s; provider: %s; model: %s; confidence: %s\n", scorecardText(cohort.Runtime), scorecardText(cohort.Provider), scorecardText(cohort.Model), scorecardText(string(cohort.Confidence)))
 	fmt.Fprintf(b, "- n plans=%d; matured=%d; censored=%d; never started=%d\n", o.Plans, o.Matured, o.Censored, o.NeverStarted)
+	renderUnknownAttribution(b, o.UnknownAttributionPlans, o.Plans, o.MaturedUnknownAttributionPlans, o.Matured)
 	b.WriteString("- quality rates:\n")
 	q := o.Quality
 	for _, metric := range []struct {
@@ -239,6 +242,7 @@ func renderScorecardCohort(b *strings.Builder, cohort insights.TreatmentCohort) 
 		{"exact approval", q.ExactApproval},
 		{"completed", q.Completed},
 		{"merged", q.Merged},
+		{"unattended (observed)", q.Unattended},
 		{"pull-request completed", q.PullRequestCompleted},
 		{"abandoned", q.Abandoned},
 		{"rework stopped", q.ReworkStopped},
@@ -266,6 +270,23 @@ func renderScorecardCohort(b *strings.Builder, cohort insights.TreatmentCohort) 
 	renderScorecardHistogram(b, "finding severity", q.FindingSeverities)
 	renderScorecardHistogram(b, "infrastructure reliability", o.Reliability.Infrastructure)
 	renderScorecardHistogram(b, "quality reliability", o.Reliability.Quality)
+}
+
+func renderUnknownAttribution(b *strings.Builder, unknown, plans, maturedUnknown, matured int) {
+	for _, population := range []struct {
+		name           string
+		unknown, total int
+	}{
+		{"all plans", unknown, plans},
+		{"matured plans", maturedUnknown, matured},
+	} {
+		fmt.Fprintf(b, "- unknown attribution (%s): %d/%d (", population.name, population.unknown, population.total)
+		if population.total == 0 {
+			b.WriteString("not applicable)\n")
+		} else {
+			fmt.Fprintf(b, "%.1f%%)\n", 100*float64(population.unknown)/float64(population.total))
+		}
+	}
 }
 
 func scorecardSparse(sparse bool) string {

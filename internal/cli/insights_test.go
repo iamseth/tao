@@ -190,6 +190,11 @@ func TestInsightsScorecardFlags(t *testing.T) {
 	if !strings.Contains(out.String(), "No plan history.\n") || !strings.Contains(out.String(), "# Tao Planner Scorecard") {
 		t.Fatalf("empty scorecard = %q", out.String())
 	}
+	for _, want := range []string{"unknown attribution (all plans): 0/0 (not applicable)", "unknown attribution (matured plans): 0/0 (not applicable)", "Unknown coverage stays in the denominator"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("empty scorecard missing %q", want)
+		}
+	}
 }
 
 func limitDigestText(value string) string {
@@ -472,8 +477,10 @@ func representativeScorecard() insights.Scorecard {
 			Key: key, Runtime: runtime, Model: model, Confidence: insights.TreatmentConfidenceLow,
 			Outcomes: insights.CohortOutcomes{
 				Plans: n + 1, Matured: n, Censored: 1, NeverStarted: 1,
+				UnknownAttributionPlans: 2, MaturedUnknownAttributionPlans: 1,
 				Quality: insights.QualityOutcomes{
-					Started: rate(n, n+1), FirstReviewApproved: rate(n-1, n), ExactApproval: rate(n, n),
+					Unattended: rate(max(0, n-2), n),
+					Started:    rate(n, n+1), FirstReviewApproved: rate(n-1, n), ExactApproval: rate(n, n),
 					Completed: rate(n, n), Merged: rate(n-1, n), PullRequestCompleted: rate(1, n),
 					Abandoned: rate(0, n), ReworkStopped: rate(0, n), AnyRework: rate(1, n), AnyVerificationRepair: rate(1, n),
 					ReviewRounds: median(1, n), OriginalSlices: median(3, n), ValidationWarningPlans: 1,
@@ -499,6 +506,7 @@ func representativeScorecard() insights.Scorecard {
 	return insights.Scorecard{
 		Coverage: insights.ScorecardCoverage{
 			Plans: 10, NeverStarted: 2, Active: 2, Terminal: 6, Matured: 6, Censored: 4,
+			UnknownAttributionPlans: 6, MaturedUnknownAttributionPlans: 2,
 			TreatmentHigh: 6, TreatmentLow: 2, TreatmentAmbiguous: 1, TreatmentMissing: 1,
 			RoleAttributedSessions: 6, UnattributedSessions: 2, MaturityWindowDays: 14, MinimumSamples: 5,
 		},
@@ -781,6 +789,9 @@ func TestInsightsAllReposCatalogCoverageSignalsAndOrdering(t *testing.T) {
 		"repositories: 3 registered; 1 scanned; 1 empty; 1 unreadable; 0 skipped",
 		"alpha [repo-a]: scanned", "middle [repo-m]: empty", "zeta [repo-z]: unreadable",
 		"planning-metrics coverage: 0/1 plans", "reasoning effort: 0 sessions recorded",
+		"unknown attribution (all plans): 1/1 (100.0%)",
+		"unknown attribution (matured plans): 0/0 (not applicable)",
+		"not proof of no human involvement",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("all-repository scorecard missing %q:\n%s", want, out.String())

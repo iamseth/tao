@@ -15,6 +15,9 @@ func newReworkDriver(repo planRunRepository, now func() time.Time, escalation re
 		Record: func(detail *plan.PlanDetail) (reworkpkg.AutomaticRecord, error) {
 			return repo.PlanRecord(detail)
 		},
+		ObserveRestart: func(detail *plan.PlanDetail, event plan.Event) error {
+			return repo.AppendEvent(detail.Dir, event)
+		},
 		Now:        now,
 		Escalation: escalation,
 	}

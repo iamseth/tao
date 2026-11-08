@@ -1323,6 +1323,11 @@ func TestApproveSliceWritesApprovalAndEvent(t *testing.T) {
 	if approval == nil || !approval.Approved || approval.ApprovedBy == nil || *approval.ApprovedBy != "Seth" || approval.ApprovedAt == nil || *approval.ApprovedAt != "2026-05-24T23:01:02Z" {
 		t.Fatalf("unexpected approval after approve: %#v", approval)
 	}
+	for _, event := range detail.Events {
+		if event.Type == EventTypeSliceApproved && (event.Actor != "operator" || event.Trigger != "approve" || event.AttributionVersion != 1) {
+			t.Fatalf("unexpected approval attribution: %+v", event)
+		}
+	}
 	if got := readEventsFile(t, dir); !strings.Contains(got, `"type":"slice_approved"`) || !strings.Contains(got, `"message":"Slice approved"`) {
 		t.Fatalf("unexpected events.jsonl %q", got)
 	}
@@ -1352,6 +1357,9 @@ func TestApproveSliceIsIdempotentAndPreservesMetadata(t *testing.T) {
 	approval := slices.Slices[0].Approval
 	if approval.ApprovedBy == nil || *approval.ApprovedBy != "Original" || approval.ApprovedAt == nil || *approval.ApprovedAt != approvedAt {
 		t.Fatalf("expected existing metadata preserved, got %#v", approval)
+	}
+	if got := readEventsFile(t, dir); strings.Contains(got, `"actor"`) || strings.Contains(got, `"attribution_version"`) {
+		t.Fatalf("legacy approval was backfilled: %s", got)
 	}
 	if got := strings.Count(readEventsFile(t, dir), `"type":"slice_approved"`); got != 1 {
 		t.Fatalf("expected one approval event, got %d", got)

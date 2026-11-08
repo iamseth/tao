@@ -16,6 +16,12 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
+type driverArtifactStore struct{}
+
+func (driverArtifactStore) WriteState(string, []byte) error      { return nil }
+func (driverArtifactStore) WriteSlices(string, []byte) error     { return nil }
+func (driverArtifactStore) AppendEvent(string, plan.Event) error { return nil }
+
 type driverRecord struct {
 	detail        *plan.PlanDetail
 	stopErr       error
@@ -37,12 +43,11 @@ func (r *driverRecord) RecordAutomaticReworkStop(evidence plan.AutomaticReworkSt
 	if err := evidence.Validate(); err != nil {
 		return err
 	}
-	r.detail.Events = append(r.detail.Events, plan.Event{
-		Type: plan.EventTypeReworkStopped, Timestamp: evidence.StoppedAt, PlanID: r.detail.State.Plan.ID,
-		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
-		Reason: evidence.Reason, Message: evidence.Reason,
-	})
-	return nil
+	record, err := plan.NewPlanRecordWithStore(driverArtifactStore{}, "driver", r.detail)
+	if err != nil {
+		return err
+	}
+	return record.RecordAutomaticReworkStop(evidence)
 }
 
 func (r *driverRecord) ReopenAutomatic(newSlices []plan.Slice, evidence plan.AutomaticReworkRound) error {
@@ -50,28 +55,19 @@ func (r *driverRecord) ReopenAutomatic(newSlices []plan.Slice, evidence plan.Aut
 		return r.reopenErr
 	}
 	r.roundEvidence = evidence
-	if err := r.Reopen(newSlices, evidence.ReopenedAt); err != nil {
+	record, err := plan.NewPlanRecordWithStore(driverArtifactStore{}, "driver", r.detail)
+	if err != nil {
 		return err
 	}
-	r.detail.Events = append(r.detail.Events, plan.Event{
-		Type: plan.EventTypeReworkRound, Timestamp: evidence.ReopenedAt, PlanID: r.detail.State.Plan.ID,
-		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
-		Message: fmt.Sprintf("Automatic rework round %d (attempt %d of %d)", evidence.Round, evidence.Attempts, evidence.MaxAttempts),
-	})
-	return nil
+	return record.ReopenAutomatic(newSlices, evidence)
 }
 
 func (r *driverRecord) ReopenFromPullRequest(newSlices []plan.Slice, consumedThreadIDs []string, now time.Time) error {
-	for _, threadID := range consumedThreadIDs {
-		if slices.Contains(r.detail.State.Plan.PRFeedbackConsumedThreadIDs, threadID) {
-			return fmt.Errorf("pull request feedback thread %q was already consumed", threadID)
-		}
-	}
-	if _, err := plan.Reopen(r.detail, newSlices, now); err != nil {
+	record, err := plan.NewPlanRecordWithStore(driverArtifactStore{}, "driver", r.detail)
+	if err != nil {
 		return err
 	}
-	r.detail.State.Plan.PRFeedbackConsumedThreadIDs = append(r.detail.State.Plan.PRFeedbackConsumedThreadIDs, consumedThreadIDs...)
-	return nil
+	return record.ReopenFromPullRequest(newSlices, consumedThreadIDs, now)
 }
 
 func TestEscalationPolicyModelForAttempt(t *testing.T) {
@@ -1132,6 +1128,53 @@ func TestDriverRunSuppliesBudgetThresholdsToDecision(t *testing.T) {
 			}
 			if got != test.want {
 				t.Fatalf("decision thresholds = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDriverRestartObservationAdmissionAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		stopped, restart, abandoned, fail bool
+		want                              int
+	}{
+		{name: "accepted", stopped: true, restart: true, want: 1},
+		{name: "diagnostic failure", stopped: true, restart: true, fail: true, want: 1},
+		{name: "refused", stopped: true},
+		{name: "no stop", restart: true},
+		{name: "ordinary"},
+		{name: "abandoned", stopped: true, restart: true, abandoned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := actionableDriverDetail(0)
+			if tc.stopped {
+				detail.Events = []plan.Event{{Type: plan.EventTypeReworkStopped, Reason: equivalentFindingsStopReason}}
+			}
+			if tc.abandoned {
+				detail.State.Status = plan.StatusAbandoned
+			}
+			observed := 0
+			driver := Driver{
+				Resolve: fixedDriverResolver(detail),
+				DecideOne: func(context.Context, string, int, int, string, int, plan.AgentBudgetThresholds) (Decision, error) {
+					return Decision{}, nil
+				},
+				ObserveRestart: func(_ *plan.PlanDetail, event plan.Event) error {
+					observed++
+					if event.Type != plan.EventTypeInterventionObserved || event.Actor != "operator" || event.Trigger != "rework_restart" || event.AttributionVersion != 1 {
+						t.Fatalf("event = %+v", event)
+					}
+					if tc.fail {
+						return errors.New("diagnostic unavailable")
+					}
+					return nil
+				},
+			}
+			err := driver.Run(context.Background(), "plan", RunOptions{Enabled: true, MaxAttempts: 5, AllowRestart: tc.restart, Execute: func(context.Context) error { return nil }})
+			wantError := tc.abandoned || (tc.stopped && !tc.restart)
+			if (err != nil) != wantError || observed != tc.want {
+				t.Fatalf("error=%v observed=%d", err, observed)
 			}
 		})
 	}

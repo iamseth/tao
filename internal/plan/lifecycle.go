@@ -776,7 +776,7 @@ func markSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, no
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 
-	event := Event{Type: EventTypeSliceApproved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Slice approved"}
+	event := WithInterventionAttribution(Event{Type: EventTypeSliceApproved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Slice approved"}, "operator", "approve")
 	return event, !hasSliceApprovedEvent(detail.Events, sliceID), nil
 }
 
@@ -980,12 +980,12 @@ func markBlockedSliceRestarted(detail *PlanDetail, changes *artifactChangeSet, r
 	slice.Status = StatusPending
 	slice.Timing.UpdatedAt = request.RestartedAt
 	slice.Timing.LastActivityAt = new(request.RestartedAt)
-	return Event{
+	return WithInterventionAttribution(Event{
 		Type: EventTypeSliceRestarted, Timestamp: request.RestartedAt, PlanID: detail.State.Plan.ID, SliceID: slice.ID,
 		PriorRoot: request.PriorRoot, PriorBranch: request.PriorBoundary.Branch, PriorHead: request.PriorBoundary.Head,
 		BaselineBranch: request.BaselineBranch, BaselineHead: request.BaselineHead,
 		Reason: reason, Message: "Blocked slice restart authorized",
-	}, nil
+	}, "operator", "run_restart"), nil
 }
 
 // Reopen transitions a reviewed plan back to runnable state by appending new pending slices.
@@ -1056,7 +1056,7 @@ func (r *PlanRecord) ReopenAutomatic(newSlices []Slice, evidence AutomaticRework
 
 func automaticReopenMutation(newSlices []Slice, evidence AutomaticReworkRound) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
-		reopened := planReopenedEvent(detail.State.Plan.ID, evidence.ReopenedAt)
+		reopened := WithInterventionAttribution(planReopenedEvent(detail.State.Plan.ID, evidence.ReopenedAt), "automatic", "rework")
 		round := automaticReworkRoundEvent(detail.State.Plan.ID, evidence)
 		if semanticEventsWereRecorded(detail.Events, []Event{reopened, round}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
@@ -1066,13 +1066,13 @@ func automaticReopenMutation(newSlices []Slice, evidence AutomaticReworkRound) a
 			if err != nil {
 				return nil, err
 			}
-			return []Event{event, round}, nil
+			return []Event{WithInterventionAttribution(event, "automatic", "rework"), round}, nil
 		})
 	}
 }
 
 func planReopenedEvent(planID string, now time.Time) Event {
-	return Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: planID, Message: "Plan reopened for rework"}
+	return WithInterventionAttribution(Event{Type: EventTypePlanReopened, Timestamp: now, PlanID: planID, Message: "Plan reopened for rework"}, "operator", "rework_manual")
 }
 
 func automaticReworkRoundEvent(planID string, evidence AutomaticReworkRound) Event {
@@ -1080,11 +1080,11 @@ func automaticReworkRoundEvent(planID string, evidence AutomaticReworkRound) Eve
 	if evidence.Model != "" {
 		message += " on model " + evidence.Model
 	}
-	return Event{
+	return WithInterventionAttribution(Event{
 		Type: EventTypeReworkRound, Timestamp: evidence.ReopenedAt, PlanID: planID,
 		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
 		Model: evidence.Model, Message: message,
-	}
+	}, "automatic", "rework")
 }
 
 // ReworkRoundModel returns the model recorded by the latest rework_round event
@@ -1104,10 +1104,10 @@ func ReworkRoundModel(events []Event, round int) string {
 // consuming one. Recording it keeps round numbering derivable from durable
 // events on both reopen paths.
 func pullRequestReworkRoundEvent(planID string, round int, now time.Time) Event {
-	return Event{
+	return WithInterventionAttribution(Event{
 		Type: EventTypeReworkRound, Timestamp: now, PlanID: planID, Round: round,
 		Message: fmt.Sprintf("Pull-request rework round %d", round),
-	}
+	}, "operator", "rework_pr")
 }
 
 // ReopenForced explicitly bypasses the reopen status gate while still applying
@@ -1122,6 +1122,9 @@ func reopenMutation(newSlices []Slice, now time.Time, force bool) artifactMutati
 			return lifecycleMutation{}, err
 		}
 		expected := planReopenedEvent(detail.State.Plan.ID, now)
+		if force {
+			expected = WithInterventionAttribution(expected, "operator", "rework_force")
+		}
 		if semanticEventsWereRecorded(detail.Events, []Event{expected}) && reopenPostconditionMatches(detail, newSlices) {
 			return unchangedLifecycleMutation(detail), nil
 		}
@@ -1132,6 +1135,9 @@ func reopenMutation(newSlices []Slice, now time.Time, force bool) artifactMutati
 			event, err := reopen(detail, changes, newSlices, now)
 			if err != nil {
 				return nil, err
+			}
+			if force {
+				event = WithInterventionAttribution(event, "operator", "rework_force")
 			}
 			return []Event{event}, nil
 		})
@@ -1217,7 +1223,7 @@ func markSliceRemovedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	detail.Slices.Slices = removeSlice(detail.Slices.Slices, sliceID)
 	markPlanEdited(detail, changes, now)
 	slice.Timing.UpdatedAt = now
-	event := Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}
+	event := WithInterventionAttribution(Event{Type: EventTypeSliceRemoved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice removed by plan edit"}, "operator", "edit_remove")
 	return event, nil
 }
 
@@ -1252,7 +1258,7 @@ func markSliceSkippedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 	markPlanEdited(detail, changes, now)
-	event := Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}
+	event := WithInterventionAttribution(Event{Type: EventTypeSliceSkipped, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Pending slice skipped by plan edit"}, "operator", "edit_skip")
 	return event, nil
 }
 
@@ -1378,7 +1384,7 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 		ReplacedVerificationCommands: slices.Clone(normalized.ReplaceVerificationCommands),
 		Message:                      sliceAmendmentMessage,
 	}
-	return event, nil
+	return WithInterventionAttribution(event, "operator", "edit_amend"), nil
 }
 
 // amendableSlice returns the slice an operator may amend: a pending or
@@ -1440,7 +1446,7 @@ func markPendingSlicesReorderedWithChanges(detail *PlanDetail, changes *artifact
 	}
 	detail.State.Plan.PendingSlices = append([]string(nil), pendingOrder...)
 	markPlanEdited(detail, changes, now)
-	event := Event{Type: EventTypeSlicesReordered, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Pending slices reordered by plan edit"}
+	event := WithInterventionAttribution(Event{Type: EventTypeSlicesReordered, Timestamp: now, PlanID: detail.State.Plan.ID, Message: "Pending slices reordered by plan edit"}, "operator", "edit_move")
 	return event, nil
 }
 

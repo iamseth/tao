@@ -211,6 +211,7 @@ func (f Finalizer) appendVerificationRepairStoppedEvent(detail *plan.PlanDetail,
 		Reason:      reason,
 		Message:     "Stopped generated final-verification repair at the attempt cap",
 	}
+	event = plan.WithInterventionAttribution(event, "automatic", "verification_repair_stop")
 	return appender.AppendEvent(detail.Dir, event)
 }
 

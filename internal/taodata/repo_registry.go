@@ -16,6 +16,7 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/intervention"
 )
 
 const RepoSchema = "tao.repo.v1"
@@ -511,6 +512,8 @@ func (r Registry) AllocatePlan(repo Repo, slug string) (PlanAllocation, error) {
 		dir := filepath.Join(plansRoot, id)
 		err := os.Mkdir(dir, 0o700)
 		if err == nil {
+			// Eligibility is diagnostic only; a failed marker leaves coverage unknown.
+			_ = intervention.WriteCoverage(dir, id)
 			return PlanAllocation{ID: id, Dir: dir}, nil
 		}
 		if !os.IsExist(err) {

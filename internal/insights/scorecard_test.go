@@ -52,7 +52,7 @@ func TestScorecardFixtureCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ScorecardCoverage{Plans: 4, NeverStarted: 2, Active: 1, Terminal: 1, Matured: 2, Censored: 2, TreatmentHigh: 2, TreatmentLow: 1, TreatmentMissing: 1, PlanningMetricsPlans: 1, RoleAttributedSessions: 2, UnattributedSessions: 2, MaturityWindowDays: 14, MinimumSamples: 5}
+	want := ScorecardCoverage{UnknownAttributionPlans: 4, MaturedUnknownAttributionPlans: 2, Plans: 4, NeverStarted: 2, Active: 1, Terminal: 1, Matured: 2, Censored: 2, TreatmentHigh: 2, TreatmentLow: 1, TreatmentMissing: 1, PlanningMetricsPlans: 1, RoleAttributedSessions: 2, UnattributedSessions: 2, MaturityWindowDays: 14, MinimumSamples: 5}
 	if report.Scorecard.Coverage != want {
 		t.Fatalf("coverage = %+v, want %+v", report.Scorecard.Coverage, want)
 	}
@@ -414,6 +414,7 @@ func TestBuildScorecardOutcomes(t *testing.T) {
 				class: observationTerminal, matured: true, started: i != 6,
 				completed: i <= 4, exactApproval: i <= 3, firstReviewVerdict: []string{"", "approve", "approve", "changes_requested", "approve", "", ""}[i],
 				merged: i <= 2, pullRequestCompleted: i == 4, abandoned: i == 6,
+				attributionComplete: i <= 3, unattended: i == 1,
 				reworkStops: i % 2, reworkSlices: i % 3, verificationRepairs: i % 2,
 				reviewRounds: i, originalSlices: 2, hasApproval: i <= 3, hoursToApproval: float64(i * 10),
 				validationWarnings: i % 2, severities: map[string]int{"high": i},
@@ -436,7 +437,10 @@ func TestBuildScorecardOutcomes(t *testing.T) {
 		if o.Matured != 6 || o.Quality.Completed != EstimateRate(4, 6, 5) || o.Quality.ExactApproval != EstimateRate(3, 6, 5) || o.Quality.FirstReviewApproved != EstimateRate(3, 6, 5) {
 			t.Fatalf("quality = %+v", o)
 		}
-		for _, rate := range []RateEstimate{o.Quality.Merged, o.Quality.AnyRework} {
+		if o.Quality.Unattended != EstimateRate(1, 6, 5) || o.MaturedUnknownAttributionPlans != 3 || o.UnknownAttributionPlans != o.Plans-3 {
+			t.Fatalf("attribution outcomes = %+v", o)
+		}
+		for _, rate := range []RateEstimate{o.Quality.Unattended, o.Quality.Merged, o.Quality.AnyRework} {
 			if rate.Denominator != 6 || rate.Sparse {
 				t.Fatalf("rate = %+v", rate)
 			}

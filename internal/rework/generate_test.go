@@ -475,6 +475,20 @@ func TestReopenFromPullRequestReopensApprovedPlanFromChangeRequests(t *testing.T
 	if err != nil {
 		t.Fatalf("ReopenFromPullRequest returned error: %v", err)
 	}
+	for _, typ := range []string{plan.EventTypePlanReopened, plan.EventTypeReworkRound} {
+		found := false
+		for _, event := range detail.Events {
+			if event.Type == typ {
+				found = true
+				if event.Actor != "operator" || event.Trigger != "rework_pr" || event.AttributionVersion != 1 {
+					t.Fatalf("PR attribution = %+v", event)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s", typ)
+		}
+	}
 	if len(created) != 1 || created[0].ID != "r101-internal-rework-generate-go" {
 		t.Fatalf("created slices = %+v, want one change-request slice", created)
 	}

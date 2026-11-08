@@ -960,11 +960,11 @@ func (r *PlanRecord) RecordAutomaticReworkStop(evidence AutomaticReworkStop) err
 }
 
 func automaticReworkStopEvent(planID string, evidence AutomaticReworkStop) Event {
-	return Event{
+	return WithInterventionAttribution(Event{
 		Type: EventTypeReworkStopped, Timestamp: evidence.StoppedAt, PlanID: planID,
 		Round: evidence.Round, Attempts: evidence.Attempts, Fingerprint: evidence.Fingerprint,
 		Reason: evidence.Reason, Message: evidence.Reason,
-	}
+	}, "automatic", "rework_stop")
 }
 
 // ReopenFromPullRequest atomically appends pull-request rework slices and
@@ -990,7 +990,7 @@ func (r *PlanRecord) ReopenFromPullRequest(newSlices []Slice, consumedThreadIDs 
 	round := reworkRoundOfSlices(newSlices)
 
 	return r.apply(func(detail *PlanDetail) (lifecycleMutation, error) {
-		expected := []Event{planReopenedEvent(detail.State.Plan.ID, now)}
+		expected := []Event{WithInterventionAttribution(planReopenedEvent(detail.State.Plan.ID, now), "operator", "rework_pr")}
 		if round > 0 {
 			expected = append(expected, pullRequestReworkRoundEvent(detail.State.Plan.ID, round, now))
 		}
@@ -1014,6 +1014,7 @@ func (r *PlanRecord) ReopenFromPullRequest(newSlices []Slice, consumedThreadIDs 
 			if err != nil {
 				return nil, err
 			}
+			event = WithInterventionAttribution(event, "operator", "rework_pr")
 			detail.State.Plan.PRFeedbackConsumedThreadIDs = append(detail.State.Plan.PRFeedbackConsumedThreadIDs, threadIDs...)
 			if round <= 0 {
 				return []Event{event}, nil
@@ -1118,10 +1119,10 @@ func (r *PlanRecord) ReplaceFinalizationFailure(expected, replacement Finalizati
 		detail.State.UpdatedAt = replacement.FailedAt
 		detail.State.Plan.Timing.LastActivityAt = new(replacement.FailedAt)
 		return []Event{
-			{
+			WithInterventionAttribution(Event{
 				Type: EventTypeFinalizationFailureCleared, Timestamp: replacement.FailedAt, PlanID: detail.State.Plan.ID,
 				FinalizationFailure: cloneFinalizationFailure(existing), Message: "Plan finalization failure cleared",
-			},
+			}, "automatic", "finalization_recovery"),
 			{
 				Type: EventTypeFinalizationFailed, Timestamp: replacement.FailedAt, PlanID: detail.State.Plan.ID,
 				FinalizationFailure: cloneFinalizationFailure(&replacement), Message: "Plan finalization failed",
@@ -1163,10 +1164,10 @@ func (r *PlanRecord) ClearFinalizationFailure(expected FinalizationFailure, clea
 		changes.ClearPlanFinalizationFailure()
 		detail.State.UpdatedAt = clearedAt
 		detail.State.Plan.Timing.LastActivityAt = new(clearedAt)
-		event := Event{
+		event := WithInterventionAttribution(Event{
 			Type: EventTypeFinalizationFailureCleared, Timestamp: clearedAt, PlanID: detail.State.Plan.ID,
 			FinalizationFailure: cloneFinalizationFailure(existing), Message: "Plan finalization failure cleared",
-		}
+		}, "automatic", "finalization_recovery")
 		return []Event{event}, nil
 	})
 }
@@ -1374,6 +1375,7 @@ func (r *PlanRecord) RearmSingleMergeResolution(expected SingleMergeCommitIntent
 			SingleMergeStartup: &failure, Reason: string(failure.Capability),
 			Message: "Single-plan merge resolution rearmed after proven pre-acceptance failure",
 		}
+		event = WithInterventionAttribution(event, "automatic", "merge_rearm")
 		if err := validateSingleMergeResolutionEventSize(event); err != nil {
 			return nil, err
 		}
@@ -1441,6 +1443,7 @@ func (r *PlanRecord) mutateSingleMergeResolution(expected SingleMergeCommitInten
 			PlanID: detail.State.Plan.ID, SingleMergeResolution: projectSingleMergeResolutionEvent(&next),
 			Reason: string(next.RollbackReason), Message: "Single-plan merge resolution rolled back",
 		}
+		event = WithInterventionAttribution(event, "automatic", "merge_rollback")
 		if err := validateSingleMergeResolutionEventSize(event); err != nil {
 			return nil, err
 		}
@@ -1873,10 +1876,10 @@ func (r *PlanRecord) ConsumeReviewProposalCorrection(repairedWorkspace *Finaliza
 		detail.State.Plan.Timing.LastActivityAt = new(attempt.FailedAt)
 		events := make([]Event, 0, 2)
 		if repaired != nil {
-			events = append(events, Event{
+			events = append(events, WithInterventionAttribution(Event{
 				Type: EventTypeFinalizationFailureCleared, Timestamp: attempt.FailedAt, PlanID: detail.State.Plan.ID,
 				FinalizationFailure: cloneFinalizationFailure(repaired), Message: "Plan finalization failure cleared",
-			})
+			}, "automatic", "finalization_recovery"))
 		}
 		return append(events, Event{
 			Type: EventTypeFinalizationFailed, Timestamp: attempt.FailedAt, PlanID: detail.State.Plan.ID,
@@ -1963,10 +1966,10 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 		detail.State.UpdatedAt = mutationAt
 		detail.State.Plan.Timing.LastActivityAt = &mutationAt
 		if expectedFailure != nil {
-			cleared := Event{
+			cleared := WithInterventionAttribution(Event{
 				Type: EventTypeFinalizationFailureCleared, Timestamp: expectedFailure.FailedAt, PlanID: detail.State.Plan.ID,
 				FinalizationFailure: cloneFinalizationFailure(expectedFailure), Message: "Plan finalization failure cleared",
-			}
+			}, "automatic", "finalization_recovery")
 			return []Event{cleared, event}, nil
 		}
 		return []Event{event}, nil
@@ -2058,6 +2061,7 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 			SingleMergeResolution: projectSingleMergeResolutionEvent(resolutionEvidence),
 			Message:               "Plan merged into default branch",
 		}
+		event = WithInterventionAttribution(event, "automatic", "merge_complete")
 		if event.SingleMergeResolution != nil {
 			if err := validateSingleMergeResolutionEventSize(event); err != nil {
 				return nil, err

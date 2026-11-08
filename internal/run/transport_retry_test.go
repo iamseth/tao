@@ -37,6 +37,7 @@ func TestImplementationTransportTimeoutBudgetsRemainIndependent(t *testing.T) {
 			detail := interruptedServiceRunDetail(t, root)
 			detail.State.Repo.BaseCommit = "base"
 			calls, delays := 0, 0
+			var events []plan.Event
 			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "tao/plan-a", "base")
 			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				RepositoryAdmission: testRepositoryAdmission,
@@ -46,7 +47,10 @@ func TestImplementationTransportTimeoutBudgetsRemainIndependent(t *testing.T) {
 					}
 					return runner(ctx, cwd, name, args, stdout, stderr)
 				},
-				EventAppender: eventAppenderFunc(func(string, plan.Event) error { return nil }),
+				EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
+					events = append(events, event)
+					return nil
+				}),
 				TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 					delays++
 					if delay != time.Duration(delays)*time.Second {
@@ -67,6 +71,23 @@ func TestImplementationTransportTimeoutBudgetsRemainIndependent(t *testing.T) {
 				}),
 			}})
 			err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
+			for _, event := range events {
+				actor, trigger := "automatic", "run_context"
+				switch event.Type {
+				case plan.EventTypeSliceResumeAttempted, plan.EventTypeSliceResumeFailed:
+					actor, trigger = "operator", "run_resume"
+					if event.Attempts > 1 {
+						actor, trigger = "automatic", "transport_retry"
+						if errors.As(tt.failures[event.Attempts-2], new(*agent.SessionTimeoutError)) {
+							trigger = "timeout_continue"
+						}
+					}
+				case plan.EventTypeRunContext:
+				default:
+					continue
+				}
+				assertRecoveryAttribution(t, event, actor, trigger)
+			}
 			if !errors.Is(err, tt.failures[len(tt.failures)-1]) || calls != tt.wantCalls || delays != tt.wantDelays {
 				t.Fatalf("calls=%d delays=%d error=%v", calls, delays, err)
 			}
@@ -386,12 +407,24 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 func assertTransportResumeEvents(t *testing.T, events []plan.Event, wantAttempts []int, wantFailures int) {
 	t.Helper()
 	var attempts []int
+	attribution := map[int]plan.Event{}
 	failures := 0
 	for _, event := range events {
 		switch event.Type {
 		case plan.EventTypeSliceResumeAttempted:
 			attempts = append(attempts, event.Attempts)
+			attribution[event.Attempts] = event
+			if event.Actor == "operator" {
+				assertRecoveryAttribution(t, event, "operator", "run_resume")
+			} else {
+				assertRecoveryAttribution(t, event, "automatic", "transport_retry")
+			}
 		case plan.EventTypeSliceResumeFailed:
+			attempt, ok := attribution[event.Attempts]
+			if !ok {
+				t.Fatalf("failure without attempt: %#v", event)
+			}
+			assertRecoveryAttribution(t, event, attempt.Actor, attempt.Trigger)
 			failures++
 		case plan.EventTypeSliceStarted, plan.EventTypeSliceCompleted:
 			t.Fatalf("transport retry duplicated lifecycle event: %+v", event)

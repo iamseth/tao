@@ -313,6 +313,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 	if plan.IsReworkSliceID(slice.ID) {
 		run.Model = plan.ReworkRoundModel(detail.Events, plan.ReworkRoundFromSliceID(slice.ID))
 	}
+	resumeActor, resumeTrigger := "operator", "run_resume"
 	transportRetries := 0
 	timeoutOriginal := timeoutSliceSnapshot(interruptedSlice(detail, slice.ID))
 	timeoutBase := plan.PlanOwnershipBase(detail)
@@ -339,7 +340,7 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 			}
 		}
 		if run.Resuming {
-			r.recordSliceResumeFailure(detail, slice.ID, run.ResumeAttempt, handoffErr)
+			r.recordSliceResumeFailureAttributed(detail, slice.ID, run.ResumeAttempt, handoffErr, resumeActor, resumeTrigger)
 		}
 		providerErr := fmt.Errorf("%s failed while running slice %s; see %s: %w", agentLabel(r.execution.Config.Agent), slice.ID, logPath, handoffErr)
 		timedOut := errors.As(handoffErr, new(*agent.SessionTimeoutError))
@@ -401,7 +402,11 @@ func (r SelectedSliceRunner) Run(ctx context.Context, detail *plan.PlanDetail, d
 		if err := r.recordRunContext(reloaded, slice.ID, runPacket, validation); err != nil {
 			return nil, transportRecoveryError(providerErr, err)
 		}
-		if err := r.recordSliceResumeAttempt(reloaded, slice.ID, resumeAttempt); err != nil {
+		resumeActor, resumeTrigger = "automatic", "transport_retry"
+		if timedOut {
+			resumeTrigger = "timeout_continue"
+		}
+		if err := r.recordSliceResumeAttemptAttributed(reloaded, slice.ID, resumeAttempt, resumeActor, resumeTrigger); err != nil {
 			return nil, transportRecoveryError(providerErr, err)
 		}
 		detail = reloaded
@@ -580,6 +585,10 @@ func nextSliceResumeAttempt(events []plan.Event, sliceID string) int {
 }
 
 func (r SelectedSliceRunner) recordSliceResumeAttempt(detail *plan.PlanDetail, sliceID string, attempt int) error {
+	return r.recordSliceResumeAttemptAttributed(detail, sliceID, attempt, "operator", "run_resume")
+}
+
+func (r SelectedSliceRunner) recordSliceResumeAttemptAttributed(detail *plan.PlanDetail, sliceID string, attempt int, actor, trigger string) error {
 	event := plan.Event{
 		Type:      plan.EventTypeSliceResumeAttempted,
 		Timestamp: now(r.execution).UTC(),
@@ -589,6 +598,7 @@ func (r SelectedSliceRunner) recordSliceResumeAttempt(detail *plan.PlanDetail, s
 		Attempts:  attempt,
 		Message:   fmt.Sprintf("Started interrupted slice resume attempt %d", attempt),
 	}
+	event = plan.WithInterventionAttribution(event, actor, trigger)
 	if err := r.execution.Dependencies.EventAppender.AppendEvent(detail.Dir, event); err != nil {
 		return fmt.Errorf("record slice resume attempt before agent handoff: %w", err)
 	}
@@ -597,6 +607,10 @@ func (r SelectedSliceRunner) recordSliceResumeAttempt(detail *plan.PlanDetail, s
 }
 
 func (r SelectedSliceRunner) recordSliceResumeFailure(detail *plan.PlanDetail, sliceID string, attempt int, providerErr error) {
+	r.recordSliceResumeFailureAttributed(detail, sliceID, attempt, providerErr, "operator", "run_resume")
+}
+
+func (r SelectedSliceRunner) recordSliceResumeFailureAttributed(detail *plan.PlanDetail, sliceID string, attempt int, providerErr error, actor, trigger string) {
 	event := plan.Event{
 		Type:      plan.EventTypeSliceResumeFailed,
 		Timestamp: now(r.execution).UTC(),
@@ -607,6 +621,7 @@ func (r SelectedSliceRunner) recordSliceResumeFailure(detail *plan.PlanDetail, s
 		Reason:    providerErr.Error(),
 		Message:   fmt.Sprintf("Interrupted slice resume attempt %d failed", attempt),
 	}
+	event = plan.WithInterventionAttribution(event, actor, trigger)
 	if err := r.execution.Dependencies.EventAppender.AppendEvent(detail.Dir, event); err != nil {
 		_ = writef(r.out, "Warning: record slice resume failure: %v\n", err)
 		return
@@ -689,6 +704,7 @@ func (r SelectedSliceRunner) recordRunContext(detail *plan.PlanDetail, sliceID s
 		GuardrailWarnings: warnings,
 		Message:           "Recorded run context telemetry",
 	}
+	event = plan.WithInterventionAttribution(event, "automatic", "run_context")
 	if err := appender.AppendEvent(detail.Dir, event); err != nil {
 		return fmt.Errorf("record run context telemetry: %w", err)
 	}
@@ -879,7 +895,24 @@ func continueBlockedPlan(execution runExecution, detail *plan.PlanDetail, timest
 	if err != nil {
 		return err
 	}
-	return record.ContinueBlocked(timestamp)
+	lifecycle := plan.AnalyzeLifecycle(detail)
+	wasContinuable := lifecycle.Continuable
+	sliceID := lifecycle.CurrentSliceID
+	if sliceID == "" && len(detail.State.Plan.PendingSlices) > 0 {
+		sliceID = detail.State.Plan.PendingSlices[0]
+	}
+	if err := record.ContinueBlocked(timestamp); err != nil {
+		return err
+	}
+	if wasContinuable && execution.Dependencies.EventAppender != nil {
+		event := plan.WithInterventionAttribution(plan.Event{
+			Type: plan.EventTypeInterventionObserved, Timestamp: timestamp,
+			PlanID: detail.State.Plan.ID, SliceID: sliceID,
+			Message: "Continued blocked plan",
+		}, "operator", "run_continue")
+		_ = execution.Dependencies.EventAppender.AppendEvent(detail.Dir, event)
+	}
+	return nil
 }
 
 func planMutationRecord(execution runExecution, detail *plan.PlanDetail) (PlanMutationRecord, error) {

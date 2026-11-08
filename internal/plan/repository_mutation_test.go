@@ -303,6 +303,9 @@ func TestPlanRecordRearmsExactRequestedResolutionWithBoundedDiagnostic(t *testin
 	if event == nil || event.SingleMergeStartup == nil || !reflect.DeepEqual(*event.SingleMergeStartup, failure) || event.SingleMergeResolution == nil || event.SingleMergeResolution.Phase != SingleMergeResolutionPhaseRequested {
 		t.Fatalf("rearm diagnostic event = %#v", event)
 	}
+	if event.Actor != "automatic" || event.Trigger != "merge_rearm" || event.AttributionVersion != 1 {
+		t.Fatalf("rearm attribution = %#v", event)
+	}
 	reloaded, err := repo.GetPlan(context.Background(), "resolution-rearm")
 	if err != nil {
 		t.Fatal(err)
@@ -819,6 +822,14 @@ func TestPlanRecordFinalizationFailureLifecycle(t *testing.T) {
 	clearEvents := 0
 	for _, event := range reloaded.Events {
 		if event.Type == EventTypeFinalizationFailureCleared {
+			if event.Actor != "automatic" || event.Trigger != "finalization_recovery" || event.AttributionVersion != 1 {
+				t.Fatalf("clear attribution = %+v", event)
+			}
+			legacy := event
+			legacy.Actor, legacy.Trigger, legacy.AttributionVersion = "", "", 0
+			if !semanticEventsWereRecorded([]Event{legacy}, []Event{event}) || eventsWereRecorded([]Event{legacy}, []Event{event}) {
+				t.Fatal("clearing must preserve legacy semantic retry and exact replay distinction")
+			}
 			clearEvents++
 		}
 	}
@@ -1401,6 +1412,32 @@ func TestPlanRecordArtifactMutationRetriesRecognizeRecoveredOperation(t *testing
 			installed := detailFromFiles(files)
 			test.assert(t, installed)
 			mutationID := requireSingleEventType(t, installed.Events, test.eventType)
+			trigger := map[string]string{"remove": "edit_remove", "skip": "edit_skip", "reorder": "edit_move"}[test.name]
+			if trigger != "" {
+				for _, event := range installed.Events {
+					if event.Type == test.eventType && (event.Actor != "operator" || event.Trigger != trigger || event.AttributionVersion != 1) {
+						t.Fatalf("unexpected recovered attribution: %+v", event)
+					}
+				}
+				legacy := clonePlanDetail(installed)
+				for i := range legacy.Events {
+					legacy.Events[i].Actor, legacy.Events[i].Trigger = "", ""
+					legacy.Events[i].AttributionVersion = 0
+				}
+				before := clonePlanDetail(legacy)
+				var mutation lifecycleMutation
+				switch test.name {
+				case "remove":
+					mutation, err = removeSliceMutation("003-c", mutatedAt)(legacy)
+				case "skip":
+					mutation, err = skipSliceMutation("003-c", mutatedAt)(legacy)
+				case "reorder":
+					mutation, err = reorderPendingSlicesMutation([]string{"001-a", "003-c", "002-b"}, mutatedAt)(legacy)
+				}
+				if err != nil || len(mutation.Events) != 0 || !reflect.DeepEqual(legacy, before) {
+					t.Fatalf("legacy edit retry changed evidence: %+v, %v", mutation, err)
+				}
+			}
 
 			retriedAt := mutatedAt.Add(time.Minute)
 			if err := test.apply(record, retriedAt); err != nil {
@@ -1438,6 +1475,9 @@ func TestPlanRecordArtifactMutationRetriesRecognizeRecoveredOperation(t *testing
 				t.Fatalf("fresh later retry changed settled postimage:\n got: state=%#v slices=%#v\nwant: state=%#v slices=%#v", settledDetail.State, settledDetail.Slices, installed.State, installed.Slices)
 			}
 			test.assert(t, settledDetail)
+			if !reflect.DeepEqual(settledDetail.Events, installed.Events) {
+				t.Fatalf("retry changed exact event evidence: %+v", settledDetail.Events)
+			}
 			if got := requireSingleEventType(t, settledDetail.Events, test.eventType); got != mutationID {
 				t.Fatalf("fresh retry event mutation_id = %q, want recovered %q", got, mutationID)
 			}
@@ -1761,6 +1801,11 @@ func TestPlanRecordAutomaticReworkStopIsDurableAndIdempotent(t *testing.T) {
 		t.Fatalf("same-record retry: %v", err)
 	}
 	mutationID := requireSingleEventType(t, detail.Events, EventTypeReworkStopped)
+	for _, event := range detail.Events {
+		if event.Type == EventTypeReworkStopped && (event.Actor != "automatic" || event.Trigger != "rework_stop" || event.AttributionVersion != 1) {
+			t.Fatalf("stop attribution = %+v", event)
+		}
+	}
 	if !reflect.DeepEqual(detail.State, original.State) || !reflect.DeepEqual(detail.Slices, original.Slices) {
 		t.Fatalf("stop changed lifecycle artifacts: state=%#v slices=%#v", detail.State, detail.Slices)
 	}
@@ -1871,6 +1916,11 @@ func assertAutomaticReopenEvents(t *testing.T, events []Event) {
 	if len(owned) != 2 || owned[0].Type != EventTypePlanReopened || owned[1].Type != EventTypeReworkRound {
 		t.Fatalf("automatic reopen events = %#v", owned)
 	}
+	for _, event := range owned {
+		if event.Actor != "automatic" || event.Trigger != "rework" || event.AttributionVersion != 1 {
+			t.Fatalf("automatic attribution = %#v", event)
+		}
+	}
 	if owned[0].MutationID == "" || owned[1].MutationID != owned[0].MutationID {
 		t.Fatalf("automatic reopen mutation IDs = %q, %q", owned[0].MutationID, owned[1].MutationID)
 	}
@@ -1976,6 +2026,9 @@ func TestEditRemoveSliceDeletesPendingSlice(t *testing.T) {
 	if findSlice(detail, "001-a") != nil {
 		t.Fatalf("removed slice still present: %#v", detail.Slices.Slices)
 	}
+	if event.Actor != "operator" || event.Trigger != "edit_remove" || event.AttributionVersion != 1 {
+		t.Fatalf("unexpected attribution: %+v", event)
+	}
 	if event.Type != EventTypeSliceRemoved || event.SliceID != "001-a" {
 		t.Fatalf("unexpected event: %#v", event)
 	}
@@ -1996,6 +2049,9 @@ func TestEditSkipSlicePreservesAuditableRecord(t *testing.T) {
 	}
 	if slices.Contains(detail.State.Plan.PendingSlices, "001-a") {
 		t.Fatalf("skipped slice remains pending: %v", detail.State.Plan.PendingSlices)
+	}
+	if event.Actor != "operator" || event.Trigger != "edit_skip" || event.AttributionVersion != 1 {
+		t.Fatalf("unexpected attribution: %+v", event)
 	}
 	if event.Type != EventTypeSliceSkipped || event.SliceID != "001-a" {
 		t.Fatalf("unexpected event: %#v", event)
@@ -2070,6 +2126,9 @@ func TestEditReorderPendingSlices(t *testing.T) {
 	}
 	if strings.Join(detail.State.Plan.PendingSlices, ",") != "001-a,003-c,002-b" {
 		t.Fatalf("unexpected pending queue: %v", detail.State.Plan.PendingSlices)
+	}
+	if event.Actor != "operator" || event.Trigger != "edit_move" || event.AttributionVersion != 1 {
+		t.Fatalf("unexpected attribution: %+v", event)
 	}
 	if event.Type != EventTypeSlicesReordered {
 		t.Fatalf("unexpected event: %#v", event)

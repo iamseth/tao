@@ -101,6 +101,12 @@ func TestEditRemoveSkipsAndMovesPendingSlices(t *testing.T) {
 		t.Fatalf("unexpected move output %q", out.String())
 	}
 
+	for _, event := range updated.Events {
+		trigger := map[string]string{plan.EventTypeSliceRemoved: "edit_remove", plan.EventTypeSliceSkipped: "edit_skip", plan.EventTypeSlicesReordered: "edit_move"}[event.Type]
+		if trigger != "" && (event.Actor != "operator" || event.Trigger != trigger || event.AttributionVersion != 1) {
+			t.Fatalf("unexpected edit attribution: %+v", event)
+		}
+	}
 	// Verify all three event types were appended.
 	types := eventTypes(updated.Events)
 	for _, want := range []string{plan.EventTypeSliceRemoved, plan.EventTypeSliceSkipped, plan.EventTypeSlicesReordered} {
@@ -375,6 +381,9 @@ func TestEditAmendAppendsContractChangesToBlockedSlice(t *testing.T) {
 			continue
 		}
 		found = true
+		if event.Actor != "operator" || event.Trigger != "edit_amend" || event.AttributionVersion != 1 {
+			t.Fatalf("unexpected amendment attribution: %+v", event)
+		}
 		if event.Reason != entry.Reason || !slices.Equal(event.AmendedFields, entry.Fields) {
 			t.Fatalf("slice_amended event = %+v", event)
 		}

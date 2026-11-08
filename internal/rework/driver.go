@@ -333,6 +333,10 @@ type Driver struct {
 	Now        Clock
 	Escalation EscalationPolicy
 
+	// ObserveRestart is optional diagnostic telemetry after stop admission.
+	// Its failure must not affect execution or the automatic rework budget.
+	ObserveRestart func(*plan.PlanDetail, plan.Event) error
+
 	// DecideOne lets owners retain an existing decision seam while delegating
 	// round driving to Loop.
 	DecideOne DecisionFunc
@@ -619,6 +623,12 @@ func (d Driver) Run(ctx context.Context, planID string, opts RunOptions) error {
 			}
 			state.Budget = freshAutomaticReworkBudget(detail)
 			state.DecideBeforeExecute = stopped && opts.AllowRestart
+			if state.DecideBeforeExecute && d.ObserveRestart != nil {
+				_ = d.ObserveRestart(detail, plan.WithInterventionAttribution(plan.Event{
+					Type: plan.EventTypeInterventionObserved, PlanID: detail.State.Plan.ID,
+					Timestamp: d.now(), Message: "Persisted automatic rework stop acknowledged",
+				}, "operator", "rework_restart"))
+			}
 		}
 	}
 

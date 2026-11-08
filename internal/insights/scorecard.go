@@ -65,6 +65,7 @@ type EfficiencyOutcomes struct {
 }
 
 type QualityOutcomes struct {
+	Unattended             RateEstimate   `json:"unattended"`
 	Started                RateEstimate   `json:"started"`
 	FirstReviewApproved    RateEstimate   `json:"first_review_approved"`
 	ExactApproval          RateEstimate   `json:"exact_approval"`
@@ -87,13 +88,15 @@ type ReliabilityOutcomes struct {
 }
 
 type CohortOutcomes struct {
-	Plans        int                 `json:"plans"`
-	Matured      int                 `json:"matured"`
-	Censored     int                 `json:"censored"`
-	NeverStarted int                 `json:"never_started"`
-	Quality      QualityOutcomes     `json:"quality"`
-	Efficiency   EfficiencyOutcomes  `json:"efficiency"`
-	Reliability  ReliabilityOutcomes `json:"reliability"`
+	UnknownAttributionPlans        int                 `json:"unknown_attribution_plans"`
+	MaturedUnknownAttributionPlans int                 `json:"matured_unknown_attribution_plans"`
+	Plans                          int                 `json:"plans"`
+	Matured                        int                 `json:"matured"`
+	Censored                       int                 `json:"censored"`
+	NeverStarted                   int                 `json:"never_started"`
+	Quality                        QualityOutcomes     `json:"quality"`
+	Efficiency                     EfficiencyOutcomes  `json:"efficiency"`
+	Reliability                    ReliabilityOutcomes `json:"reliability"`
 }
 
 type TreatmentCohort struct {
@@ -119,22 +122,24 @@ type ExcludedLabel struct {
 
 // ScorecardCoverage exposes missing evidence and censoring alongside sample counts.
 type ScorecardCoverage struct {
-	Plans                   int `json:"plans"`
-	NeverStarted            int `json:"never_started"`
-	Active                  int `json:"active"`
-	Terminal                int `json:"terminal"`
-	Matured                 int `json:"matured"`
-	Censored                int `json:"censored"`
-	TreatmentHigh           int `json:"treatment_high"`
-	TreatmentLow            int `json:"treatment_low"`
-	TreatmentAmbiguous      int `json:"treatment_ambiguous"`
-	TreatmentMissing        int `json:"treatment_missing"`
-	PlanningMetricsPlans    int `json:"planning_metrics_plans"`
-	RoleAttributedSessions  int `json:"role_attributed_sessions"`
-	UnattributedSessions    int `json:"unattributed_sessions"`
-	ReasoningEffortRecorded int `json:"reasoning_effort_recorded"`
-	MaturityWindowDays      int `json:"maturity_window_days"`
-	MinimumSamples          int `json:"minimum_samples"`
+	UnknownAttributionPlans        int `json:"unknown_attribution_plans"`
+	MaturedUnknownAttributionPlans int `json:"matured_unknown_attribution_plans"`
+	Plans                          int `json:"plans"`
+	NeverStarted                   int `json:"never_started"`
+	Active                         int `json:"active"`
+	Terminal                       int `json:"terminal"`
+	Matured                        int `json:"matured"`
+	Censored                       int `json:"censored"`
+	TreatmentHigh                  int `json:"treatment_high"`
+	TreatmentLow                   int `json:"treatment_low"`
+	TreatmentAmbiguous             int `json:"treatment_ambiguous"`
+	TreatmentMissing               int `json:"treatment_missing"`
+	PlanningMetricsPlans           int `json:"planning_metrics_plans"`
+	RoleAttributedSessions         int `json:"role_attributed_sessions"`
+	UnattributedSessions           int `json:"unattributed_sessions"`
+	ReasoningEffortRecorded        int `json:"reasoning_effort_recorded"`
+	MaturityWindowDays             int `json:"maturity_window_days"`
+	MinimumSamples                 int `json:"minimum_samples"`
 }
 
 type observationClass string
@@ -154,6 +159,7 @@ type roleTotals struct {
 }
 
 type planObservation struct {
+	attributionComplete, unattended                                   bool
 	createdAt, firstApprovalAt, mergeAt                               time.Time
 	historyPresent, historyMalformed                                  bool
 	recordedBlocker, recordedRework                                   bool
@@ -304,6 +310,8 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 	// inactive history after a fixed window. Compare against one UTC day boundary.
 	now = now.UTC().Truncate(24 * time.Hour)
 	o.matured = o.class == observationTerminal || (summary.LastActivityAt != nil && now.Sub(*summary.LastActivityAt) >= scorecardMaturityWindow)
+	o.attributionComplete = data.intervention.complete(summary.ID, data, o.started)
+	o.unattended = o.merged && o.attributionComplete && !data.intervention.operator
 	return o
 }
 
@@ -486,6 +494,12 @@ func buildCohortOutcomes(observations []planObservation) CohortOutcomes {
 	var rounds, original []float64
 	severities, infrastructure, quality := make(map[string]int), make(map[string]int), make(map[string]int)
 	for _, o := range observations {
+		if !o.attributionComplete {
+			out.UnknownAttributionPlans++
+			if o.matured {
+				out.MaturedUnknownAttributionPlans++
+			}
+		}
 		if o.class == observationNeverStarted {
 			out.NeverStarted++
 		}
@@ -527,7 +541,7 @@ func buildCohortOutcomes(observations []planObservation) CohortOutcomes {
 		}{
 			{o.firstReviewVerdict == plan.ReviewVerdictApprove, &q.FirstReviewApproved},
 			{o.exactApproval, &q.ExactApproval}, {o.completed, &q.Completed},
-			{o.merged, &q.Merged}, {o.pullRequestCompleted, &q.PullRequestCompleted},
+			{o.unattended, &q.Unattended}, {o.merged, &q.Merged}, {o.pullRequestCompleted, &q.PullRequestCompleted},
 			{o.abandoned, &q.Abandoned}, {o.reworkStops > 0, &q.ReworkStopped},
 			{o.reworkSlices > 0, &q.AnyRework}, {o.verificationRepairs > 0, &q.AnyVerificationRepair},
 		} {
@@ -537,7 +551,7 @@ func buildCohortOutcomes(observations []planObservation) CohortOutcomes {
 		}
 	}
 	q.Started = EstimateRate(q.Started.Numerator, out.Plans, scorecardMinimumSamples)
-	for _, rate := range []*RateEstimate{&q.FirstReviewApproved, &q.ExactApproval, &q.Completed, &q.Merged, &q.PullRequestCompleted, &q.Abandoned, &q.ReworkStopped, &q.AnyRework, &q.AnyVerificationRepair} {
+	for _, rate := range []*RateEstimate{&q.Unattended, &q.FirstReviewApproved, &q.ExactApproval, &q.Completed, &q.Merged, &q.PullRequestCompleted, &q.Abandoned, &q.ReworkStopped, &q.AnyRework, &q.AnyVerificationRepair} {
 		*rate = EstimateRate(rate.Numerator, out.Matured, scorecardMinimumSamples)
 	}
 	q.ReviewRounds = EstimateMedian(rounds, scorecardMinimumSamples)
@@ -732,6 +746,12 @@ func scorecardCoverage(observations []planObservation) ScorecardCoverage {
 	c := ScorecardCoverage{MaturityWindowDays: int(scorecardMaturityWindow / (24 * time.Hour)), MinimumSamples: scorecardMinimumSamples}
 	for _, o := range observations {
 		c.Plans++
+		if !o.attributionComplete {
+			c.UnknownAttributionPlans++
+			if o.matured {
+				c.MaturedUnknownAttributionPlans++
+			}
+		}
 		c.ReasoningEffortRecorded += o.reasoningEffortRecorded
 		switch o.class {
 		case observationNeverStarted:

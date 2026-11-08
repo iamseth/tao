@@ -913,8 +913,8 @@ func TestMergeRefusesReopenedPlanWithoutReworkCommits(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "no commits beyond the previously recorded merge") {
 			t.Fatalf("expected rework refusal, got %v", err)
 		}
-		if events.count(plan.EventTypePlanMerged) != 0 {
-			t.Fatalf("no merge may be recorded, got %#v", events.events)
+		if events.count(plan.EventTypePlanMerged) != 0 || events.count(plan.EventTypeInterventionObserved) != 0 {
+			t.Fatalf("no merge or intervention may be recorded, got %#v", events.events)
 		}
 		if len(cleaner.cleaned) != 0 {
 			t.Fatalf("cleanup must not run, got %#v", cleaner.cleaned)
@@ -1011,8 +1011,12 @@ func TestMergeRetriesCleanupWhenMergeAlreadyRecorded(t *testing.T) {
 	t.Run("already cleaned is success", func(t *testing.T) {
 		cleaner := successfulCleanup()
 		cleaner.managed = nil // branch no longer managed: nothing left to clean
-		if err := (newTestService(Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: cleaner})).Merge(context.Background(), newDetail(), Options{}); err != nil {
+		events := &fakeEventAppender{}
+		if err := (newTestService(Service{RepositoryAdmission: testRepositoryAdmission, Git: &fakeGitClient{}, Cleaner: cleaner, Events: events})).Merge(context.Background(), newDetail(), Options{Force: true}); err != nil {
 			t.Fatal(err)
+		}
+		if events.count(plan.EventTypeInterventionObserved) != 0 {
+			t.Fatalf("unused force observed: %#v", events.events)
 		}
 	})
 
@@ -1436,6 +1440,10 @@ func TestMergeRecoversExactResolutionCommitBeforeSettlementPersistence(t *testin
 	if err := service.Merge(context.Background(), detail, Options{NoVerify: true}); err != nil {
 		t.Fatal(err)
 	}
+	observation := events.requireSingle(t, plan.EventTypeInterventionObserved)
+	if observation.Actor != "operator" || observation.Trigger != "merge_resolution_resume" || observation.AttributionVersion != 1 {
+		t.Fatalf("resume attribution = %#v", observation)
+	}
 	if resolverCalls != 1 {
 		t.Fatalf("settlement recovery reran resolver: calls=%d", resolverCalls)
 	}
@@ -1762,6 +1770,9 @@ func TestMergeResolutionFailureSettlesRollbackAndAllowsReworkedRerun(t *testing.
 				t.Fatalf("first merge left default at %s, want restored %s", got, defaultHead)
 			}
 			rollbackEvent := events.requireSingle(t, plan.EventTypeSingleMergeRolledBack)
+			if rollbackEvent.Actor != "automatic" || rollbackEvent.Trigger != "merge_rollback" || rollbackEvent.AttributionVersion != 1 {
+				t.Fatalf("rollback attribution = %#v", rollbackEvent)
+			}
 			if rollbackEvent.Reason != string(tt.wantReason) || rollbackEvent.SingleMergeResolution == nil || rollbackEvent.SingleMergeResolution.Phase != plan.SingleMergeResolutionPhaseRolledBack {
 				t.Fatalf("rollback event lost durable diagnostics: %#v", rollbackEvent)
 			}
@@ -1854,6 +1865,43 @@ func TestPrepareSingleMergeIntentGeneratesLegacyProposalOnceBeforeMutation(t *te
 	}
 }
 
+type failingInterventionAppender struct {
+	*fakeEventAppender
+}
+
+func (f failingInterventionAppender) AppendEvent(dir string, event plan.Event) error {
+	if event.Type == plan.EventTypeInterventionObserved {
+		return errors.New("diagnostic unavailable")
+	}
+	return f.fakeEventAppender.AppendEvent(dir, event)
+}
+
+func TestMergeForceDiagnosticFailureDoesNotPreventRecording(t *testing.T) {
+	t.Parallel()
+	detail := mergeReadyDetail("base123")
+	detail.Dir = t.TempDir()
+	events := failingInterventionAppender{&fakeEventAppender{}}
+	git := &fakeGitClient{
+		defaultBranch: "main",
+		revParse:      map[string]string{"main": "merged789"},
+		ancestors:     map[string]bool{"tao/plan-a..main": true, "base123..tao/plan-a": true},
+	}
+	var logs []string
+	service := newTestService(Service{Git: git, Cleaner: successfulCleanup(), Events: events, Logf: func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}})
+	if err := service.Merge(context.Background(), detail, Options{Force: true, RecordOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	event := events.requireSingle(t, plan.EventTypePlanMerged)
+	if event.Actor != "automatic" || event.Trigger != "merge_complete" || event.AttributionVersion != 1 {
+		t.Fatalf("completion attribution = %#v", event)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "diagnostic unavailable") {
+		t.Fatalf("missing diagnostic failure log: %v", logs)
+	}
+}
+
 func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
 	t.Parallel()
 	detail := mergeReadyDetail("base123")
@@ -1875,6 +1923,10 @@ func TestMergeForceGeneratesExceptionalIntentBeforeSquash(t *testing.T) {
 	}
 	if generator.calls != 1 {
 		t.Fatalf("force generation calls = %d, want 1", generator.calls)
+	}
+	observation := events.requireSingle(t, plan.EventTypeInterventionObserved)
+	if observation.Actor != "operator" || observation.Trigger != "merge_force" || observation.AttributionVersion != 1 {
+		t.Fatalf("force attribution = %#v", observation)
 	}
 	intentWrite := -1
 	checkoutCall := -1

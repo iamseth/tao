@@ -51,7 +51,7 @@ func assertNoApprovalAdmissionEvents(t *testing.T, events []plan.Event) {
 	t.Helper()
 	for _, event := range events {
 		switch event.Type {
-		case plan.EventTypeSliceStarted, plan.EventTypeSliceResumeAttempted, plan.EventTypeSliceRestarted:
+		case plan.EventTypeSliceStarted, plan.EventTypeSliceResumeAttempted, plan.EventTypeSliceRestarted, plan.EventTypeInterventionObserved:
 			t.Fatalf("unexpected admission event: %#v", event)
 		}
 	}
@@ -121,6 +121,18 @@ func TestApprovalEvidenceContinueAndResume(t *testing.T) {
 			}
 			if calls != 1 {
 				t.Fatalf("remediated calls = %d", calls)
+			}
+			wantContinue := 0
+			if blocked {
+				wantContinue = 1
+			}
+			if countPlanEvents(events, plan.EventTypeInterventionObserved) != wantContinue {
+				t.Fatalf("continue events = %v", events)
+			}
+			for _, event := range events {
+				if event.Type == plan.EventTypeInterventionObserved {
+					assertRecoveryAttribution(t, event, "operator", "run_continue")
+				}
 			}
 		})
 	}

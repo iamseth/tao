@@ -119,6 +119,48 @@ func TestRenderInsightsScorecard(t *testing.T) {
 	}
 }
 
+func TestScorecardInterventionPresentation(t *testing.T) {
+	for _, tc := range []struct {
+		name                                               string
+		plans, matured, unknown, maturedUnknown, successes int
+		coverage, rate                                     string
+	}{
+		{"complete", 5, 5, 0, 0, 5, "0/5 (0.0%)", "1.000 [0.566, 1.000] n=5"},
+		{"operator", 5, 5, 0, 0, 0, "0/5 (0.0%)", "0.000 [0.000, 0.434] n=5"},
+		{"unknown", 5, 5, 5, 5, 0, "5/5 (100.0%)", "0.000 [0.000, 0.434] n=5"},
+		{"empty", 0, 0, 0, 0, 0, "0/0 (not applicable)", "0.000 [0.000, 0.000] n=0 sparse"},
+		{"sparse", 2, 1, 1, 0, 1, "1/2 (50.0%)", "1.000 [0.207, 1.000] n=1 sparse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := insights.CohortOutcomes{Plans: tc.plans, Matured: tc.matured, UnknownAttributionPlans: tc.unknown, MaturedUnknownAttributionPlans: tc.maturedUnknown, Quality: insights.QualityOutcomes{Unattended: insights.EstimateRate(tc.successes, tc.matured, 5)}}
+			cohort := insights.TreatmentCohort{Key: "pi", Outcomes: o}
+			report := insights.Report{Scorecard: insights.Scorecard{
+				Coverage: insights.ScorecardCoverage{Plans: tc.plans, Matured: tc.matured, UnknownAttributionPlans: tc.unknown, MaturedUnknownAttributionPlans: tc.maturedUnknown},
+				Cohorts:  []insights.TreatmentCohort{cohort},
+				Strata:   []insights.StratumBreakdown{{Stratum: "repository", Key: "repo", Cohorts: []insights.TreatmentCohort{cohort}}},
+			}}
+			for _, scope := range []InsightsScope{InsightsScopeRepository, InsightsScopeAllRepositories} {
+				var out bytes.Buffer
+				if err := RenderInsights(&out, report, InsightsOptions{Scope: scope, Format: InsightsFormatScorecard}); err != nil {
+					t.Fatal(err)
+				}
+				count := 2
+				if tc.matured > 0 {
+					count++
+				}
+				if got := strings.Count(out.String(), "- unknown attribution (all plans): "+tc.coverage); got != count {
+					t.Errorf("coverage rows=%d, want %d:\n%s", got, count, out.String())
+				}
+				for _, want := range []string{"unattended (observed): " + tc.rate, "- unknown attribution (matured plans):", "not proof of no human involvement", "Unknown coverage stays in the denominator"} {
+					if !strings.Contains(out.String(), want) {
+						t.Errorf("missing %q:\n%s", want, out.String())
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestScorecardEfficiencyMissingVersusZero(t *testing.T) {
 	for _, values := range [][]float64{nil, {0}} {
 		estimate := insights.EstimateMedian(values, 5)

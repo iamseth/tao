@@ -262,6 +262,7 @@ func (s Service) restartSingleMerge(ctx context.Context, detail *plan.PlanDetail
 		Branch: sourceBranch, PriorHead: inspected.SourceHead, BaselineBranch: inspected.DefaultBranch, BaselineHead: defaultHead,
 		Reason: classification.Reason, Message: "Stale single-plan merge intent restarted",
 	}
+	restarted = plan.WithInterventionAttribution(restarted, "operator", "merge_restart")
 	if err := record.ClearSingleMergeCommitIntentForRestart(inspected, restarted); err != nil {
 		return result, fmt.Errorf("clear stale single-merge intent: %w", err)
 	}
@@ -461,6 +462,9 @@ func (s Service) merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 	if err != nil {
 		return err
 	}
+	if options.Force {
+		s.observeMergeIntervention(detail, "merge_force")
+	}
 	s.reportPhase(runstatus.PhaseMergeIntegrating)
 	if options.NoSquash {
 		if err = s.Integrate(ctx, detail); err != nil {
@@ -496,6 +500,7 @@ func (s Service) resumeSingleResolutionMerge(ctx context.Context, git GitClient,
 			return err
 		}
 		if inspectSingleResolutionRollbackBoundary(ctx, git, *intent, planBranch) == nil {
+			s.observeMergeIntervention(detail, "merge_resolution_resume")
 			return s.rollbackAndSettleSingleResolution(ctx, git, detail, *intent, planBranch, plan.SingleMergeResolutionRollbackRecoveredInterruption, ErrSingleResolutionRolledBack)
 		}
 	}
@@ -552,6 +557,11 @@ func (s Service) resolveAndFinishSingleMerge(ctx context.Context, git GitClient,
 	}
 
 	resolved, err := s.SingleResolver.ResolveConflict(ctx, request)
+	// A resolver refusal is not a successful resumption. Observe the accepted
+	// recovery before downstream verification/review can fail.
+	if err == nil && prepared == nil {
+		s.observeMergeIntervention(detail, "merge_resolution_resume")
+	}
 	if err != nil {
 		if errors.Is(err, ErrSingleResolutionPreflight) {
 			return rollbackPreparedSingleMerge(ctx, git, *intent, err)
@@ -1109,6 +1119,9 @@ func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, deta
 			return false, err
 		}
 	}
+	if options.Force {
+		s.observeMergeIntervention(detail, "merge_force")
+	}
 	switch {
 	case merged.NoChanges:
 		s.logf("Plan %s produced no changes; %s already contains its content at %s; recording completion.", detail.State.Plan.ID, merged.DefaultBranch, merged.MergedDefaultSHA)
@@ -1621,6 +1634,18 @@ func mergeVerifySkippedReason(resolution mergeVerifyCommandResolution) string {
 		return "no supported build system detected"
 	default:
 		return "no verification command resolved"
+	}
+}
+
+func (s Service) observeMergeIntervention(detail *plan.PlanDetail, trigger string) {
+	if s.Events == nil || detail == nil {
+		return
+	}
+	event := plan.WithInterventionAttribution(plan.Event{
+		Type: plan.EventTypeInterventionObserved, Timestamp: s.now().UTC(), PlanID: detail.State.Plan.ID,
+	}, "operator", trigger)
+	if err := s.Events.AppendEvent(detail.Dir, event); err != nil {
+		s.logf("append merge intervention observation: %v", err)
 	}
 }
 

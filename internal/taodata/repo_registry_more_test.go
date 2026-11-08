@@ -131,9 +131,48 @@ func TestListReposMissingRootIsEmpty(t *testing.T) {
 }
 
 func TestAllocatePlanRejectsEmptyCleanSlug(t *testing.T) {
-	_, err := (Registry{DataHome: t.TempDir(), Now: fixedNow}).AllocatePlan(Repo{ID: "repo"}, "!!!")
+	home := t.TempDir()
+	t.Cleanup(func() {
+		entries, err := os.ReadDir(home)
+		if err != nil || len(entries) != 0 {
+			t.Errorf("invalid allocation wrote files: %v, %v", entries, err)
+		}
+	})
+	_, err := (Registry{DataHome: home, Now: fixedNow}).AllocatePlan(Repo{ID: "repo"}, "!!!")
 	if err == nil || !strings.Contains(err.Error(), "slug is required") {
 		t.Fatalf("expected slug error, got %v", err)
+	}
+}
+
+func TestAllocatePlanDoesNotBackfillCollision(t *testing.T) {
+	registry := Registry{DataHome: t.TempDir(), Now: fixedNow}
+	repo := Repo{ID: "repo"}
+	old := filepath.Join(registry.PlansDir(repo), "20260531-120000-example")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	allocated, err := registry.AllocatePlan(repo, "example")
+	if err != nil || allocated.ID != "20260531-120000-example-2" {
+		t.Fatalf("collision allocation = %+v, %v", allocated, err)
+	}
+	entries, err := os.ReadDir(old)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("historical allocation modified: %v, %v", entries, err)
+	}
+}
+
+func TestAllocatePlanRootFailureWritesNoMarker(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "repos"), []byte("obstruction"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allocation, err := (Registry{DataHome: home, Now: fixedNow}).AllocatePlan(Repo{ID: "repo"}, "example")
+	if err == nil || allocation != (PlanAllocation{}) {
+		t.Fatalf("failed allocation = %+v, %v", allocation, err)
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "repos" {
+		t.Fatalf("failed allocation wrote files: %v, %v", entries, err)
 	}
 }
 

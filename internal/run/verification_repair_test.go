@@ -42,7 +42,12 @@ func TestAppendVerificationRepairRefusesNonCodeRecoveryBeforeGit(t *testing.T) {
 					gitCalled = true
 					return nil
 				},
+				EventAppender: eventAppenderFunc(func(string, plan.Event) error {
+					t.Fatal("refused repair wrote diagnostic event")
+					return nil
+				}),
 			})
+			execution.Request.RepairVerification = true
 			execution.ExecutionRoot = t.TempDir()
 
 			err := appendVerificationRepair(context.Background(), detail, execution)
@@ -220,16 +225,17 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 	testenv.SkipIfShort(t)
 	t.Parallel()
 	tests := []struct {
-		name         string
-		failures     int
-		explicit     bool
-		resume       bool
-		maxSlices    int
-		failureKind  plan.FinalVerificationFailureKind
-		wantAttempts int
-		wantRuns     int
-		wantStops    int
-		wantError    bool
+		name              string
+		failures          int
+		explicit          bool
+		diagnosticFailure bool
+		resume            bool
+		maxSlices         int
+		failureKind       plan.FinalVerificationFailureKind
+		wantAttempts      int
+		wantRuns          int
+		wantStops         int
+		wantError         bool
 	}{
 		{name: "first attempt succeeds", failures: 1, wantAttempts: 1, wantRuns: 2},
 		{name: "second attempt succeeds", failures: 2, wantAttempts: 2, wantRuns: 3},
@@ -242,6 +248,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 		{name: "cancelled", failures: 1, failureKind: plan.FinalVerificationFailureKindCancelled, wantRuns: 1, wantError: true},
 		{name: "invalid command", failures: 1, failureKind: plan.FinalVerificationFailureKindInvalidCommand, wantRuns: 1, wantError: true},
 		{name: "explicit repair is single shot", failures: 1, explicit: true, wantAttempts: 1, wantRuns: 1, wantError: true},
+		{name: "explicit repair diagnostic failure", explicit: true, diagnosticFailure: true, wantAttempts: 1, wantRuns: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -352,6 +359,14 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 				}),
 			})
 			execution.Request = Request{RecoveryMode: RecoveryMode{RepairVerification: test.explicit}}
+			if test.diagnosticFailure {
+				execution.Dependencies.EventAppender = eventAppenderFunc(func(dir string, event plan.Event) error {
+					if event.Type == plan.EventTypeInterventionObserved {
+						return errors.New("diagnostic write failed")
+					}
+					return repo.AppendEvent(dir, event)
+				})
+			}
 			var pendingRepairID string
 			if test.explicit || test.resume {
 				execution.ExecutionRoot = root
@@ -397,6 +412,25 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			}
 			if got := plan.VerificationRepairAttemptCount(loaded); got != test.wantAttempts {
 				t.Fatalf("repair attempts = %d, want %d", got, test.wantAttempts)
+			}
+			for _, event := range loaded.Events {
+				trigger := ""
+				switch event.Type {
+				case plan.EventTypeVerificationRepairCreated:
+					trigger = "verification_repair"
+				case plan.EventTypeVerificationRepairStopped:
+					trigger = "verification_repair_stop"
+				case plan.EventTypeInterventionObserved:
+					if !test.explicit || event.Actor != "operator" || event.Trigger != "verification_repair_requested" || event.AttributionVersion != 1 {
+						t.Fatalf("unexpected intervention: %+v", event)
+					}
+				}
+				if trigger != "" && (event.Actor != "automatic" || event.Trigger != trigger || event.AttributionVersion != 1) {
+					t.Errorf("repair attribution = %+v", event)
+				}
+			}
+			if test.explicit && !test.diagnosticFailure && countPlanEvents(loaded.Events, plan.EventTypeInterventionObserved) != 1 {
+				t.Error("missing explicit repair observation")
 			}
 			if got := countPlanEvents(loaded.Events, plan.EventTypeVerificationRepairCreated); got != test.wantAttempts {
 				t.Fatalf("repair created events = %d, want %d", got, test.wantAttempts)

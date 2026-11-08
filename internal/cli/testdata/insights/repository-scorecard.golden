@@ -3,6 +3,8 @@
 ## Coverage
 - plans: 10; never started: 2; active: 2; terminal: 6
 - matured: 6; censored: 4
+- unknown attribution (all plans): 6/10 (60.0%)
+- unknown attribution (matured plans): 2/6 (33.3%)
 - treatment confidence: high=6; low=2; ambiguous=1; missing=1
 - planning-metrics coverage: 0/10 plans
 - role attribution: 6 attributed; 2 unattributed sessions
@@ -12,18 +14,22 @@
 
 Observational evidence, not a causal ranking. Runtime-only labels do not establish provider or model.
 Outcome rates use matured plans; active plans inside the maturity window are censored, not failures. Started is coverage across all plans. Rate intervals are Wilson 95%.
+Unattended (observed) counts matured plans that reached merge with sufficient attribution coverage and no observed operator intervention over their lifetime; not proof of no human involvement. Unknown coverage stays in the denominator and contributes no success. External-agent operator commands count; Tao-owned automatic recovery alone does not. Manual edits and silent log loss may be undetectable.
 
 ## Cohorts
 
 ### Cohort: claude/claude-opus-5
 - runtime: claude; provider: not recorded; model: claude-opus-5; confidence: low
 - n plans=2; matured=1; censored=1; never started=1
+- unknown attribution (all plans): 2/2 (100.0%)
+- unknown attribution (matured plans): 1/1 (100.0%)
 - quality rates:
   - started (all plans): 0.500 [0.095, 0.905] n=2 sparse
   - first review approved: 0.000 [0.000, 0.793] n=1 sparse
   - exact approval: 1.000 [0.207, 1.000] n=1 sparse
   - completed: 1.000 [0.207, 1.000] n=1 sparse
   - merged: 0.000 [0.000, 0.793] n=1 sparse
+  - unattended (observed): 0.000 [0.000, 0.793] n=1 sparse
   - pull-request completed: 1.000 [0.207, 1.000] n=1 sparse
   - abandoned: 0.000 [0.000, 0.793] n=1 sparse
   - rework stopped: 0.000 [0.000, 0.793] n=1 sparse
@@ -77,12 +83,15 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
 ### Cohort: pi
 - runtime: pi; provider: not recorded; model: not recorded; confidence: high
 - n plans=6; matured=5; censored=1; never started=1
+- unknown attribution (all plans): 2/6 (33.3%)
+- unknown attribution (matured plans): 1/5 (20.0%)
 - quality rates:
   - started (all plans): 0.833 [0.436, 0.970] n=6
   - first review approved: 0.800 [0.376, 0.964] n=5
   - exact approval: 1.000 [0.566, 1.000] n=5
   - completed: 1.000 [0.566, 1.000] n=5
   - merged: 0.800 [0.376, 0.964] n=5
+  - unattended (observed): 0.600 [0.231, 0.882] n=5
   - pull-request completed: 0.200 [0.036, 0.624] n=5
   - abandoned: 0.000 [0.000, 0.434] n=5
   - rework stopped: 0.000 [0.000, 0.434] n=5
@@ -140,12 +149,15 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
 ### Cohort: pi
 - runtime: pi; provider: not recorded; model: not recorded; confidence: high
 - n plans=6; matured=5; censored=1; never started=1
+- unknown attribution (all plans): 2/6 (33.3%)
+- unknown attribution (matured plans): 1/5 (20.0%)
 - quality rates:
   - started (all plans): 0.833 [0.436, 0.970] n=6
   - first review approved: 0.800 [0.376, 0.964] n=5
   - exact approval: 1.000 [0.566, 1.000] n=5
   - completed: 1.000 [0.566, 1.000] n=5
   - merged: 0.800 [0.376, 0.964] n=5
+  - unattended (observed): 0.600 [0.231, 0.882] n=5
   - pull-request completed: 0.200 [0.036, 0.624] n=5
   - abandoned: 0.000 [0.000, 0.434] n=5
   - rework stopped: 0.000 [0.000, 0.434] n=5
@@ -201,12 +213,15 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
 ### Cohort: claude/claude-opus-5
 - runtime: claude; provider: not recorded; model: claude-opus-5; confidence: low
 - n plans=2; matured=1; censored=1; never started=1
+- unknown attribution (all plans): 2/2 (100.0%)
+- unknown attribution (matured plans): 1/1 (100.0%)
 - quality rates:
   - started (all plans): 0.500 [0.095, 0.905] n=2 sparse
   - first review approved: 0.000 [0.000, 0.793] n=1 sparse
   - exact approval: 1.000 [0.207, 1.000] n=1 sparse
   - completed: 1.000 [0.207, 1.000] n=1 sparse
   - merged: 0.000 [0.000, 0.793] n=1 sparse
+  - unattended (observed): 0.000 [0.000, 0.793] n=1 sparse
   - pull-request completed: 1.000 [0.207, 1.000] n=1 sparse
   - abandoned: 0.000 [0.000, 0.793] n=1 sparse
   - rework stopped: 0.000 [0.000, 0.793] n=1 sparse
@@ -260,12 +275,15 @@ Outcome rates use matured plans; active plans inside the maturity window are cen
 ### Cohort: pi
 - runtime: pi; provider: not recorded; model: not recorded; confidence: high
 - n plans=6; matured=5; censored=1; never started=1
+- unknown attribution (all plans): 2/6 (33.3%)
+- unknown attribution (matured plans): 1/5 (20.0%)
 - quality rates:
   - started (all plans): 0.833 [0.436, 0.970] n=6
   - first review approved: 0.800 [0.376, 0.964] n=5
   - exact approval: 1.000 [0.566, 1.000] n=5
   - completed: 1.000 [0.566, 1.000] n=5
   - merged: 0.800 [0.376, 0.964] n=5
+  - unattended (observed): 0.600 [0.231, 0.882] n=5
   - pull-request completed: 0.200 [0.036, 0.624] n=5
   - abandoned: 0.000 [0.000, 0.434] n=5
   - rework stopped: 0.000 [0.000, 0.434] n=5
