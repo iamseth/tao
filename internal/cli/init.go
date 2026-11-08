@@ -16,7 +16,7 @@ var initCommand = commandMetadata{
 	name:                  "init",
 	usageLines:            []string{"init [--slug SLUG [--note ID]] [--json]"},
 	completionDescription: "Register this repository in Tao data home",
-	long:                  "Register the current checkout in Tao's data home. Optionally allocate a new plan directory and print the registration payload as JSON for planning agents. With --slug, --note checks that a repository-local source note is open before allocation; it does not reserve or link the note.",
+	long:                  "Register the current checkout in Tao's data home. Optionally allocate a new plan directory and print the registration payload as JSON for planning agents. With --slug, --note checks that a repository-local source note is open or legacy planning-promoted before allocation; it does not reserve or link the note.",
 	examples: "  tao init\n" +
 		"  tao init --slug kubectl-style-help\n" +
 		"  tao init --slug kubectl-style-help --json",
@@ -41,7 +41,7 @@ type initResponse struct {
 
 func registerInitFlags(fs *flag.FlagSet) {
 	fs.String("slug", "", "allocate a plan directory with this slug")
-	fs.String("note", "", "check an open source note before allocation (requires --slug)")
+	fs.String("note", "", "check an eligible source note before allocation (requires --slug)")
 	fs.Bool("json", false, "write JSON")
 }
 
@@ -81,7 +81,9 @@ func (a App) initRepo(ctx context.Context, args []string) error {
 		if item.Repo.ID != repo.ID {
 			return fmt.Errorf("note repository does not match current repository")
 		}
-		if item.Status != note.StatusOpen {
+		legacyPlanning := item.Status == note.StatusPromoted && item.Promotion != nil &&
+			item.Promotion.PlanningSession != nil && item.Promotion.Plan == nil
+		if item.Status != note.StatusOpen && !legacyPlanning {
 			destinations := ""
 			if item.Archive != nil {
 				if item.Archive.Plan != nil {
@@ -99,7 +101,7 @@ func (a App) initRepo(ctx context.Context, args []string) error {
 					destinations += fmt.Sprintf("; planning session %s", item.Promotion.PlanningSession.ID)
 				}
 			}
-			return fmt.Errorf("source note %s has status %s%s; only open notes may allocate a plan", item.ID, item.Status, destinations)
+			return fmt.Errorf("source note %s has status %s%s; only open or legacy planning-promoted notes may allocate a plan", item.ID, item.Status, destinations)
 		}
 		response.SourceNote = &initSourceNote{ID: item.ID, Repository: repo.ID}
 	}

@@ -166,7 +166,7 @@ func TestInitSourceNote(t *testing.T) {
 		{name: "archived", selector: "abcd", status: "archived", want: "archived"},
 		{name: "archived linked", selector: "abcd", status: "archived", destination: "old-plan", want: "old-plan"},
 		{name: "promoted plan", selector: "abcd", status: "promoted", destination: "old-plan", want: "old-plan"},
-		{name: "legacy planning", selector: "abcd", status: "promoted", destination: "session", want: "old-session"},
+		{name: "legacy planning", selector: "abcd", status: "promoted", destination: "session"},
 		{name: "missing", selector: "eeee", status: "open", want: "note not found"},
 		{name: "ambiguous", selector: "ab", status: "open", want: "ambiguous"},
 		{name: "malformed selector", selector: "../bad", status: "open", want: "invalid note id"},
@@ -269,8 +269,24 @@ func TestInitSourceNote(t *testing.T) {
 					if err != nil || !bytes.Equal(content, got) {
 						t.Fatalf("preflight mutated note: %v", err)
 					}
-					// Preflight is not a reservation: another plan can consume the note.
 					store := note.NewRepository(dir, n.Repo)
+					if tc.status == "promoted" {
+						archived, err := store.ArchiveToPlan(ctx, n.ID, note.PlanLink{ID: payload.Plan.ID})
+						if err != nil {
+							t.Fatal(err)
+						}
+						persisted, err := store.Get(ctx, n.ID)
+						if err != nil || !reflect.DeepEqual(archived, persisted) {
+							t.Fatalf("archive not persisted: %v", err)
+						}
+						if persisted.Status != note.StatusArchived || persisted.Promotion != nil ||
+							persisted.Archive == nil || persisted.Archive.Plan == nil || persisted.Archive.Plan.ID != payload.Plan.ID ||
+							!reflect.DeepEqual(persisted.Archive.PlanningSession, n.Promotion.PlanningSession) {
+							t.Fatalf("archive lost plan link or planning provenance: %+v", persisted)
+						}
+						return
+					}
+					// Preflight is not a reservation: another plan can consume the note.
 					if _, err := store.ArchiveToPlan(ctx, n.ID, note.PlanLink{ID: "racing-plan"}); err != nil {
 						t.Fatal(err)
 					}
