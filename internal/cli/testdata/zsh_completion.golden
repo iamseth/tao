@@ -120,7 +120,7 @@ _tao() {
     update)
       ;;
     init)
-      _arguments '--json[write JSON]' '--slug[allocate a plan directory with this slug]:value:'
+      _arguments '--json[write JSON]' '--note[check an open source note before allocation (requires --slug)]:value:' '--slug[allocate a plan directory with this slug]:value:'
       ;;
     lo|log)
       _arguments '--batch[show active or named merge-batch transitions]' '-f[follow appended output]' '--follow[follow appended output]' '--prompt[print a captured prompt by 1-based index or exact file name]:value:' '--prompts[list local captured prompts]'

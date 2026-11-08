@@ -1099,7 +1099,15 @@ func TestSlicePromptArchivesSourceNoteOnlyAfterValidation(t *testing.T) {
 	for _, want := range []string{
 		"either exactly `None` or exactly these ordered fields",
 		"At most one source note is allowed",
-		"preserve the four fields verbatim in `plan.md` and `planning-brief.md`",
+		"tao init --slug <short-slug> --json",
+		"tao init --slug <short-slug> --note <ID> --json",
+		"tao repo list",
+		"tao repo show <Repository>",
+		"before allocation",
+		"Stop on init refusal",
+		"source_note.id",
+		"source_note.repository",
+		"does not reserve the note",
 		"same registered repository",
 		"tao note archive --repo <Repository> --plan <plan-id> <ID>",
 		"invoke the linked archive command exactly once",
@@ -1110,6 +1118,17 @@ func TestSlicePromptArchivesSourceNoteOnlyAfterValidation(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered slice prompt missing note handoff contract %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "preserve the four fields verbatim") || strings.Contains(got, "Copy the Planning Packet's strict four-field Source Note block") {
+		t.Fatal("source identity must come from init, not verbatim packet copying")
+	}
+	if strings.Count(got, "Use `source_note.id` and `source_note.repository` returned by init") != 2 {
+		t.Fatal("both artifact templates must propagate canonical identity")
+	}
+	precheckAt := strings.Index(got, "tao repo show <Repository>")
+	initAt := strings.Index(got, "tao init --slug <short-slug> --note <ID> --json")
+	if precheckAt < 0 || initAt < precheckAt {
+		t.Fatal("repository check must precede note allocation")
 	}
 	validateAt := strings.Index(got, "After writing the plan artifacts, you must run `tao validate")
 	archiveAt := strings.Index(got, "tao note archive --repo <Repository> --plan <plan-id> <ID>")
