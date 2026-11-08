@@ -46,7 +46,6 @@ func TestDirtyFingerprintUntrackedExcludesTrackedPaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-
 	write := func(path, text string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(root, path), []byte(text), 0o600); err != nil {
@@ -157,7 +156,6 @@ func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	runGitCommand(t, root, "init", "-b", "main")
-
 	writeRepoFile(t, root, "tracked.txt", "base\n")
 	runGitCommand(t, root, "add", "tracked.txt")
 	runGitCommand(t, root, "commit", "-m", "initial")

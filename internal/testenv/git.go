@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -72,6 +73,47 @@ func setupGit(setenv func(string, string) error) (func() error, error) {
 		}
 	}
 	return cleanup, nil
+}
+
+// AssertGitEnvironment asserts the already-installed suite environment; it does
+// not call SetupGit.
+func AssertGitEnvironment(t testing.TB) {
+	t.Helper()
+	home, xdg, config := os.Getenv("HOME"), os.Getenv("XDG_CONFIG_HOME"), os.Getenv("GIT_CONFIG_GLOBAL")
+	if home == "" || xdg == "" || config == "" || os.Getenv("GIT_CONFIG_NOSYSTEM") != "1" {
+		t.Fatal("shared Git bootstrap environment is missing")
+	}
+	root := filepath.Dir(config)
+	if home != filepath.Join(root, "home") || xdg != filepath.Join(root, "xdg") {
+		t.Fatal("home paths are not isolated alongside the generated Git config")
+	}
+	for _, path := range []string{home, xdg} {
+		if info, err := os.Stat(path); err != nil || !info.IsDir() { // #nosec G703 -- read-only check of suite-owned bootstrap directories.
+			t.Fatalf("isolated directory %s: %v", path, err)
+		}
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...) // #nosec G204 -- fixed test arguments, no shell.
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init")
+	for key, want := range map[string]string{
+		"gc.auto": "0", "maintenance.auto": "false", "commit.gpgsign": "false", "init.defaultBranch": "main",
+	} {
+		if got := git("config", "--get", key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := git("symbolic-ref", "--short", "HEAD"); got != "main" {
+		t.Errorf("default branch = %q, want main", got)
+	}
 }
 
 // DisableGitMaintenance is a repository-local fallback only for fixture
