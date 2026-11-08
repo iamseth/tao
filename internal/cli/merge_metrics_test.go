@@ -550,14 +550,17 @@ func TestMergeApplicableOptionsCapturedOnce(t *testing.T) {
 		runtimeconfig.EnvRunModel: "invalid unused model",
 	})
 	app := newTestApp(App{RuntimeEnv: snapshot})
-	resolve := app.mergeSessionOptions("chosen")
+	if _, err := app.effectiveMergeModels("chosen"); err == nil {
+		t.Fatal("legacy adapter must still admit the unused run model")
+	}
+	resolve := app.mergeSessionOptions("chosen", "high")
 	t.Setenv(runtimeconfig.EnvAgent, "invalid")
 	for range 2 {
 		options, err := resolve()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if options.RunOptions.Agent != runtimeconfig.AgentClaude || options.RunOptions.SessionTimeout != 0 || !options.SkipPermissions || options.RunOptions.Models.Resolver != "chosen" {
+		if options.RunOptions.Agent != runtimeconfig.AgentClaude || options.RunOptions.SessionTimeout != 0 || !options.SkipPermissions || options.RunOptions.Models.Resolver != "chosen" || options.RunOptions.Models.Effort != "high" || options.RunOptions.Models.ResolverEffort != "high" || options.RunOptions.Models.MergeReviewEffort != "high" {
 			t.Fatalf("options=%+v", options)
 		}
 	}

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,29 @@ import (
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+func TestRepoConfigModelFlagContract(t *testing.T) {
+	fs := flag.NewFlagSet("repo config", flag.ContinueOnError)
+	registerRepoConfigFlags(fs)
+	want := []string{"effort", "max-rework-attempts", "merge-review-effort", "merge-review-model", "model", "pull-request", "resolver-effort", "resolver-model", "review-agent", "review-effort", "review-model", "rework-escalation-from-attempt", "rework-escalation-model", "run-effort", "run-model"}
+	var got []string
+	fs.VisitAll(func(f *flag.Flag) {
+		got = append(got, f.Name)
+		if strings.HasSuffix(f.Name, "model") || strings.HasSuffix(f.Name, "effort") {
+			kind := "model name"
+			if strings.HasSuffix(f.Name, "effort") {
+				kind = "reasoning-effort level"
+			}
+			usage := "set the repository " + strings.ReplaceAll(f.Name, "-", "_") + " default to a " + kind + " or unset"
+			if f.DefValue != "" || f.Usage != usage {
+				t.Fatalf("flag %+v", f)
+			}
+		}
+	})
+	if !slices.Equal(got, want) {
+		t.Fatalf("flags %v, want %v", got, want)
+	}
+}
 
 func TestRepoListAndShow(t *testing.T) {
 	testenv.SkipIfShort(t)

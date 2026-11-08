@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/selfupdate"
 	"github.com/iamseth/tao/internal/theme"
@@ -156,7 +157,7 @@ func (v runtimeEnvVar) hasOverride(value string, present bool) bool {
 
 // runtimeEnvVars is the ordered table every runtime env-var site is derived
 // from. Order is preserved for the snapshot's status row list.
-var runtimeEnvVars = append([]runtimeEnvVar{
+var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	{
 		name:         EnvCommitPolicy,
 		setting:      scopedSetting("commit_policy", "string", "slice", "none"),
@@ -239,149 +240,7 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			return strconv.Itoa(parsed), nil
 		},
 	},
-	{
-		name: EnvModel, applyWhenEmpty: true,
-		setting:      scopedSetting("models.model", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseModelName(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.Base = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvRunModel, applyWhenEmpty: true,
-		setting:      scopedSetting("models.run_model", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseModelName(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.Run = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvReviewModel, applyWhenEmpty: true,
-		setting:      scopedSetting("models.review_model", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseModelName(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.Review = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvMergeReviewModel, applyWhenEmpty: true,
-		setting:      scopedSetting("models.merge_review_model", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseModelName(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.MergeReview = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvResolverModel, applyWhenEmpty: true,
-		setting:      scopedSetting("models.resolver_model", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseModelName(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.Resolver = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvReworkEscalationModel, applyWhenEmpty: true,
-		setting:      scopedSetting("models.rework_escalation_model", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseModelName(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.ReworkEscalation = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvEffort, applyWhenEmpty: true,
-		setting:      scopedSetting("models.effort", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseEffortLevel(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.Effort = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvRunEffort, applyWhenEmpty: true,
-		setting:      scopedSetting("models.run_effort", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseEffortLevel(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.RunEffort = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvReviewEffort, applyWhenEmpty: true,
-		setting:      scopedSetting("models.review_effort", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseEffortLevel(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.ReviewEffort = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvMergeReviewEffort, applyWhenEmpty: true,
-		setting:      scopedSetting("models.merge_review_effort", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseEffortLevel(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.MergeReviewEffort = parsed
-			return parsed, nil
-		},
-	},
-	{
-		name: EnvResolverEffort, applyWhenEmpty: true,
-		setting:      scopedSetting("models.resolver_effort", "string"),
-		defaultValue: func(RunOptionsPatch) string { return "" },
-		apply: func(defaults *EnvDefaults, value string) (string, error) {
-			parsed, err := ParseEffortLevel(value)
-			if err != nil {
-				return "", err
-			}
-			defaults.ResolverEffort = parsed
-			return parsed, nil
-		},
-	},
+}, modelEnvVars()...), []runtimeEnvVar{
 	{
 		name:         EnvUpdate,
 		setting:      SettingDefinition{Key: "update", Kind: "string", Scopes: []string{"global"}, Choices: []string{"warn", "auto", "off"}},
@@ -596,7 +455,31 @@ var runtimeEnvVars = append([]runtimeEnvVar{
 			return selected.Name(), nil
 		},
 	},
-}, budgetEnvVars...)
+}...), budgetEnvVars...)
+
+func modelEnvVars() []runtimeEnvVar {
+	var rows []runtimeEnvVar
+	for _, setting := range configtypes.ModelSettings() {
+		rows = append(rows, runtimeEnvVar{
+			name: "TAO_" + setting.EnvSuffix, applyWhenEmpty: true,
+			setting:      scopedSetting(setting.Key, "string"),
+			defaultValue: func(RunOptionsPatch) string { return "" },
+			apply: func(defaults *EnvDefaults, value string) (string, error) {
+				parse := ParseModelName
+				if setting.Kind == "effort" {
+					parse = ParseEffortLevel
+				}
+				parsed, err := parse(value)
+				if err != nil {
+					return "", err
+				}
+				*setting.Field(&defaults.ModelSelection) = parsed
+				return parsed, nil
+			},
+		})
+	}
+	return rows
+}
 
 // budgetEnvVars is the budget block of the table: twelve canonical rows
 // followed by their twelve deprecated aliases.

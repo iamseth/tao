@@ -44,8 +44,9 @@ func correctReviewProposal(ctx context.Context, request AgentSessionRequest, rev
 	if err := strategy.consume(recorder, consumed); err != nil {
 		return plan.PlanReview{}, fmt.Errorf("record consumed proposal correction attempt: %w", err)
 	}
-	request.Model = strategy.models.For(runtimeconfig.ModelRoleReview)
-	request.Effort = strategy.models.EffortFor(runtimeconfig.ModelRoleReview)
+	request.Role = "review"
+	request.Model = ""
+	request.Effort = ""
 	request.Prompt = prompt
 	request.PromptTemplate = prompts.PromptReview
 	request.CaptureOutput = true

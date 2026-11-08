@@ -25,6 +25,76 @@ func settingStatus(t *testing.T, s EnvSnapshot, key string) SettingStatus {
 	return SettingStatus{}
 }
 
+// Independent persisted-field expectations: do not derive these from the catalog.
+func modelProjectionCases() []struct {
+	key, env string
+	field    func(*ModelSelection) *string
+	profiles []CommandProfile
+} {
+	return []struct {
+		key, env string
+		field    func(*ModelSelection) *string
+		profiles []CommandProfile
+	}{
+		{"models.model", "TAO_MODEL", func(m *ModelSelection) *string { return &m.Base }, []CommandProfile{CommandRun, CommandReview, CommandMerge}},
+		{"models.run_model", "TAO_RUN_MODEL", func(m *ModelSelection) *string { return &m.Run }, []CommandProfile{CommandRun}},
+		{"models.review_model", "TAO_REVIEW_MODEL", func(m *ModelSelection) *string { return &m.Review }, []CommandProfile{CommandRun, CommandReview}},
+		{"models.merge_review_model", "TAO_MERGE_REVIEW_MODEL", func(m *ModelSelection) *string { return &m.MergeReview }, []CommandProfile{CommandMerge}},
+		{"models.resolver_model", "TAO_RESOLVER_MODEL", func(m *ModelSelection) *string { return &m.Resolver }, []CommandProfile{CommandMerge}},
+		{"models.rework_escalation_model", "TAO_REWORK_ESCALATION_MODEL", func(m *ModelSelection) *string { return &m.ReworkEscalation }, []CommandProfile{CommandRun}},
+		{"models.effort", "TAO_EFFORT", func(m *ModelSelection) *string { return &m.Effort }, []CommandProfile{CommandRun, CommandReview, CommandMerge}},
+		{"models.run_effort", "TAO_RUN_EFFORT", func(m *ModelSelection) *string { return &m.RunEffort }, []CommandProfile{CommandRun}},
+		{"models.review_effort", "TAO_REVIEW_EFFORT", func(m *ModelSelection) *string { return &m.ReviewEffort }, []CommandProfile{CommandRun, CommandReview}},
+		{"models.merge_review_effort", "TAO_MERGE_REVIEW_EFFORT", func(m *ModelSelection) *string { return &m.MergeReviewEffort }, []CommandProfile{CommandMerge}},
+		{"models.resolver_effort", "TAO_RESOLVER_EFFORT", func(m *ModelSelection) *string { return &m.ResolverEffort }, []CommandProfile{CommandMerge}},
+	}
+}
+
+func TestAllModelSettingsLayerPrecedence(t *testing.T) {
+	for _, tc := range modelProjectionCases() {
+		t.Run(tc.key, func(t *testing.T) {
+			for mask := 0; mask < 8; mask++ {
+				var global, repository configtypes.SettingsValues
+				env := map[string]string{}
+				want, source := "", "default"
+				if mask&1 != 0 {
+					global = settingLayer(tc.key, `"global"`)
+					want, source = "global", "global"
+				}
+				if mask&2 != 0 {
+					repository = settingLayer(tc.key, `"repository"`)
+					want, source = "repository", "repository"
+				}
+				if mask&4 != 0 {
+					env[tc.env] = "environment"
+					want, source = "environment", "env"
+				}
+				snapshot := ResolveSettings(global, repository, capturedSettings(env))
+				defaults := snapshot.Defaults()
+				if got := *tc.field(&defaults.ModelSelection); got != want {
+					t.Fatalf("mask %d: got %q, want %q", mask, got, want)
+				}
+				if row := settingStatus(t, snapshot, tc.key); row.Source != source {
+					t.Fatalf("mask %d: %+v", mask, row)
+				}
+			}
+			for _, global := range []bool{false, true} {
+				bad := settingLayer(tc.key, `"two words"`)
+				var g, r configtypes.SettingsValues
+				if global {
+					g = bad
+				} else {
+					r = bad
+				}
+				snapshot := ResolveSettings(g, r, capturedSettings(map[string]string{tc.env: "valid"}))
+				if err := snapshot.Require(tc.env); err == nil {
+					t.Fatal("invalid saved layer masked")
+				}
+			}
+		})
+	}
+}
+
 func TestEffortInvalidSavedLayerSurvivesMasking(t *testing.T) {
 	for _, global := range []bool{false, true} {
 		bad := settingLayer("models.run_effort", `"two levels"`)

@@ -31,6 +31,34 @@ func composedSnapshotWith(env, repository map[string]string) *runtimeconfig.EnvS
 	return &snapshot
 }
 
+func TestRunModelAndEffortFlagCombinations(t *testing.T) {
+	for mask := 0; mask < 4; mask++ {
+		app := newTestApp(App{RuntimeEnv: composedSnapshotWith(map[string]string{
+			"TAO_MODEL": "env-base", "TAO_RUN_MODEL": "env-run", "TAO_REVIEW_MODEL": "env-review", "TAO_REWORK_ESCALATION_MODEL": "policy",
+			"TAO_EFFORT": "env-effort", "TAO_RUN_EFFORT": "env-run-effort", "TAO_REVIEW_EFFORT": "env-review-effort",
+		}, nil)})
+		fs := flag.NewFlagSet("run", flag.ContinueOnError)
+		app.registerRunFlags(fs)
+		var args []string
+		want := runtimeconfig.ModelSelection{Base: "env-base", Run: "env-run", Review: "env-review", ReworkEscalation: "policy", Effort: "env-effort", RunEffort: "env-run-effort", ReviewEffort: "env-review-effort"}
+		if mask&1 != 0 {
+			args = append(args, "--model=explicit")
+			want.Base, want.Run, want.Review = "explicit", "explicit", "explicit"
+		}
+		if mask&2 != 0 {
+			args = append(args, "--effort=high")
+			want.Effort, want.RunEffort, want.ReviewEffort = "high", "high", "high"
+		}
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		got, err := app.resolveCommandOptions(fs, runtimeconfig.CommandRun)
+		if err != nil || got.RunOptions.Models != want {
+			t.Fatalf("mask %d: %+v, %v", mask, got.RunOptions.Models, err)
+		}
+	}
+}
+
 func TestResolveCommandOptionsCapturedAndExplicit(t *testing.T) {
 	snapshot := composedSnapshotWith(
 		map[string]string{runtimeconfig.EnvPullRequest: "true", runtimeconfig.EnvRunHeader: "false", runtimeconfig.EnvModel: "captured"},

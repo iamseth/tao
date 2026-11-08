@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -89,18 +90,10 @@ func settingsRuntimeRows(snapshot runtimeconfig.EnvSnapshot) []runtimeconfig.Env
 // presentation uses the scoped resolver instead.
 func applyRepositoryRunDefaultsToStatus(rows []runtimeconfig.EnvVarStatus, repository runtimeconfig.RunOptionsPatch) []runtimeconfig.EnvVarStatus {
 	values := map[string]string{
-		runtimeconfig.EnvReviewAgent:           repository.ReviewAgent.String(),
-		runtimeconfig.EnvModel:                 repository.Base,
-		runtimeconfig.EnvEffort:                repository.Effort,
-		runtimeconfig.EnvRunEffort:             repository.RunEffort,
-		runtimeconfig.EnvReviewEffort:          repository.ReviewEffort,
-		runtimeconfig.EnvMergeReviewEffort:     repository.MergeReviewEffort,
-		runtimeconfig.EnvResolverEffort:        repository.ResolverEffort,
-		runtimeconfig.EnvRunModel:              repository.Run,
-		runtimeconfig.EnvReviewModel:           repository.Review,
-		runtimeconfig.EnvMergeReviewModel:      repository.MergeReview,
-		runtimeconfig.EnvResolverModel:         repository.Resolver,
-		runtimeconfig.EnvReworkEscalationModel: repository.ReworkEscalation,
+		runtimeconfig.EnvReviewAgent: repository.ReviewAgent.String(),
+	}
+	for _, setting := range configtypes.ModelSettings() {
+		values["TAO_"+setting.EnvSuffix] = *setting.Field(&repository.ModelSelection)
 	}
 	if repository.PullRequest != nil {
 		values[runtimeconfig.EnvPullRequest] = fmt.Sprintf("%t", *repository.PullRequest)

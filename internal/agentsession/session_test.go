@@ -13,6 +13,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/promptcapture"
 )
 
@@ -98,12 +99,12 @@ func TestRunnerPromptCaptureFailureIsNonFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, providerErr := range []error{nil, errors.New("provider failed")} {
-		runner := New(Config{Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
+		runner := New(Config{Models: &configtypes.ModelSelection{Review: "review", ReviewEffort: "high"}, DefaultRole: "review", Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 			return agent.SessionResult{Output: "output", FinalText: "final", Metrics: &agent.Metrics{OutputTokens: 9}}, providerErr
 		})})
 		request := Request{Prompt: "prompt", CollectMetrics: true}
 		baseline, baseErr := runner.Run(context.Background(), request)
-		if baseline.PromptHash != promptcapture.Hash(request.Prompt) || baseline.PromptPath != "" || baseline.PromptTemplate != "" || baseline.PromptCaptureWarning != "" {
+		if baseline.ResolvedModel != "review" || baseline.ResolvedEffort != "high" || baseline.PromptHash != promptcapture.Hash(request.Prompt) || baseline.PromptPath != "" || baseline.PromptTemplate != "" || baseline.PromptCaptureWarning != "" {
 			t.Fatalf("baseline=%+v", baseline)
 		}
 		request.Capture = &promptcapture.Target{Dir: filepath.Join(file, "prompts"), Template: "run"}
@@ -155,6 +156,73 @@ func TestRunnerPropagatesLifetimeWithoutMetrics(t *testing.T) {
 	})
 	if err != nil || result.Output != "done" || !closed || bound.Err() == nil {
 		t.Fatalf("result=%+v err=%v closed=%t", result, err, closed)
+	}
+}
+
+func TestRunnerRoleSelection(t *testing.T) {
+	models := configtypes.ModelSelection{Base: "base", Effort: "base-effort", Run: "run", RunEffort: "run-effort", Review: "review", ReviewEffort: "review-effort", MergeReview: "merge", MergeReviewEffort: "merge-effort", Resolver: "resolver", ResolverEffort: "resolver-effort", ReworkEscalation: "escalated"}
+	for _, tt := range []struct {
+		name                                 string
+		role, defaultRole                    configtypes.SessionRole
+		selection                            *configtypes.ModelSelection
+		model, effort, wantModel, wantEffort string
+	}{
+		{name: "run", role: "run", selection: &models, wantModel: "run", wantEffort: "run-effort"},
+		{name: "rework", role: "rework", selection: &models, wantModel: "run", wantEffort: "run-effort"},
+		{name: "review", role: "review", selection: &models, wantModel: "review", wantEffort: "review-effort"},
+		{name: "merge review", role: "merge_review", selection: &models, wantModel: "merge", wantEffort: "merge-effort"},
+		{name: "resolver", role: "resolver", selection: &models, wantModel: "resolver", wantEffort: "resolver-effort"},
+		{name: "pr", role: "pr", selection: &models, wantModel: "base", wantEffort: "base-effort"},
+		{name: "proposal", role: "proposal", selection: &models, wantModel: "base", wantEffort: "base-effort"},
+		{name: "triage", role: "triage", selection: &models, wantModel: "base", wantEffort: "base-effort"},
+		{name: "planning", role: "planning", selection: &models, wantModel: "base", wantEffort: "base-effort"},
+		{name: "default role", defaultRole: "review", selection: &models, wantModel: "review", wantEffort: "review-effort"},
+		{name: "request wins", role: "run", defaultRole: "review", selection: &models, wantModel: "run", wantEffort: "run-effort"},
+		{name: "escalation", role: "rework", selection: &models, model: "escalated", wantModel: "escalated", wantEffort: "run-effort"},
+		{name: "effort override", role: "review", selection: &models, effort: "override", wantModel: "review", wantEffort: "override"},
+		{name: "nil selection", role: "run", wantModel: "legacy", wantEffort: "legacy-effort"},
+		{name: "absent role", selection: &models, wantModel: "legacy", wantEffort: "legacy-effort"},
+		{name: "unknown role", role: "unknown", defaultRole: "review", selection: &models, wantModel: "legacy", wantEffort: "legacy-effort"},
+		{name: "unknown default", defaultRole: "unknown", selection: &models, wantModel: "legacy", wantEffort: "legacy-effort"},
+		{name: "empty selection", role: "run", selection: &configtypes.ModelSelection{}},
+		{name: "base fallback", role: "run", selection: &configtypes.ModelSelection{Base: "fallback", Effort: "fallback-effort"}, wantModel: "fallback", wantEffort: "fallback-effort"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, providerErr := range []error{nil, errors.New("rejected"), &agent.SessionTimeoutError{Timeout: time.Second}} {
+				calls := 0
+				metrics := &agent.Metrics{ModelID: "provider-identity"}
+				target := promptcapture.Target{Dir: t.TempDir(), Role: "unchanged", Template: "test"}
+				runner := New(Config{Models: tt.selection, DefaultRole: tt.defaultRole, Model: "legacy", Effort: "legacy-effort", Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+					calls++
+					if session.Model != tt.wantModel || session.Effort != tt.wantEffort || session.CollectMetrics {
+						t.Fatalf("session=%+v", session)
+					}
+					return agent.SessionResult{Metrics: metrics}, providerErr
+				})})
+				result, err := runner.Run(context.Background(), Request{Role: tt.role, Model: tt.model, Effort: tt.effort, Capture: &target})
+				if !errors.Is(err, providerErr) || calls != 1 || !result.Invoked || result.ResolvedModel != tt.wantModel || result.ResolvedEffort != tt.wantEffort || result.Metrics != metrics || metrics.ModelID != "provider-identity" {
+					t.Fatalf("result=%+v calls=%d err=%v", result, calls, err)
+				}
+				header, _, err := promptcapture.Read(result.PromptPath)
+				if err != nil || header.Model != result.ResolvedModel || header.Effort != result.ResolvedEffort || header.Role != "unchanged" {
+					t.Fatalf("header=%+v err=%v", header, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunnerSelectionIsCopied(t *testing.T) {
+	models := configtypes.ModelSelection{Run: "original", RunEffort: "original-effort"}
+	runner := New(Config{Models: &models, DefaultRole: "run", Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+		if session.Model != "original" || session.Effort != "original-effort" {
+			t.Fatalf("session=%+v", session)
+		}
+		return agent.SessionResult{}, nil
+	})})
+	models.Run, models.RunEffort = "mutated", "mutated"
+	if _, err := runner.Run(context.Background(), Request{}); err != nil {
+		t.Fatal(err)
 	}
 }
 

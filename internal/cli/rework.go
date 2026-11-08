@@ -14,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/forge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
@@ -174,9 +175,10 @@ var classifyReworkPRThreads = func(ctx context.Context, app App, repoRoot string
 		if err != nil {
 			return "", err
 		}
+		role, _ := configtypes.LookupSessionRole("triage")
 		templateHash, _ := prompts.TemplateVersion("rework-triage")
 		return generator.WithCapture(promptcapture.Target{
-			Dir: promptcapture.Dir(planDir), Role: string(plan.AgentRoleRework),
+			Dir: promptcapture.Dir(planDir), Role: role.CaptureRole,
 			Template: "rework-triage", TemplateHash: templateHash,
 		}).GenerateText(ctx, repoRoot, prompt)
 	})
@@ -203,17 +205,16 @@ func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, str
 	if starter == nil {
 		starter = agent.DefaultProcessStarter
 	}
-	effort := config.ResolvedOptions().Models.EffortFor(runtimeconfig.ModelRoleDefault)
+	models := config.ResolvedOptions().Models
 	var observer func(agentsession.Result, error)
 	if observe != nil {
-		observer = func(result agentsession.Result, err error) { observe(result, effort, err) }
+		observer = func(result agentsession.Result, err error) { observe(result, result.ResolvedEffort, err) }
 	}
 	return agentsession.NewTextGenerator(agentsession.Config{
 		Descriptor: descriptor, Deps: agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: defaults.SkipPermissions, Timeout: defaults.SessionTimeoutValue(),
 		Progress: app.Out, CommandRunner: app.CommandRunner,
-		Model:  config.ResolvedOptions().Models.For(runtimeconfig.ModelRoleDefault),
-		Effort: effort,
+		Models: &models, DefaultRole: "triage",
 	}, observer), nil
 }
 
@@ -246,7 +247,8 @@ func (a App) reworkFromPullRequestWithOptions(ctx context.Context, repo planRunR
 	}
 	if !triageMatchesThreads(detail.State.Plan.PRFeedbackTriage, result.Threads) && len(result.Threads) > 0 {
 		classifications, err := classifyReworkPRThreads(ctx, a, request.RepoRoot, record.Dir(), result.Threads, func(result agentsession.Result, effort string, runErr error) {
-			metrics := agenttelemetry.Project(result, plan.AgentRoleRework, effort, runErr)
+			role, _ := configtypes.LookupSessionRole("triage")
+			metrics := agenttelemetry.Project(result, plan.AgentRole(role.TelemetryRole), effort, runErr)
 			event := agenttelemetry.Event(detail.State.Plan.ID, "", a.now(), metrics)
 			if err := repo.AppendEvent(record.Dir(), event); err == nil {
 				detail.Events = append(detail.Events, event)

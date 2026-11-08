@@ -98,6 +98,9 @@ func TestSharedAgentOperationsSetTransportRequests(t *testing.T) {
 	if len(executor.requests) != 2 {
 		t.Fatalf("expected 2 requests, got %#v", executor.requests)
 	}
+	if executor.requests[0].Role != "run" || executor.requests[1].Role != "pr" {
+		t.Fatalf("session roles = %q, %q", executor.requests[0].Role, executor.requests[1].Role)
+	}
 	assertAgentRequest(t, executor.requests[0], "running 001-a", false, "001-a", plan.AgentRoleExecution)
 	if got := strings.Join(executor.requests[0].VerificationCommands, "\n"); got != strings.Join(verificationCommands, "\n") {
 		t.Fatalf("verification commands = %q, want %q", got, strings.Join(verificationCommands, "\n"))

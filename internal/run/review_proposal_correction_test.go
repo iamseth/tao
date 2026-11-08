@@ -59,6 +59,9 @@ func TestReviewProposalCorrectionFailureParity(t *testing.T) {
 						if arm == "fresh" && calls == 1 {
 							return AgentSessionResult{Output: initial}, nil
 						}
+						if request.Role != "review" || request.Model != "" || request.Effort != "" {
+							t.Fatalf("correction settings = %#v", request)
+						}
 						if !request.CaptureOutput || !strings.Contains(request.Prompt, "COMMIT PROPOSAL CORRECTION mode") || request.Metrics == nil || request.Metrics.Role != plan.AgentRoleReview {
 							t.Fatalf("correction request = %#v", request)
 						}

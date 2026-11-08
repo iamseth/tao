@@ -59,6 +59,7 @@ func TestMergeSessionPromptCapture(t *testing.T) {
 			now := time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC)
 			session, err := NewBatchAgentSession(BatchAgentSessionConfig{
 				Agent: runtimeconfig.AgentClaude, PromptDir: resolver, EventAppender: store, Log: &log,
+				Models:         runtimeconfig.ModelSelection{Base: "base", Resolver: "resolver-model", Effort: "low", ResolverEffort: "high"},
 				Now:            func() time.Time { return now },
 				ProcessStarter: mergeFakeProcessStarter(t, &got, `{"type":"result","result":"resolved"}`),
 			})
@@ -69,8 +70,11 @@ func TestMergeSessionPromptCapture(t *testing.T) {
 				BatchID: "batch-a", Operation: BatchAgentOperationCandidateResolution, Attempt: 2,
 				CandidatePlanID: "plan-a", IntegrationRoot: root, Prompt: "exact rendered prompt", PromptTemplate: "merge-resolve",
 			})
-			if err != nil || result.Output != "resolved" {
+			if err != nil || result.Output != "resolved" || result.Provider.ResolvedModel != "resolver-model" || result.ReasoningEffort != "high" {
 				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if args := strings.Join(got.args, " "); !strings.Contains(args, "--model resolver-model") || !strings.Contains(args, "--effort high") {
+				t.Fatalf("provider selection: %s", args)
 			}
 			hash := promptcapture.Hash("exact rendered prompt")
 			if result.Provider.PromptHash != hash {
@@ -93,7 +97,7 @@ func TestMergeSessionPromptCapture(t *testing.T) {
 					t.Fatal(versionErr)
 				}
 				h, body, err := promptcapture.Read(entries[0].Path)
-				if err != nil || body != "exact rendered prompt" || h.Role != "merge" || h.Template != "merge-resolve" || h.TemplateHash != templateHash || h.SHA256 != hash || h.StartedAt != now.Format(time.RFC3339Nano) {
+				if err != nil || body != "exact rendered prompt" || h.Role != "merge" || h.Model != "resolver-model" || h.Effort != "high" || h.Template != "merge-resolve" || h.TemplateHash != templateHash || h.SHA256 != hash || h.StartedAt != now.Format(time.RFC3339Nano) {
 					t.Fatalf("header=%#v body=%q err=%v", h, body, err)
 				}
 				if !strings.Contains(entries[0].Name, "candidate-resolution-attempt-2-plan-a") {
@@ -118,13 +122,14 @@ func TestMergeSessionModels(t *testing.T) {
 	for _, tt := range []struct {
 		op   BatchAgentOperation
 		want string
+		role string
 	}{
-		{BatchAgentOperationCandidateResolution, "r"},
-		{BatchAgentOperationSinglePlanResolution, "r"},
-		{BatchAgentOperationAggregateRework, "r"},
-		{BatchAgentOperationAggregateReview, "v"},
-		{BatchAgentOperationSinglePlanReview, "v"},
-		{BatchAgentOperationProposalGeneration, "base"},
+		{BatchAgentOperationCandidateResolution, "r", "resolver"},
+		{BatchAgentOperationSinglePlanResolution, "r", "resolver"},
+		{BatchAgentOperationAggregateRework, "r", "resolver"},
+		{BatchAgentOperationAggregateReview, "v", "merge_review"},
+		{BatchAgentOperationSinglePlanReview, "v", "merge_review"},
+		{BatchAgentOperationProposalGeneration, "base", "proposal"},
 	} {
 		t.Run(string(tt.op), func(t *testing.T) {
 			t.Setenv("TAO_MODEL", "ignored-env-model")
@@ -135,13 +140,10 @@ func TestMergeSessionModels(t *testing.T) {
 				t.Fatal(err)
 			}
 			session.run = func(_ context.Context, request agentsession.Request) (agentsession.Result, error) {
-				if request.Effort != tt.want+"-effort" {
-					t.Fatalf("effort = %q, want %q", request.Effort, tt.want+"-effort")
+				if string(request.Role) != tt.role || request.Model != "" || request.Effort != "" {
+					t.Fatalf("request selection = %#v", request)
 				}
-				if request.Model != tt.want {
-					t.Fatalf("model = %q, want %q", request.Model, tt.want)
-				}
-				return agentsession.Result{}, nil
+				return agentsession.Result{ResolvedModel: tt.want, ResolvedEffort: tt.want + "-effort"}, nil
 			}
 			result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: tt.op})
 			if err != nil {
@@ -149,6 +151,40 @@ func TestMergeSessionModels(t *testing.T) {
 			}
 			if result.ReasoningEffort != tt.want+"-effort" {
 				t.Fatalf("recorded request effort = %q", result.ReasoningEffort)
+			}
+		})
+	}
+}
+
+func TestMergeSessionProviderRoleSelection(t *testing.T) {
+	for _, tt := range []struct {
+		op            BatchAgentOperation
+		model, effort string
+	}{
+		{BatchAgentOperationCandidateResolution, "resolver", "low"},
+		{BatchAgentOperationSinglePlanResolution, "resolver", "low"},
+		{BatchAgentOperationAggregateRework, "resolver", "low"},
+		{BatchAgentOperationAggregateReview, "reviewer", "high"},
+		{BatchAgentOperationSinglePlanReview, "reviewer", "high"},
+		{BatchAgentOperationProposalGeneration, "base", "medium"},
+	} {
+		t.Run(string(tt.op), func(t *testing.T) {
+			var start mergeFakeClaudeStart
+			session, err := NewBatchAgentSession(BatchAgentSessionConfig{
+				Agent:          runtimeconfig.AgentClaude,
+				Models:         runtimeconfig.ModelSelection{Base: "base", Effort: "medium", Resolver: "resolver", ResolverEffort: "low", MergeReview: "reviewer", MergeReviewEffort: "high"},
+				ProcessStarter: mergeFakeProcessStarter(t, &start, `{"type":"result","result":"ok"}`),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: tt.op, IntegrationRoot: t.TempDir(), Prompt: "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := strings.Join(start.args, " ")
+			if !strings.Contains(args, "--model "+tt.model) || !strings.Contains(args, "--effort "+tt.effort) || result.Provider.ResolvedModel != tt.model || result.ReasoningEffort != tt.effort {
+				t.Fatalf("args=%s result=%#v", args, result)
 			}
 		})
 	}
@@ -2097,7 +2133,7 @@ func TestMergeSessionTelemetryCoverage(t *testing.T) {
 						if outcome == BatchAgentOutcomeTimedOut {
 							providerErr = &agent.SessionTimeoutError{Timeout: time.Minute}
 						}
-						result := agentsession.Result{Invoked: true, AgentLabel: provider, FinalText: "preserved", MetricsAvailability: availability}
+						result := agentsession.Result{Invoked: true, AgentLabel: provider, FinalText: "preserved", MetricsAvailability: availability, ResolvedModel: "requested", ResolvedEffort: "resolved-effort"}
 						if availability != agentmetrics.Unavailable {
 							result.Metrics = &agent.Metrics{InputTokensPresent: true}
 							if availability == agentmetrics.Reported {
@@ -2126,7 +2162,7 @@ func TestMergeSessionTelemetryCoverage(t *testing.T) {
 							request.BatchID = "batch-a"
 						}
 						got, err := session.Resolve(context.Background(), request)
-						if calls != 1 || got.Output != "preserved" || !errors.Is(err, providerErr) {
+						if calls != 1 || got.Output != "preserved" || got.ReasoningEffort != "resolved-effort" || !errors.Is(err, providerErr) {
 							t.Fatalf("session changed: %d %#v %v", calls, got, err)
 						}
 						if operation.batch {
@@ -2156,7 +2192,7 @@ func TestMergeSessionTelemetryCoverage(t *testing.T) {
 							}
 							event := planEvents[0] // This collection contains only the owned metrics event.
 							m := event.Metrics
-							if event.PlanID != "plan-a" || event.SliceID != "" || m.Role != operation.role || string(m.Availability) != string(availability) || m.InputTokens != 0 || m.InputTokensPresent != (availability != agentmetrics.Unavailable) || m.CostPresent != (availability == agentmetrics.Reported) || (m.Status == "failed") != (providerErr != nil) {
+							if m.ReasoningEffort != "resolved-effort" || event.PlanID != "plan-a" || event.SliceID != "" || m.Role != operation.role || string(m.Availability) != string(availability) || m.InputTokens != 0 || m.InputTokensPresent != (availability != agentmetrics.Unavailable) || m.CostPresent != (availability == agentmetrics.Reported) || (m.Status == "failed") != (providerErr != nil) {
 								t.Fatalf("plan measurement lost: %#v / %#v", event, m)
 							}
 						}

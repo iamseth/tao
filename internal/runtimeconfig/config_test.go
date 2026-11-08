@@ -10,6 +10,29 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestEveryModelFieldStagesAndValidation(t *testing.T) {
+	for _, tc := range modelProjectionCases() {
+		for stage := 0; stage < 3; stage++ {
+			patches := make([]RunOptionsPatch, 3)
+			*tc.field(&patches[stage].ModelSelection) = "two words"
+			if _, err := ResolveRunOptionsWithRepositoryDefaults(patches[0], patches[1], patches[2]); err == nil || !strings.Contains(err.Error(), strings.TrimPrefix(tc.key, "models.")) {
+				t.Fatalf("%s stage %d: %v", tc.key, stage, err)
+			}
+			*tc.field(&patches[stage].ModelSelection) = " selected "
+			got, err := ResolveRunOptionsWithRepositoryDefaults(patches[0], patches[1], patches[2])
+			if err != nil || *tc.field(&got.Models) != "selected" {
+				t.Fatalf("%s: %+v, %v", tc.key, got, err)
+			}
+		}
+	}
+	original := RunOptionsPatch{ModelSelection: ModelSelection{ReworkEscalation: "policy"}}
+	got := original.WithModelForAllRoles("model").WithEffortForAllRoles("effort")
+	want := ModelSelection{Base: "model", Run: "model", Review: "model", MergeReview: "model", Resolver: "model", ReworkEscalation: "policy", Effort: "effort", RunEffort: "effort", ReviewEffort: "effort", MergeReviewEffort: "effort", ResolverEffort: "effort"}
+	if got.ModelSelection != want || original.Base != "" {
+		t.Fatalf("override %+v", got)
+	}
+}
+
 func TestReviewAgentStages(t *testing.T) {
 	for _, env := range []AgentKind{"", AgentPi, AgentClaude} {
 		for _, repo := range []AgentKind{"", AgentPi, AgentClaude} {

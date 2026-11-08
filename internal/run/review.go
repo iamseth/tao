@@ -13,7 +13,6 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plandelta"
 	"github.com/iamseth/tao/internal/reviewcontract"
-	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/workspace"
 	"github.com/iamseth/tao/prompts"
 )
@@ -576,7 +575,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	if context := plan.RenderReviewContext(detail, plan.ReviewContextOptions{Thresholds: thresholds}); context != "" {
 		prompt = strings.TrimRight(prompt, "\n") + context
 	}
-	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Model: options.Models.For(runtimeconfig.ModelRoleReview), Effort: options.Models.EffortFor(runtimeconfig.ModelRoleReview), PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, PromptTemplate: prompts.PromptReview, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+	result, err := executor.RunAgentSession(ctx, AgentSessionRequest{Role: "review", PlanDir: planDir, RepoRoot: repoRoot, LogAction: "reviewing plan " + planID, Prompt: prompt, PromptTemplate: prompts.PromptReview, CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 	if err != nil {
 		return plan.PlanReview{}, err
 	}

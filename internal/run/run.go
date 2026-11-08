@@ -214,6 +214,7 @@ type PullRequestBodyGenerator interface {
 }
 
 type AgentSessionRequest struct {
+	Role                 configtypes.SessionRole
 	Model                string
 	Effort               string
 	PlanDir              string

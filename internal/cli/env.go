@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/gitops"
 
 	"github.com/iamseth/tao/internal/run"
@@ -44,14 +46,21 @@ func (a App) flagDefaults() runtimeconfig.EnvDefaults {
 // runEnvDefaults admits the shared run/note-run request, not independent
 // routing, update, merge, or budget policy. Those have their own consumers.
 func (a App) runEnvDefaults() (envDefaults, error) {
-	return a.envDefaultsFor(
+	keys := []string{
 		"max_slices", runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode,
 		runtimeconfig.EnvAgent, runtimeconfig.EnvReviewAgent, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview,
 		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
-		runtimeconfig.EnvModel, runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel,
-		runtimeconfig.EnvEffort, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort,
-		runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvReworkEscalationFromAttempt,
-	)
+	}
+	// Policy-only escalation follows fallback roles in legacy admission order.
+	for _, policyOnly := range []bool{false, true} {
+		for _, setting := range configtypes.ModelSettings() {
+			if slices.Contains(setting.Profiles, string(runtimeconfig.CommandRun)) && (setting.Role == "") == policyOnly {
+				keys = append(keys, "TAO_"+setting.EnvSuffix)
+			}
+		}
+	}
+	keys = append(keys, runtimeconfig.EnvReworkEscalationFromAttempt)
+	return a.envDefaultsFor(keys...)
 }
 
 // requireRunHandoffBudgets admits execution budgets before a handoff creates

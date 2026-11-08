@@ -68,6 +68,7 @@ func TestRunnerSkipsLeakFingerprintForControlCheckoutSession(t *testing.T) {
 func TestRunnerDoesNotReportInvocationForPreSessionGuardFailure(t *testing.T) {
 	guardErr := errors.New("fingerprint unavailable")
 	runner := New(Config{
+		Model: "requested", Effort: "requested-effort",
 		Runtime: runtimeFunc(func(context.Context, agent.Session) (agent.SessionResult, error) {
 			t.Fatal("provider invoked despite guard failure")
 			return agent.SessionResult{}, nil
@@ -75,7 +76,7 @@ func TestRunnerDoesNotReportInvocationForPreSessionGuardFailure(t *testing.T) {
 		CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { return guardErr },
 	})
 	result, err := runner.Run(context.Background(), Request{ControlRoot: t.TempDir(), RepoRoot: t.TempDir(), CollectMetrics: true})
-	if !errors.Is(err, guardErr) || result.Invoked {
+	if !errors.Is(err, guardErr) || result.Invoked || result.ResolvedModel != "requested" || result.ResolvedEffort != "requested-effort" {
 		t.Fatalf("result/error = %+v, %v", result, err)
 	}
 }

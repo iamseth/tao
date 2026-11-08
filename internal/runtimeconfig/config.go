@@ -245,21 +245,21 @@ func (d RunOptionsPatch) SessionTimeoutValue() time.Duration {
 
 // WithModelForAllRoles overrides both the base and any inherited role choices.
 func (p RunOptionsPatch) WithModelForAllRoles(name string) RunOptionsPatch {
-	p.Base = name
-	p.Run = name
-	p.Review = name
-	p.MergeReview = name
-	p.Resolver = name
+	for _, setting := range configtypes.ModelSettings() {
+		if setting.Kind == "model" && setting.Role != "" {
+			*setting.Field(&p.ModelSelection) = name
+		}
+	}
 	return p
 }
 
 // WithEffortForAllRoles overrides the base and all inherited role efforts.
 func (p RunOptionsPatch) WithEffortForAllRoles(level string) RunOptionsPatch {
-	p.Effort = level
-	p.RunEffort = level
-	p.ReviewEffort = level
-	p.MergeReviewEffort = level
-	p.ResolverEffort = level
+	for _, setting := range configtypes.ModelSettings() {
+		if setting.Kind == "effort" && setting.Role != "" {
+			*setting.Field(&p.ModelSelection) = level
+		}
+	}
 	return p
 }
 
@@ -463,35 +463,20 @@ func mergeRunOptions(options ResolvedRunOptions, patch RunOptionsPatch) (Resolve
 	if patch.SessionTimeout != nil {
 		options.SessionTimeout = *patch.SessionTimeout
 	}
-	for _, model := range []struct {
-		field  string
-		value  string
-		target *string
-	}{
-		{"model", patch.Base, &options.Models.Base},
-		{"run_model", patch.Run, &options.Models.Run},
-		{"review_model", patch.Review, &options.Models.Review},
-		{"merge_review_model", patch.MergeReview, &options.Models.MergeReview},
-		{"resolver_model", patch.Resolver, &options.Models.Resolver},
-		{"rework_escalation_model", patch.ReworkEscalation, &options.Models.ReworkEscalation},
-		{"effort", patch.Effort, &options.Models.Effort},
-		{"run_effort", patch.RunEffort, &options.Models.RunEffort},
-		{"review_effort", patch.ReviewEffort, &options.Models.ReviewEffort},
-		{"merge_review_effort", patch.MergeReviewEffort, &options.Models.MergeReviewEffort},
-		{"resolver_effort", patch.ResolverEffort, &options.Models.ResolverEffort},
-	} {
-		if model.value == "" {
+	for _, setting := range configtypes.ModelSettings() {
+		value := *setting.Field(&patch.ModelSelection)
+		if value == "" {
 			continue
 		}
 		parse := ParseModelName
-		if strings.HasSuffix(model.field, "effort") {
+		if setting.Kind == "effort" {
 			parse = ParseEffortLevel
 		}
-		parsed, err := parse(model.value)
+		parsed, err := parse(value)
 		if err != nil {
-			return ResolvedRunOptions{}, fmt.Errorf("%s: %w", model.field, err)
+			return ResolvedRunOptions{}, fmt.Errorf("%s: %w", strings.TrimPrefix(setting.Key, "models."), err)
 		}
-		*model.target = parsed
+		*setting.Field(&options.Models) = parsed
 	}
 	return options, nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/iamseth/tao/internal/agenttelemetry"
 	"github.com/iamseth/tao/internal/commandrunner"
 	commitcontract "github.com/iamseth/tao/internal/commit"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -197,12 +198,15 @@ func SingleMergeAgentMetricsEvent(request BatchAgentSessionRequest, result Batch
 	if !result.Provider.Invoked || request.BatchID != "" || request.CandidatePlanID == "" {
 		return nil
 	}
-	role := plan.AgentRoleMerge
+	info, _ := configtypes.LookupSessionRole(mergeSessionRole(request.Operation))
+	role := plan.AgentRole(info.TelemetryRole)
 	var message string
 	switch request.Operation {
 	case BatchAgentOperationSinglePlanResolution:
 		message = "Captured single-plan conflict resolver agent metrics"
 	case BatchAgentOperationSinglePlanReview:
+		// Single-plan integration review retains its historical plan-event label;
+		// session selection and capture still use the merge-review role.
 		role = plan.AgentRoleReview
 		message = "Captured independent integration reviewer agent metrics"
 	case BatchAgentOperationProposalGeneration:
@@ -329,6 +333,7 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 	}
 	runner := agentsession.New(agentsession.Config{
 		Descriptor:      descriptor,
+		Models:          &config.Models,
 		Deps:            agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: skip,
 		Timeout:         timeout,
@@ -1260,13 +1265,8 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	if run == nil {
 		run = s.runner.Run
 	}
-	role := runtimeconfig.ModelRoleResolver
-	switch request.Operation {
-	case BatchAgentOperationAggregateReview, BatchAgentOperationSinglePlanReview:
-		role = runtimeconfig.ModelRoleMergeReview
-	case BatchAgentOperationProposalGeneration:
-		role = runtimeconfig.ModelRoleDefault
-	}
+	role := mergeSessionRole(request.Operation)
+	info, _ := configtypes.LookupSessionRole(role)
 	var capture *promptcapture.Target
 	if s.promptDir != nil {
 		if dir := s.promptDir(request); dir != "" {
@@ -1281,13 +1281,12 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 			if request.CandidatePlanID != "" {
 				label += "-" + request.CandidatePlanID
 			}
-			capture = &promptcapture.Target{Dir: dir, Role: string(plan.AgentRoleMerge), Template: request.PromptTemplate, TemplateHash: hash, Label: label}
+			capture = &promptcapture.Target{Dir: dir, Role: info.CaptureRole, Template: request.PromptTemplate, TemplateHash: hash, Label: label}
 		}
 	}
 	result, err := run(ctx, agentsession.Request{
 		Capture:  capture,
-		Model:    s.models.For(role),
-		Effort:   s.models.EffortFor(role),
+		Role:     role,
 		RepoRoot: request.IntegrationRoot, ControlRoot: s.controlRoot, Prompt: request.Prompt, CollectMetrics: true, Log: s.framedLog,
 	})
 	if result.PromptCaptureWarning != "" {
@@ -1303,12 +1302,23 @@ func (s BatchAgentSession) Resolve(ctx context.Context, request BatchAgentSessio
 	} else if summary.ReportWarning && s.log != nil {
 		s.writeLogDiagnostic("tao telemetry warning: " + summary.WarningMessage)
 	}
-	sessionResult := BatchAgentSessionResult{Output: agentsession.ResultText(result), Provider: result, ReasoningEffort: s.models.EffortFor(role)}
+	sessionResult := BatchAgentSessionResult{Output: agentsession.ResultText(result), Provider: result, ReasoningEffort: result.ResolvedEffort}
 	s.recordTelemetry(request, result, err)
 	if s.observe != nil {
 		s.observe(request, sessionResult, err)
 	}
 	return sessionResult, err
+}
+
+func mergeSessionRole(operation BatchAgentOperation) configtypes.SessionRole {
+	switch operation {
+	case BatchAgentOperationAggregateReview, BatchAgentOperationSinglePlanReview:
+		return "merge_review"
+	case BatchAgentOperationProposalGeneration:
+		return "proposal"
+	default:
+		return "resolver"
+	}
 }
 
 func (s BatchAgentSession) recordTelemetry(request BatchAgentSessionRequest, result agentsession.Result, sessionErr error) {

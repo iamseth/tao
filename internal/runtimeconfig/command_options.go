@@ -3,6 +3,8 @@ package runtimeconfig
 import (
 	"fmt"
 	"slices"
+
+	"github.com/iamseth/tao/internal/configtypes"
 )
 
 // CommandProfile admits only settings consumed by a command's execution path.
@@ -62,7 +64,7 @@ type commandOptionRule struct {
 
 // The same rules drive admission, patch filtering, and presentation. Auxiliary
 // settings have no patch projection; they resolve from the snapshot and flags.
-var commandOptionRules = []commandOptionRule{
+var commandOptionRules = append(append([]commandOptionRule{
 	{"--max-slices", []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{MaxSlices: p.MaxSlices} }},
 	{"--continue", []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{Continue: p.Continue} }},
 	{EnvCommitPolicy, []CommandProfile{CommandRun, CommandPromptRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{CommitPolicy: p.CommitPolicy} }},
@@ -72,44 +74,28 @@ var commandOptionRules = []commandOptionRule{
 	{EnvPullRequest, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{PullRequest: p.PullRequest} }},
 	{EnvReview, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{ReviewEnabled: p.ReviewEnabled} }},
 	{EnvSessionTimeout, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{SessionTimeout: p.SessionTimeout} }},
-	{EnvModel, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{Base: p.Base}}
-	}},
-	{EnvRunModel, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{Run: p.Run}}
-	}},
-	{EnvReviewModel, []CommandProfile{CommandRun, CommandReview}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{Review: p.Review}}
-	}},
-	{EnvMergeReviewModel, []CommandProfile{CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{MergeReview: p.MergeReview}}
-	}},
-	{EnvResolverModel, []CommandProfile{CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{Resolver: p.Resolver}}
-	}},
-	{EnvReworkEscalationModel, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{ReworkEscalation: p.ReworkEscalation}}
-	}},
-	{EnvEffort, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{Effort: p.Effort}}
-	}},
-	{EnvRunEffort, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{RunEffort: p.RunEffort}}
-	}},
-	{EnvReviewEffort, []CommandProfile{CommandRun, CommandReview}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{ReviewEffort: p.ReviewEffort}}
-	}},
-	{EnvMergeReviewEffort, []CommandProfile{CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{MergeReviewEffort: p.MergeReviewEffort}}
-	}},
-	{EnvResolverEffort, []CommandProfile{CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch {
-		return RunOptionsPatch{ModelSelection: ModelSelection{ResolverEffort: p.ResolverEffort}}
-	}},
+}, modelCommandOptionRules()...), []commandOptionRule{
 	{EnvAutoRework, []CommandProfile{CommandRun}, nil},
 	{EnvMaxReworkAttempts, []CommandProfile{CommandRun}, nil},
 	{EnvRunHeader, []CommandProfile{CommandRun}, nil},
 	{EnvReworkEscalationFromAttempt, []CommandProfile{CommandRun}, nil},
 	{EnvSkipPermissions, []CommandProfile{CommandRun, CommandReview, CommandMerge}, nil},
+}...)
+
+func modelCommandOptionRules() []commandOptionRule {
+	var rules []commandOptionRule
+	for _, setting := range configtypes.ModelSettings() {
+		var profiles []CommandProfile
+		for _, profile := range setting.Profiles {
+			profiles = append(profiles, CommandProfile(profile))
+		}
+		rules = append(rules, commandOptionRule{"TAO_" + setting.EnvSuffix, profiles, func(p RunOptionsPatch) RunOptionsPatch {
+			var projected RunOptionsPatch
+			*setting.Field(&projected.ModelSelection) = *setting.Field(&p.ModelSelection)
+			return projected
+		}})
+	}
+	return rules
 }
 
 // ApplicableCommands presents only the composition policy owned here. Other
@@ -199,14 +185,16 @@ func ResolveCommandOptions(input CommandOptionsInput) (CommandOptions, error) {
 	if out.RunOptions.PullRequest && out.RunOptions.CommitPolicy == CommitPolicyNone {
 		return CommandOptions{}, out.optionError(fmt.Errorf("--pull-request requires commit policy slice"), EnvPullRequest, EnvCommitPolicy)
 	}
-	for _, role := range []struct{ key, value, base string }{
-		{EnvRunModel, out.RunOptions.Models.Run, EnvModel}, {EnvReviewModel, out.RunOptions.Models.Review, EnvModel},
-		{EnvMergeReviewModel, out.RunOptions.Models.MergeReview, EnvModel}, {EnvResolverModel, out.RunOptions.Models.Resolver, EnvModel},
-		{EnvRunEffort, out.RunOptions.Models.RunEffort, EnvEffort}, {EnvReviewEffort, out.RunOptions.Models.ReviewEffort, EnvEffort},
-		{EnvMergeReviewEffort, out.RunOptions.Models.MergeReviewEffort, EnvEffort}, {EnvResolverEffort, out.RunOptions.Models.ResolverEffort, EnvEffort},
-	} {
-		if _, applicable := out.Sources[role.key]; applicable && role.value == "" {
-			out.Sources[role.key] = out.Sources[role.base]
+	for _, setting := range configtypes.ModelSettings() {
+		if setting.Role == "" || setting.Role == configtypes.ModelRoleDefault {
+			continue
+		}
+		key, base := "TAO_"+setting.EnvSuffix, EnvModel
+		if setting.Kind == "effort" {
+			base = EnvEffort
+		}
+		if _, applicable := out.Sources[key]; applicable && *setting.Field(&out.RunOptions.Models) == "" {
+			out.Sources[key] = out.Sources[base]
 		}
 	}
 	if _, applicable := out.Sources[EnvSkipPermissions]; applicable {

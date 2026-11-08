@@ -98,7 +98,7 @@ func TestExecuteRecordedReworkModel(t *testing.T) {
 		events []plan.Event
 		models runtimeconfig.ModelSelection
 	}{
-		{name: "recorded", events: []plan.Event{{Type: plan.EventTypeReworkRound, Round: 4, Model: "m"}}, models: runtimeconfig.ModelSelection{Base: "base", Run: "run"}},
+		{name: "recorded", events: []plan.Event{{Type: plan.EventTypeReworkRound, Round: 4, Model: "m"}}, models: runtimeconfig.ModelSelection{Base: "base", Run: "run", Effort: "base-effort", RunEffort: "run-effort"}},
 		{name: "legacy round", events: []plan.Event{{Type: plan.EventTypeReworkRound, Round: 4}}, models: runtimeconfig.ModelSelection{Run: "run"}},
 		{name: "no round", models: runtimeconfig.ModelSelection{Run: "run"}},
 		{name: "base fallback", models: runtimeconfig.ModelSelection{Base: "base"}},
@@ -129,6 +129,9 @@ func TestExecuteRecordedReworkModel(t *testing.T) {
 							calls++
 							if session.Model != want {
 								t.Errorf("handoff %d model = %q, want %q", calls, session.Model, want)
+							}
+							if session.Effort != selection.models.EffortFor(runtimeconfig.ModelRoleRun) {
+								t.Errorf("handoff %d effort = %q", calls, session.Effort)
 							}
 							return agent.SessionResult{}, transportErr
 						})

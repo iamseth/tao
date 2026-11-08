@@ -85,7 +85,7 @@ func TestSessionsIgnoreUnusedInvalidBudgets(t *testing.T) {
 		})
 		runner, dir, root := sessionEventTestRunner(t, runtime, unscopedFileRepository(t), io.Discard, time.Now())
 		runner.runtimeEnv = *runEnvSnapshot(map[string]string{runtimeconfig.EnvMaxSliceCostDeprecated: "invalid", runtimeconfig.EnvMaxSliceOutputTokensDeprecated: "invalid", runtimeconfig.EnvBudgetPlanCostDeprecated: "invalid"})
-		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{PlanDir: dir, RepoRoot: root, Metrics: metrics})
+		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{Role: "run", PlanDir: dir, RepoRoot: root, Metrics: metrics})
 		if err != nil || calls != 1 {
 			t.Fatalf("unused budgets blocked session: calls=%d err=%v", calls, err)
 		}

@@ -8,11 +8,15 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/promptcapture"
 )
 
 // Config describes the stable policy and dependencies for bounded sessions.
 type Config struct {
+	// Models is copied at construction; nil preserves legacy model/effort defaults.
+	Models          *configtypes.ModelSelection
+	DefaultRole     configtypes.SessionRole
 	Now             func() time.Time
 	Model           string
 	Effort          string
@@ -27,6 +31,8 @@ type Config struct {
 
 // Runner invokes exactly one provider session for each Run call.
 type Runner struct {
+	models         *configtypes.ModelSelection
+	defaultRole    configtypes.SessionRole
 	now            func() time.Time
 	model          string
 	effort         string
@@ -51,7 +57,14 @@ func New(config Config) Runner {
 	if config.SkipPermissions && config.Descriptor.SupportsBypassPermissions {
 		permissionMode = agent.PermissionModeBypassPermissions
 	}
+	var models *configtypes.ModelSelection
+	if config.Models != nil {
+		selection := *config.Models
+		models = &selection
+	}
 	return Runner{
+		models:         models,
+		defaultRole:    config.DefaultRole,
 		now:            config.Now,
 		model:          config.Model,
 		effort:         config.Effort,
@@ -67,6 +80,7 @@ func New(config Config) Runner {
 // Request describes one provider call. ControlRoot enables leak detection when
 // it differs from RepoRoot.
 type Request struct {
+	Role configtypes.SessionRole
 	// Nil attribution fails closed; false preserves the provider outcome.
 	AttributeControlCheckoutChange func(context.Context, ControlCheckoutChange) bool
 	Capture                        *promptcapture.Target
@@ -89,6 +103,9 @@ type Request struct {
 // Result is the neutral provider result plus descriptor-driven telemetry
 // classification. Domain adapters decide whether and where to persist it.
 type Result struct {
+	// ResolvedModel and ResolvedEffort are requested settings, not provider metrics.
+	ResolvedModel         string
+	ResolvedEffort        string
 	ControlCheckoutChange *ControlCheckoutChange
 	PromptHash            string
 	PromptTemplate        string
@@ -119,13 +136,19 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if progress == nil {
 		progress = r.progress
 	}
-	model := request.Model
-	if model == "" {
-		model = r.model
+	model, effort := r.model, r.effort
+	role := request.Role
+	if role == "" {
+		role = r.defaultRole
 	}
-	effort := request.Effort
-	if effort == "" {
-		effort = r.effort
+	if info, ok := configtypes.LookupSessionRole(role); ok && r.models != nil {
+		model, effort = r.models.For(info.ModelRole), r.models.EffortFor(info.ModelRole)
+	}
+	if request.Model != "" {
+		model = request.Model
+	}
+	if request.Effort != "" {
+		effort = request.Effort
 	}
 	promptHash := promptcapture.Hash(request.Prompt)
 	var promptTemplate, promptPath, promptCaptureWarning string
@@ -182,6 +205,8 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 		warningMessage = r.descriptor.MetricsWarningPrefix + raw.MetricsWarning
 	}
 	return Result{
+		ResolvedModel:         model,
+		ResolvedEffort:        effort,
 		ControlCheckoutChange: change,
 		PromptHash:            promptHash,
 		PromptTemplate:        promptTemplate,

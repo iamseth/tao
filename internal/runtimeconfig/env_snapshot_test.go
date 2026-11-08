@@ -381,6 +381,12 @@ func TestEnvSnapshotCompleteTableWrites(t *testing.T) {
 		}
 		seen[row.Name] = true
 	}
+	keys := RuntimeEnvKeys()
+	start := slices.Index(keys, "TAO_MODEL")
+	wantModels := []string{"TAO_MODEL", "TAO_RUN_MODEL", "TAO_REVIEW_MODEL", "TAO_MERGE_REVIEW_MODEL", "TAO_RESOLVER_MODEL", "TAO_REWORK_ESCALATION_MODEL", "TAO_EFFORT", "TAO_RUN_EFFORT", "TAO_REVIEW_EFFORT", "TAO_MERGE_REVIEW_EFFORT", "TAO_RESOLVER_EFFORT"}
+	if start < 0 || start+len(wantModels) >= len(keys) || !slices.Equal(keys[start:start+len(wantModels)], wantModels) || keys[start+len(wantModels)] != EnvUpdate {
+		t.Fatalf("model environment order: %v", keys)
+	}
 	yes, no, attempts, escalation, timeout := true, false, 7, 6, 3*time.Minute
 	tokens, cost := int64(1000), 9.5
 	selected, _ := theme.Lookup("gruvbox")

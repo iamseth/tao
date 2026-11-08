@@ -122,7 +122,7 @@ func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
 			if reviewer == AgentPi {
 				implementation = AgentClaude
 			}
-			caps := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: reviewer, SessionTimeout: 20 * time.Millisecond}}, RunDependencies{LogAppender: repository, EventAppender: repository})).runCapabilities()
+			caps := newAgentFactory(testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{Agent: implementation, ReviewAgent: reviewer, SessionTimeout: 20 * time.Millisecond, Models: runtimeconfig.ModelSelection{ReviewEffort: "high"}}}, RunDependencies{LogAppender: repository, EventAppender: repository})).runCapabilities()
 			executor := caps.reviewCreator.(agentExecutor)
 			ctx, stop := context.WithCancel(context.Background())
 			calls := 0
@@ -136,7 +136,7 @@ func TestSelectedReviewerCancellationAndDeadline(t *testing.T) {
 					return agent.SessionResult{}, ctx.Err()
 				})
 			}
-			_, err := executor.RunAgentSession(ctx, AgentSessionRequest{PlanDir: detail.Dir, RepoRoot: root, Prompt: "review", Effort: "high", CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+			_, err := executor.RunAgentSession(ctx, AgentSessionRequest{Role: "review", PlanDir: detail.Dir, RepoRoot: root, Prompt: "review", CaptureOutput: true, Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
 			stop()
 			if err == nil || calls != 1 {
 				t.Fatalf("reviewer %s cancellation=%v: calls=%d error=%v", reviewer, cancel, calls, err)

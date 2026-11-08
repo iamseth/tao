@@ -6,8 +6,41 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/promptcapture"
 )
+
+func TestTextGeneratorDefaultRole(t *testing.T) {
+	for _, providerErr := range []error{nil, errors.New("provider failed")} {
+		models := configtypes.ModelSelection{Base: "base", Review: "review", ReviewEffort: "high"}
+		observed := 0
+		generator := NewTextGenerator(Config{Models: &models, DefaultRole: "review", Model: "legacy", Runtime: runtimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+			if session.Model != "review" || session.Effort != "high" {
+				t.Fatalf("session=%+v", session)
+			}
+			return agent.SessionResult{FinalText: "done"}, providerErr
+		})}, func(result Result, err error) {
+			observed++
+			if !errors.Is(err, providerErr) || result.ResolvedModel != "review" || result.ResolvedEffort != "high" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
+		models.Review = "mutated"
+		target := promptcapture.Target{Dir: t.TempDir(), Role: "text", Template: "test"}
+		_, err := generator.WithCapture(target).GenerateText(context.Background(), "", "prompt")
+		if !errors.Is(err, providerErr) || observed != 1 {
+			t.Fatalf("observed=%d err=%v", observed, err)
+		}
+		entries, err := promptcapture.List(target.Dir)
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("entries=%v err=%v", entries, err)
+		}
+		header, _, err := promptcapture.Read(entries[0].Path)
+		if err != nil || header.Model != "review" || header.Effort != "high" {
+			t.Fatalf("header=%+v err=%v", header, err)
+		}
+	}
+}
 
 func TestTextGeneratorWithCapture(t *testing.T) {
 	target := promptcapture.Target{Dir: t.TempDir(), Role: "text", Template: "test"}

@@ -112,6 +112,7 @@ func (e agentExecutor) RunAgentSession(ctx context.Context, request AgentSession
 func (e agentExecutor) sessionRunner() agentSessionRunner {
 	return newAgentSessionRunner(agentSessionRunnerConfig{
 		runtimeEnv:       e.options.RuntimeEnv,
+		models:           &e.options.Models,
 		descriptor:       e.descriptor,
 		deps:             e.options.Deps,
 		skipPermissions:  e.options.SkipPermissions,

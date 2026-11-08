@@ -3,12 +3,59 @@ package runtimeconfig
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iamseth/tao/internal/configtypes"
 )
+
+func TestAllModelCommandProjections(t *testing.T) {
+	for _, profile := range []CommandProfile{CommandRun, CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther} {
+		for mask := 0; mask < 4; mask++ {
+			env := map[string]string{}
+			for _, tc := range modelProjectionCases() {
+				env[tc.env] = "inherited"
+			}
+			var flags RunOptionsPatch
+			if mask&1 != 0 {
+				flags = flags.WithModelForAllRoles("model-flag")
+			}
+			if mask&2 != 0 {
+				flags = flags.WithEffortForAllRoles("effort-flag")
+			}
+			out, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: capturedSettings(env), Flags: flags})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range modelProjectionCases() {
+				want, source := "", ""
+				if slices.Contains(tc.profiles, profile) {
+					want, source = "inherited", "env"
+					if strings.HasSuffix(tc.key, "effort") && mask&2 != 0 {
+						want, source = "effort-flag", "flag"
+					} else if strings.HasSuffix(tc.key, "model") && tc.key != "models.rework_escalation_model" && mask&1 != 0 {
+						want, source = "model-flag", "flag"
+					}
+				}
+				if got := *tc.field(&out.RunOptions.Models); got != want || out.Sources[tc.env] != source {
+					t.Fatalf("%s mask %d %s: value %q source %q, want %q/%q", profile, mask, tc.key, got, out.Sources[tc.env], want, source)
+				}
+			}
+		}
+	}
+	for _, tc := range modelProjectionCases() {
+		for _, profile := range tc.profiles {
+			var flags RunOptionsPatch
+			*tc.field(&flags.ModelSelection) = "two words"
+			_, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: capturedSettings(nil), Flags: flags})
+			if err == nil || !strings.Contains(err.Error(), "flag") {
+				t.Fatalf("%s: %v", tc.key, err)
+			}
+		}
+	}
+}
 
 func TestCommandEffortResolution(t *testing.T) {
 	for _, tc := range []struct {

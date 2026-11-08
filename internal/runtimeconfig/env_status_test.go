@@ -2,8 +2,11 @@ package runtimeconfig
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/iamseth/tao/internal/configtypes"
 )
 
 // Legacy reader tests are replaced by the snapshot's complete-table writes,
@@ -29,6 +32,48 @@ func TestSnapshotModelStatusAndConsumption(t *testing.T) {
 		for _, row := range s.Status() {
 			if row.Name == key && (row.Value != "provider/model" || row.Source != "env" || row.Warning != "") {
 				t.Fatalf("noncanonical model row: %+v", row)
+			}
+		}
+	}
+}
+
+func TestModelEnvironmentDescriptorProjection(t *testing.T) {
+	values := map[string]string{}
+	var wantKeys []string
+	for _, tc := range modelProjectionCases() {
+		values[tc.env] = tc.env
+		wantKeys = append(wantKeys, tc.env)
+	}
+	snapshot := snapshotFrom(values)
+	defaults := snapshot.Defaults()
+	for _, tc := range modelProjectionCases() {
+		if got := *tc.field(&defaults.ModelSelection); got != tc.env {
+			t.Fatalf("%s: %q", tc.key, got)
+		}
+	}
+	var keys []string
+	for _, row := range snapshot.Status() {
+		if _, ok := values[row.Name]; ok {
+			keys = append(keys, row.Name)
+		}
+	}
+	if !slices.Equal(keys, wantKeys) {
+		t.Fatalf("order %v", keys)
+	}
+	if len(configtypes.ModelSettings()) != len(wantKeys) {
+		t.Fatal("descriptor membership drift")
+	}
+	// Session aliases must not cause duplicated configurable fields.
+	for _, role := range configtypes.SessionRoles() {
+		for _, kind := range []string{"model", "effort"} {
+			count := 0
+			for _, setting := range configtypes.ModelSettings() {
+				if setting.Role == role.ModelRole && setting.Kind == kind {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatalf("session %s has %d %s fields", role.Role, count, kind)
 			}
 		}
 	}

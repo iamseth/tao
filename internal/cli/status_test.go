@@ -16,6 +16,33 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestRepositoryModelStatusOverlayOrder(t *testing.T) {
+	models := runtimeconfig.ModelSelection{
+		Base: "base", Run: "run", Review: "review", MergeReview: "merge", Resolver: "resolver", ReworkEscalation: "escalation",
+		Effort: "base-effort", RunEffort: "run-effort", ReviewEffort: "review-effort", MergeReviewEffort: "merge-effort", ResolverEffort: "resolver-effort",
+	}
+	wantKeys := []string{"TAO_MODEL", "TAO_RUN_MODEL", "TAO_REVIEW_MODEL", "TAO_MERGE_REVIEW_MODEL", "TAO_RESOLVER_MODEL", "TAO_REWORK_ESCALATION_MODEL", "TAO_EFFORT", "TAO_RUN_EFFORT", "TAO_REVIEW_EFFORT", "TAO_MERGE_REVIEW_EFFORT", "TAO_RESOLVER_EFFORT"}
+	wantValues := []string{"base", "run", "review", "merge", "resolver", "escalation", "base-effort", "run-effort", "review-effort", "merge-effort", "resolver-effort"}
+	rows := runtimeconfig.LoadEnv(func(string) (string, bool) { return "", false }).Status()
+	original := append([]runtimeconfig.EnvVarStatus(nil), rows...)
+	rows = applyRepositoryRunDefaultsToStatus(rows, runtimeconfig.RunOptionsPatch{ModelSelection: models})
+	var got []string
+	for i, row := range rows {
+		if row.Name != original[i].Name {
+			t.Fatal("overlay reordered status")
+		}
+		if index := slices.Index(wantKeys, row.Name); index >= 0 {
+			got = append(got, row.Name)
+			if row.Value != wantValues[index] || row.Source != "repository" {
+				t.Fatalf("row %+v", row)
+			}
+		}
+	}
+	if !slices.Equal(got, wantKeys) {
+		t.Fatalf("model status order: %v", got)
+	}
+}
+
 func persistStatusRepository(t *testing.T, repo taodata.Repo) string {
 	t.Helper()
 	home := t.TempDir()

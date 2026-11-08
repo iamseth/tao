@@ -30,37 +30,9 @@ type ModelSelection struct {
 
 // EffortFor resolves a role override before the shared effort fallback.
 func (m ModelSelection) EffortFor(role ModelRole) string {
-	var override string
-	switch role {
-	case ModelRoleRun:
-		override = m.RunEffort
-	case ModelRoleReview:
-		override = m.ReviewEffort
-	case ModelRoleMergeReview:
-		override = m.MergeReviewEffort
-	case ModelRoleResolver:
-		override = m.ResolverEffort
-	}
-	if override != "" {
-		return override
-	}
-	return m.Effort
+	return m.forKind(role, "effort")
 }
 
 func (m ModelSelection) For(role ModelRole) string {
-	var override string
-	switch role {
-	case ModelRoleRun:
-		override = m.Run
-	case ModelRoleReview:
-		override = m.Review
-	case ModelRoleMergeReview:
-		override = m.MergeReview
-	case ModelRoleResolver:
-		override = m.Resolver
-	}
-	if override != "" {
-		return override
-	}
-	return m.Base
+	return m.forKind(role, "model")
 }

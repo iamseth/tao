@@ -36,8 +36,19 @@ func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
 	root := t.TempDir()
 	planDir := t.TempDir()
 	var rendered string
-	snapshot := runtimeconfig.RuntimeEnv()
-	app := newTestApp(App{RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(_ context.Context, _ string, _ string, _ []string) (runpkg.Process, error) {
+	snapshot := *snapshotWith(map[string]string{
+		runtimeconfig.EnvAgent: "claude", runtimeconfig.EnvModel: "base-model", runtimeconfig.EnvEffort: "high",
+		runtimeconfig.EnvRunModel: "run-model", runtimeconfig.EnvRunEffort: "low",
+	})
+	// Live environment changes must not replace the captured selection.
+	t.Setenv(runtimeconfig.EnvModel, "later-model")
+	t.Setenv(runtimeconfig.EnvEffort, "low")
+	app := newTestApp(App{RuntimeEnv: &snapshot, Out: io.Discard, ProcessStarter: func(_ context.Context, _ string, _ string, args []string) (runpkg.Process, error) {
+		for flag, want := range map[string]string{"--model": "base-model", "--effort": "high"} {
+			if i := slices.Index(args, flag); i < 0 || i+1 >= len(args) || args[i+1] != want {
+				t.Errorf("%s selection missing from %v", flag, args)
+			}
+		}
 		proc := newFakeCLIClaudeProcess(t)
 		go func() {
 			defer proc.finish()
@@ -51,7 +62,10 @@ func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
 		return proc, nil
 	}})
 	var observed agentsession.Result
-	got, err := classifyReworkPRThreads(context.Background(), app, root, planDir, []forge.ReviewThread{{NodeID: "thread-a"}}, func(result agentsession.Result, _ string, _ error) { observed = result })
+	var observedEffort string
+	got, err := classifyReworkPRThreads(context.Background(), app, root, planDir, []forge.ReviewThread{{NodeID: "thread-a"}}, func(result agentsession.Result, effort string, _ error) {
+		observed, observedEffort = result, effort
+	})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("classify = %+v, %v", got, err)
 	}
@@ -69,6 +83,9 @@ func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
 	}
 	if header.Template != "rework-triage" || header.Role != string(plan.AgentRoleRework) || header.TemplateHash != version || body != rendered || body == "" {
 		t.Fatalf("unexpected capture: %+v; body matches = %t", header, body == rendered)
+	}
+	if header.Model != "base-model" || header.Effort != "high" || observed.ResolvedModel != header.Model || observed.ResolvedEffort != header.Effort || observedEffort != observed.ResolvedEffort {
+		t.Fatalf("capture/observer selection mismatch: header=%+v result=%+v effort=%q", header, observed, observedEffort)
 	}
 	if observed.PromptHash != header.SHA256 || observed.PromptTemplate != header.Template || observed.PromptPath != entries[0].Path {
 		t.Fatalf("observer capture identity mismatch: %+v", observed)

@@ -47,6 +47,10 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					t.Setenv("TAO_AGENT", provider)
 					t.Setenv("TAO_SESSION_TIMEOUT", "5s")
+					t.Setenv(runtimeconfig.EnvModel, "base-model")
+					t.Setenv(runtimeconfig.EnvEffort, "high")
+					t.Setenv(runtimeconfig.EnvRunModel, "run-model")
+					t.Setenv(runtimeconfig.EnvRunEffort, "low")
 					if outcome == "timeout" {
 						t.Setenv("TAO_SESSION_TIMEOUT", "1s")
 					}
@@ -78,7 +82,11 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 							return service.WithPlanRunLock(ctx, request, func(context.Context) error { return nil })
 						}
 					}
+					started := time.Now()
 					err := app.rework(context.Background(), repo, args)
+					if outcome == "timeout" && time.Since(started) > 5*time.Second {
+						t.Fatal("triage timeout exceeded its bound; implementation grace must not apply")
+					}
 					switch outcome {
 					case "failure":
 						if err == nil || !strings.Contains(err.Error(), providerErr.Error()) {
@@ -110,6 +118,9 @@ func TestReworkPRClassifierMetrics(t *testing.T) {
 						t.Fatalf("untrusted identity or missing metrics: %#v", event)
 					}
 					m := event.Metrics
+					if m.ReasoningEffort != "high" {
+						t.Fatalf("triage lost resolved base effort: %+v", m)
+					}
 					wantStatus := plan.StatusCompleted
 					if outcome == "failure" || outcome == "timeout" || outcome == "start-failure" {
 						wantStatus = "failed"

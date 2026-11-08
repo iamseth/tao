@@ -27,6 +27,32 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestRunModelAdmissionOrder(t *testing.T) {
+	keys := []string{"TAO_MODEL", "TAO_RUN_MODEL", "TAO_REVIEW_MODEL", "TAO_EFFORT", "TAO_RUN_EFFORT", "TAO_REVIEW_EFFORT", "TAO_REWORK_ESCALATION_MODEL"}
+	for start, want := range keys {
+		values := map[string]string{"TAO_MERGE_REVIEW_MODEL": "two words", "TAO_RESOLVER_MODEL": "two words", "TAO_MERGE_REVIEW_EFFORT": "two words", "TAO_RESOLVER_EFFORT": "two words"}
+		for _, key := range keys[start:] {
+			values[key] = "two words"
+		}
+		snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) { v, ok := values[key]; return v, ok })
+		_, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults()
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("want %s: %v", want, err)
+		}
+	}
+	snapshot := runtimeconfig.LoadEnv(func(key string) (string, bool) {
+		switch key {
+		case "TAO_MERGE_REVIEW_MODEL", "TAO_RESOLVER_MODEL", "TAO_MERGE_REVIEW_EFFORT", "TAO_RESOLVER_EFFORT":
+			return "two words", true
+		default:
+			return "", false
+		}
+	})
+	if _, err := (App{RuntimeEnv: &snapshot}).runEnvDefaults(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestComposedRunFlagDefaultsAreNotOverrides(t *testing.T) {
 	base := runtimeconfig.ResolveSettings(configtypes.SettingsValues{"max_slices": []byte(`8`), "dangerously_skip_permissions": []byte(`true`)}, nil, runtimeconfig.LoadEnv(nil))
 	for _, explicit := range []bool{false, true} {
@@ -233,6 +259,25 @@ func TestModelConsumersComposeSelectedRepository(t *testing.T) {
 			}
 			if _, err := newReworkTriageTextGenerator(app, nil); err != nil {
 				t.Fatalf("unrelated invalid commit policy blocked generator: %v", err)
+			}
+		})
+	}
+}
+
+func TestMergeProductionAndLegacyAdmission(t *testing.T) {
+	app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvModel: "base", runtimeconfig.EnvEffort: "low"})})
+	models, err := app.effectiveMergeModels("chosen", "high")
+	if err != nil || models.Base != "chosen" || models.Effort != "high" || models.RunEffort != "high" || models.ReviewEffort != "high" || models.MergeReviewEffort != "high" || models.ResolverEffort != "high" {
+		t.Fatalf("legacy explicit selection = %#v, %v", models, err)
+	}
+	for _, key := range []string{runtimeconfig.EnvRunModel, runtimeconfig.EnvReviewModel, runtimeconfig.EnvReworkEscalationModel, runtimeconfig.EnvRunEffort, runtimeconfig.EnvReviewEffort} {
+		t.Run(key, func(t *testing.T) {
+			app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{key: "invalid value", runtimeconfig.EnvModel: "base"})})
+			if _, err := app.mergeSessionOptions("")(); err != nil {
+				t.Fatalf("unused setting blocked production merge: %v", err)
+			}
+			if _, err := app.effectiveMergeModels(""); err == nil {
+				t.Fatal("legacy adapter lost validation")
 			}
 		})
 	}

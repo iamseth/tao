@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/settings"
 	"github.com/iamseth/tao/internal/taodata"
@@ -138,11 +139,17 @@ func registerRepoConfigFlags(fs *flag.FlagSet) {
 	fs.String("rework-escalation-from-attempt", "", "set the first escalation-eligible attempt (integer at least one) or unset")
 	fs.String("review-agent", "", "set the repository review_agent default to pi, claude, or unset")
 	fs.String("pull-request", "", "set the repository pull_request run default to true, false, or unset")
-	for _, name := range []string{"effort", "run-effort", "review-effort", "merge-review-effort", "resolver-effort"} {
-		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a reasoning-effort level or unset")
-	}
-	for _, name := range []string{"model", "run-model", "review-model", "merge-review-model", "resolver-model", "rework-escalation-model"} {
-		fs.String(name, "", "set the repository "+strings.ReplaceAll(name, "-", "_")+" default to a model name or unset")
+	for _, kind := range []string{"effort", "model"} {
+		for _, setting := range configtypes.ModelSettings() {
+			if setting.Kind != kind {
+				continue
+			}
+			value := "model name"
+			if kind == "effort" {
+				value = "reasoning-effort level"
+			}
+			fs.String(setting.FlagName, "", "set the repository "+strings.TrimPrefix(setting.Key, "models.")+" default to a "+value+" or unset")
+		}
 	}
 }
 
@@ -218,41 +225,24 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		}
 		changes[strings.ReplaceAll(setting.name, "-", "_")] = value
 	}
-	models := runtimeconfig.ModelSelection{}
-	modelFlags := []struct {
-		name  string
-		value *string
-	}{
-		{"model", &models.Base},
-		{"run-model", &models.Run},
-		{"review-model", &models.Review},
-		{"merge-review-model", &models.MergeReview},
-		{"resolver-model", &models.Resolver},
-		{"rework-escalation-model", &models.ReworkEscalation},
-		{"effort", &models.Effort},
-		{"run-effort", &models.RunEffort},
-		{"review-effort", &models.ReviewEffort},
-		{"merge-review-effort", &models.MergeReviewEffort},
-		{"resolver-effort", &models.ResolverEffort},
-	}
-	for _, model := range modelFlags {
-		if !flagWasProvided(fs, model.name) {
+	for _, model := range configtypes.ModelSettings() {
+		if !flagWasProvided(fs, model.FlagName) {
 			continue
 		}
-		raw := flagStringValue(fs, model.name)
+		raw := flagStringValue(fs, model.FlagName)
 		var value *string
 		if raw != "unset" {
 			parse := runtimeconfig.ParseModelName
-			if strings.HasSuffix(model.name, "effort") {
+			if model.Kind == "effort" {
 				parse = runtimeconfig.ParseEffortLevel
 			}
 			parsed, err := parse(raw)
 			if err != nil {
-				return fmt.Errorf("--%s: %w (use unset to inherit)", model.name, err)
+				return fmt.Errorf("--%s: %w (use unset to inherit)", model.FlagName, err)
 			}
 			value = &parsed
 		}
-		changes["models."+strings.ReplaceAll(model.name, "-", "_")] = value
+		changes[model.Key] = value
 	}
 	service := a.SettingsService
 	if service == nil {
@@ -268,13 +258,6 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 	pullRequest := "unset"
 	if raw, ok := view.Stored["pull_request"]; ok {
 		pullRequest = string(raw)
-	}
-	for _, model := range modelFlags {
-		if raw, ok := view.Stored["models."+strings.ReplaceAll(model.name, "-", "_")]; ok {
-			if err := json.Unmarshal(raw, model.value); err != nil {
-				*model.value = string(raw)
-			}
-		}
 	}
 	lines := []string{
 		"Repo: " + emptyDash(repo.Name),
@@ -292,12 +275,17 @@ func (a App) repoConfig(ctx context.Context, registry taodata.Registry, args []s
 		}
 		lines = append(lines, key+": "+value)
 	}
-	for _, model := range modelFlags {
-		value := *model.value
+	for _, model := range configtypes.ModelSettings() {
+		var value string
+		if raw, ok := view.Stored[model.Key]; ok {
+			if err := json.Unmarshal(raw, &value); err != nil {
+				value = string(raw)
+			}
+		}
 		if value == "" {
 			value = "unset"
 		}
-		lines = append(lines, strings.ReplaceAll(model.name, "-", "_")+": "+value)
+		lines = append(lines, strings.TrimPrefix(model.Key, "models.")+": "+value)
 	}
 	if err := writeLines(a.Out, lines...); err != nil {
 		return err

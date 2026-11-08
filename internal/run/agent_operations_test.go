@@ -329,12 +329,8 @@ func TestRunSliceEscalationPreservesRoleEffort(t *testing.T) {
 			calls := 0
 			executor := agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 				calls++
-				wantModel := models.Run
-				if override != "" {
-					wantModel = override
-				}
-				if request.Model != wantModel || request.Effort != "run-effort" {
-					t.Fatalf("model/effort = %q/%q, want %q/run-effort", request.Model, request.Effort, wantModel)
+				if request.Role != "rework" || request.Model != override || request.Effort != "" {
+					t.Fatalf("role/override = %q/%q/%q", request.Role, request.Model, request.Effort)
 				}
 				return AgentSessionResult{}, nil
 			})
@@ -366,11 +362,8 @@ func TestHistoricalProposalCorrectionModel(t *testing.T) {
 				AgentSessionExecutor
 			}{AgentSessionExecutor: agentSessionExecutorFunc(func(_ context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 				calls++
-				if request.Effort != "review-effort" {
-					t.Fatalf("correction effort = %q", request.Effort)
-				}
-				if request.Model != model {
-					t.Fatalf("correction model = %q, want %q", request.Model, model)
+				if request.Role != "review" || request.Model != "" || request.Effort != "" {
+					t.Fatalf("correction role/override = %q/%q/%q", request.Role, request.Model, request.Effort)
 				}
 				return AgentSessionResult{Output: "```tao-review-proposal-json\n{\"commit_message\":{\"subject\":\"fix(pr): recover exact finalization\",\"body\":\"What:\\nRecover the exact approved head.\\n\\nWhy:\\nFinish pull request handoff safely.\"}}\n```"}, nil
 			})}

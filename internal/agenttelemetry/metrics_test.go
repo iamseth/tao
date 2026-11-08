@@ -14,6 +14,25 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestProjectResolvedMergeSelectionDoesNotInventMeasurements(t *testing.T) {
+	for _, metrics := range []*agent.Metrics{nil, {ModelID: "provider-model"}} {
+		result := agentsession.Result{ResolvedModel: "requested-model", ResolvedEffort: "high", Metrics: metrics}
+		got := Project(result, plan.AgentRoleMerge, result.ResolvedEffort, nil)
+		wantModel := ""
+		if metrics != nil {
+			wantModel = "provider-model"
+		}
+		if got.ModelID != wantModel || got.ReasoningEffort != "high" || got.OutputTokensPresent || got.CostPresent {
+			t.Fatalf("selection replaced measurements: %#v", got)
+		}
+		// The callable projector still honors explicit effort, including legacy
+		// planning callers that do not populate resolved selection fields.
+		if got := Project(result, plan.AgentRolePlanning, "legacy", nil); got.ReasoningEffort != "legacy" {
+			t.Fatalf("explicit projection effort changed: %#v", got)
+		}
+	}
+}
+
 func TestProjectPreservesMeasurements(t *testing.T) {
 	for _, label := range []string{"pi", "claude"} {
 		t.Run(label, func(t *testing.T) {

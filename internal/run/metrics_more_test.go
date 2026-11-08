@@ -1,14 +1,65 @@
 package run
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/agentsession"
 	"github.com/iamseth/tao/internal/agenttelemetry"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 )
+
+func TestRoleSelectedEffortTelemetryParity(t *testing.T) {
+	t.Parallel()
+	for _, failure := range []error{nil, errors.New("provider rejected model")} {
+		for _, measured := range []bool{false, true} {
+			t.Run(fmt.Sprintf("error=%v/metrics=%v", failure, measured), func(t *testing.T) {
+				root := t.TempDir()
+				detail := runPathSessionDetail(t, root, plan.StatusInReview, nil, []string{"001-a"}, plan.StatusCompleted)
+				repository := unscopedFileRepository(t)
+				descriptor, _ := agent.Lookup(AgentPi)
+				calls := 0
+				descriptor.NewRuntime = func(agent.RuntimeDeps) agent.Runtime {
+					return agentRuntimeFunc(func(_ context.Context, session agent.Session) (agent.SessionResult, error) {
+						calls++
+						if session.Model != "review-model" || session.Effort != "review-effort" || session.Grace != nil {
+							t.Fatalf("provider settings = %+v", session)
+						}
+						result := agent.SessionResult{}
+						if measured {
+							result.Metrics = &agent.Metrics{ModelID: "provider-model", OutputTokens: 7}
+						}
+						return result, failure
+					})
+				}
+				runner := newAgentSessionRunner(agentSessionRunnerConfig{
+					models:     &configtypes.ModelSelection{Base: "base", Review: "review-model", Effort: "base-effort", ReviewEffort: "review-effort"},
+					descriptor: descriptor, logAppender: repository, eventAppender: repository,
+				})
+				_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{Role: "review", PlanDir: detail.Dir, RepoRoot: root, Prompt: "review", Metrics: &AgentSessionMetricsRequest{Role: plan.AgentRoleReview}})
+				if !errors.Is(err, failure) || calls != 1 {
+					t.Fatalf("error=%v calls=%d", err, calls)
+				}
+				events := readAgentMetricEvents(t, detail.Dir)
+				if len(events) == 0 {
+					t.Fatal("missing metrics event")
+				}
+				for _, event := range events {
+					if event.Metrics.ReasoningEffort != "review-effort" || event.Metrics.Role != plan.AgentRoleReview {
+						t.Fatalf("telemetry settings = %+v", event.Metrics)
+					}
+					if measured && event.Metrics.ModelID != "provider-model" {
+						t.Fatalf("provider model replaced: %+v", event.Metrics)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestCollectAgentMetricsMapsNeutralMetricsAndMarksFailures(t *testing.T) {
 	t.Parallel()

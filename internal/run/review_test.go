@@ -529,8 +529,8 @@ func TestCreateReviewWithAgentSessionReportsOneCorrectionExhaustion(t *testing.T
 	var requests []AgentSessionRequest
 	executor := agentSessionExecutorFunc(func(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
 		requests = append(requests, request)
-		if request.Effort != "review-effort" {
-			t.Fatalf("review/correction effort = %q", request.Effort)
+		if request.Role != "review" || request.Model != "" || request.Effort != "" {
+			t.Fatalf("review/correction role/override = %q/%q/%q", request.Role, request.Model, request.Effort)
 		}
 		if len(requests) == 1 {
 			return AgentSessionResult{Output: initial}, ctx.Err()
