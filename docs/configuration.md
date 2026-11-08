@@ -360,11 +360,50 @@ if repository lookup is unavailable, it says so. Only role settings are consumed
 unrelated malformed model, timeout, or budget settings do not prevent collection.
 Missing selected executables get setup guidance; an unused second runtime is not
 required. Pi's bounded passive readiness probe runs once when either role selects
-Pi, using the shared merge probe; Claude retains executable and prompt checks.
+Pi, using the shared merge probe. Claude's CLI-local probe likewise runs once
+when either role selects Claude, even when its executable is missing. It reports
+`executable`, `version`, `launch_flags`, and `local_login` stages alongside Pi.
+Compact output shows problems; verbose output shows every stage. Claude warnings
+include the measured version (or `version unknown`). Subprocesses have closed
+stdin, two-second deadlines and bounded output; no prompt or model request is
+sent. Launch checks compare exact option declarations and advertised enumerated
+values in help, not just its exit status. They cover Tao's permission modes and
+optional model/effort option surfaces, but not arbitrary configured model/effort
+values or actual session acceptance. Empty, failed or unrecognized surfaces are
+unknown, not healthy.
+
+Local login inspection is permitted only for versions with established offline,
+helper-free status semantics. Currently no version meets that evidence threshold,
+so `local_login` is explicitly unknown and no auth-status command is executed.
+Advertising `auth status --json` alone is insufficient. There is no login,
+credential refresh, helper execution or network-validation fallback; a future
+supported local status can distinguish logged out from malformed/failed/timed-out
+inspection, but cannot establish remote credential validity.
 These checks do not authenticate remotely or prove provider availability or
 compatibility with the review model. Diagnostics never authorize approval,
 completion, or Git mutation. Review approval still requires Tao's exact-diff
 proposal validation; runtime selection grants no lifecycle authority.
+
+### Dated harness verification record
+
+These are manual surface observations, not end-to-end certification. Refresh
+this table by hand after harness upgrades; do not infer compatibility from a
+version number alone.
+
+| Harness | Exact version | Date | Observed passive checks | Result and limitations |
+| --- | --- | --- | --- | --- |
+| Pi | 1.4.0 | 2026-11-08 | Repeated `pi --version` from the plan workspace | Version matched planning observation. No RPC, confinement, credentials or model request checked for this record; existing Pi doctor probe is unchanged. |
+| Claude Code | 2.1.308 | 2026-11-08 | Repeated `claude --version`, `claude --help`, `claude auth status --help` from the plan workspace | Help advertised `--print`, `--output-format stream-json`, `--verbose`, `--no-session-persistence`, `--permission-mode` with `auto`, `plan`, `bypassPermissions`, plus `--model` and `--effort`. Auth help advertised `--json`. No auth status, login state, credential validity, confinement or model request checked. Offline status semantics remain unproven. |
+
+Upgrade refresh procedure: record the exact installed versions and date; repeat
+only version/help checks without prompts, review the advertised options and values
+against `internal/agent/claude/client.go`, and run the fake-process doctor tests.
+Record unavailable harnesses and unperformed checks explicitly. Help that merely
+advertises status does not authorize running it: establish version-specific
+no-network/no-helper semantics before changing the closed local-status policy.
+Do not run login, refresh or a model request to fill this passive table. Any
+separate end-to-end testing must be recorded separately with its actual scope;
+none is implied here.
 
 ## Prompt installation
 

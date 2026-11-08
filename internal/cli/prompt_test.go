@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -913,6 +914,9 @@ func TestInstallPromptsAndDoctorUseSelectedClaudeAgent(t *testing.T) {
 	text := stripANSIGreen(out.String())
 	for _, want := range []string{
 		"selected runtime agent: claude",
+		"Claude version unknown: version — empty or unrecognized version output",
+		"Claude version unknown: launch_flags — empty or unrecognized help output",
+		"Claude version unknown: local_login — offline status semantics not established; not invoked",
 		"prompts (claude):",
 		"Claude Markdown slash commands that render tao prompts dynamically",
 		"tao-commit                        ✓ current",
@@ -1253,6 +1257,57 @@ func TestPromptUsesEnvPolicyDefaults(t *testing.T) {
 	}
 	if !strings.Contains(text, "Stay on the branch Tao prepared") || !strings.Contains(text, "Do not create or switch branches") || strings.Contains(text, "Create or reuse a single feature branch") {
 		t.Fatalf("expected Tao-prepared branch default from env, got %q", text)
+	}
+}
+
+func TestDoctorClaudeRoleSelection(t *testing.T) {
+	original := probeDoctorClaudeReadiness
+	t.Cleanup(func() { probeDoctorClaudeReadiness = original })
+	for _, tc := range []struct {
+		implementation, reviewer string
+		calls                    int
+	}{
+		{"pi", "pi", 0}, {"pi", "claude", 1}, {"claude", "pi", 1},
+		{"claude", "claude", 1}, {"claude", "", 1},
+	} {
+		t.Run(tc.implementation+"/"+tc.reviewer, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			setPathExecutables(t) // Missing Claude must still receive a readiness result.
+			calls := 0
+			probeDoctorClaudeReadiness = func() *claudeReadiness {
+				calls++
+				return probeClaudeReadiness(context.Background(), "", nil)
+			}
+			app := newTestApp(App{RuntimeEnv: snapshotWith(map[string]string{
+				runtimeconfig.EnvAgent: tc.implementation, runtimeconfig.EnvReviewAgent: tc.reviewer,
+			}), Registry: func() NoteRegistry { return &fakeNoteRegistry{} }})
+			report, err := app.collectDoctorReport()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != tc.calls {
+				t.Fatalf("Claude probes = %d, want %d", calls, tc.calls)
+			}
+			effective := tc.reviewer
+			if effective == "" {
+				effective = tc.implementation
+			}
+			if string(report.selectedAgent) != tc.implementation || string(report.reviewAgent) != effective {
+				t.Fatalf("selection changed: %+v", report)
+			}
+			for _, render := range []func(io.Writer, doctorReport, theme.Palette) error{renderCompactDoctor, renderVerboseDoctor} {
+				var out bytes.Buffer
+				if err := render(&out, report, theme.Palette{}); err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(out.String(), "Claude readiness") != (tc.calls == 1) {
+					t.Fatalf("unexpected output: %s", &out)
+				}
+				if tc.calls == 1 && !strings.Contains(out.String(), "Claude version unknown: executable") {
+					t.Fatalf("missing attribution: %s", &out)
+				}
+			}
+		})
 	}
 }
 

@@ -255,6 +255,7 @@ type doctorReport struct {
 	prompts               []promptinstall.Result
 	tools                 []doctorToolResultCategory
 	piReadiness           []doctorReadinessResult
+	claudeReadiness       *claudeReadiness
 }
 
 type doctorReadinessResult struct {
@@ -316,6 +317,9 @@ func (a App) collectDoctorReport() (doctorReport, error) {
 	}
 	if report.selectedAgent == runtimeconfig.AgentPi || report.reviewAgent == runtimeconfig.AgentPi {
 		report.piReadiness = collectPiReadiness()
+	}
+	if report.selectedAgent == runtimeconfig.AgentClaude || report.reviewAgent == runtimeconfig.AgentClaude {
+		report.claudeReadiness = probeDoctorClaudeReadiness()
 	}
 	return report, nil
 }
@@ -463,9 +467,11 @@ func renderCompactDoctor(out io.Writer, report doctorReport, palette theme.Palet
 				return err
 			}
 		}
-		return writeln(out, "  Remote credential validity is not proven until an attributed request.")
+		if err := writeln(out, "  Remote credential validity is not proven until an attributed request."); err != nil {
+			return err
+		}
 	}
-	return nil
+	return renderClaudeReadiness(out, report.claudeReadiness, false, palette)
 }
 
 func renderVerboseDoctor(out io.Writer, report doctorReport, palette theme.Palette) error {
@@ -523,7 +529,7 @@ func renderVerboseDoctor(out io.Writer, report doctorReport, palette theme.Palet
 			return err
 		}
 	}
-	return nil
+	return renderClaudeReadiness(out, report.claudeReadiness, true, palette)
 }
 
 func doctorPromptNameWidth(results []promptinstall.Result) int {

@@ -1,0 +1,39 @@
+verbose=false
+agents: claude
+implementation: claude
+plan reviewer: pi
+warning: configured runtime pi missing from PATH. Install pi, add it to PATH, then run tao install-prompts and tao doctor --verbose.
+Passive setup only: no remote authentication or provider/model compatibility guarantee; unused reviewers are not required by --no-review.
+
+Pi readiness (passive; no model request; shared merge probe):
+  ⚠ warning executable
+  Remote credential validity is not proven until an attributed request.
+
+Claude readiness (passive; no model request):
+  ⚠ warning Claude 2.1.308: launch_flags — help does not advertise --verbose
+  • unknown Claude 2.1.308: local_login — offline status semantics not established; not invoked
+verbose=true
+implementation: claude
+plan reviewer: pi
+warning: configured runtime pi missing from PATH. Install pi, add it to PATH, then run tao install-prompts and tao doctor --verbose.
+Passive setup only: no remote authentication or provider/model compatibility guarantee; unused reviewers are not required by --no-review.
+selected runtime agent: claude
+
+prompts (claude):
+  
+
+Pi readiness (passive; no model request; shared merge probe):
+  ⚠ warning executable
+  Uses an ephemeral private configuration view; remote credential validity is not proven.
+
+Claude readiness (passive; no model request):
+  ✓ ok      Claude 2.1.308: executable — found in PATH
+  ✓ ok      Claude 2.1.308: version — measured with --version
+  ⚠ warning Claude 2.1.308: launch_flags — help does not advertise --verbose
+  • unknown Claude 2.1.308: local_login — offline status semantics not established; not invoked
+
+Claude readiness (passive; no model request):
+  ⚠ warning Claude version unknown: executable — not found in PATH
+  • unknown Claude version unknown: version — executable unavailable
+  • unknown Claude version unknown: launch_flags — executable unavailable
+  • unknown Claude version unknown: local_login — offline status semantics not established; not invoked
