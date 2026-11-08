@@ -212,12 +212,14 @@ func TestDebugPreviewShowsOnlyRepositoryRuntimeAnomalies(t *testing.T) {
 		"RUNTIME ANOMALIES", "TAO_PULL_REQUEST", "true", "false", "repository",
 		"TAO_UPDATE", "warning: fixture warning", "TAO_RESOLVER_MODEL", "enabled",
 		"3 active of 3 registered",
+		// The unchanged Debug fixture uses 20m; registry status renders 20m0s.
+		"TAO_SESSION_TIMEOUT", "20m0s",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("mixed Debug preview missing %q:\n%s", want, frame)
 		}
 	}
-	for _, identical := range []string{"TAO_AGENT", "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_REVIEW", "TAO_SESSION_TIMEOUT"} {
+	for _, identical := range []string{"TAO_AGENT", "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_REVIEW"} {
 		if strings.Contains(frame, identical) {
 			t.Errorf("mixed Debug preview includes identical row %q:\n%s", identical, frame)
 		}
@@ -367,15 +369,40 @@ func TestSettingsServiceClonesScopedRows(t *testing.T) {
 }
 
 func TestSettingsFixtureCoversEveryRuntimeStatus(t *testing.T) {
-	statuses := runtimeconfig.LoadEnv(nil).Status()
-	scenario, _ := Lookup(ScenarioMixed)
-	counts := make(map[string]int)
-	for _, row := range scenario.Settings.RuntimeDefaults {
-		counts[row.Name]++
-	}
+	statuses := runtimeconfig.LoadEnv(func(string) (string, bool) { return "", false }).Status()
+	var want []tui.SettingsRuntimeDefault
 	for _, status := range statuses {
-		if counts[status.Name] != 1 {
-			t.Errorf("Settings fixture count for %s = %d, want 1", status.Name, counts[status.Name])
+		row := tui.SettingsRuntimeDefault{Name: status.Name, Value: status.Value, Source: status.Source, Warning: status.Warning}
+		switch row.Name {
+		case runtimeconfig.EnvUpdate:
+			row.Warning = "fixture warning"
+		case runtimeconfig.EnvPullRequest:
+			row.Value, row.Source = "false", "env"
+		}
+		want = append(want, row)
+	}
+	for _, value := range []string{"", "invalid-ambient-value"} {
+		for _, key := range runtimeconfig.RuntimeEnvKeys() {
+			t.Setenv(key, value)
+		}
+		scenario, _ := Lookup(ScenarioMixed)
+		if !reflect.DeepEqual(scenario.Settings.RuntimeDefaults, want) {
+			t.Fatalf("fixture rows = %+v, want %+v", scenario.Settings.RuntimeDefaults, want)
+		}
+		empty, _ := Lookup(ScenarioEmpty)
+		if len(empty.Settings.RuntimeDefaults) != len(statuses) {
+			t.Fatal("empty fixture row count differs")
+		}
+		for index, status := range statuses {
+			row := tui.SettingsRuntimeDefault{Name: status.Name, Value: status.Value, Source: status.Source, Warning: status.Warning}
+			if empty.Settings.RuntimeDefaults[index] != row {
+				t.Fatalf("empty fixture row %d = %+v, want %+v", index, empty.Settings.RuntimeDefaults[index], row)
+			}
+		}
+		scenario.Settings.RuntimeDefaults[0].Value = "mutated"
+		again, _ := Lookup(ScenarioMixed)
+		if !reflect.DeepEqual(again.Settings.RuntimeDefaults, want) {
+			t.Fatal("fixture rows retain caller mutation")
 		}
 	}
 }
@@ -390,13 +417,16 @@ func TestSettingsPreviewExercisesFinalizedGroupsAcrossWidths(t *testing.T) {
 		for _, want := range []string{
 			"OVERRIDES", "EXECUTION · all default", "WORKFLOW", "SAFETY / UPDATE", "BUDGET",
 			"Commit policy", "Execution mode", "Agent", "Session timeout",
-			"TAO_PULL_REQUEST", "Review", "Auto rework", "Max rework attempts",
+			"TAO_PULL_REQUEST", "Review", "Max rework attempts", "20m0s",
 			"TAO_UPDATE", "Skip permissions",
 			"SLICE WARN", "SLICE STOP", "PLAN WARN", "Output tokens", "40 000", "150 000", "disabled", "Errored messages", "0",
 		} {
 			if !strings.Contains(frame, want) {
 				t.Errorf("width %d Settings preview missing %q:\n%s", width, want, frame)
 			}
+		}
+		if strings.Contains(frame, "Auto rework") {
+			t.Errorf("width %d renders an unset deprecated alias:\n%s", width, frame)
 		}
 		for _, overriddenGroup := range []string{"WORKFLOW", "SAFETY / UPDATE"} {
 			if strings.Contains(frame, overriddenGroup+" · all default") {

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
@@ -302,55 +303,21 @@ func mixedInvalidScenario() Scenario {
 func settingsFixture(now time.Time) tui.SettingsSnapshot {
 	explicitFalse := false
 	explicitTrue := true
+	env := runtimeconfig.LoadEnv(func(string) (string, bool) { return "", false })
+	var rows []tui.SettingsRuntimeDefault
+	for _, status := range env.Status() {
+		row := tui.SettingsRuntimeDefault{Name: status.Name, Value: status.Value, Source: status.Source, Warning: status.Warning}
+		switch row.Name {
+		case runtimeconfig.EnvUpdate:
+			row.Warning = "fixture warning"
+		case runtimeconfig.EnvPullRequest:
+			row.Value, row.Source = "false", "env"
+		}
+		rows = append(rows, row)
+	}
 	return tui.SettingsSnapshot{
-		CollectedAt: now, InheritedPullRequest: false, DisplayHome: "/preview",
-		RuntimeDefaults: []tui.SettingsRuntimeDefault{
-			{Name: "TAO_COMMIT_POLICY", Value: "slice", Source: "default"},
-			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
-			{Name: "TAO_AGENT", Value: "pi", Source: "default"},
-			{Name: "TAO_REVIEW_AGENT", Value: "", Source: "default"},
-			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
-			{Name: "TAO_SESSION_WARN_PERCENT", Value: "80", Source: "default"},
-			{Name: "TAO_UPDATE", Value: "warn", Source: "default", Warning: "fixture warning"},
-			{Name: "TAO_PULL_REQUEST", Value: "false", Source: "env"},
-			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
-			{Name: "TAO_AUTO_REWORK", Value: "true", Source: "default"},
-			{Name: "TAO_MAX_REWORK_ATTEMPTS", Value: "5", Source: "default"},
-			{Name: "TAO_REWORK_ESCALATION_FROM_ATTEMPT", Value: "4", Source: "default"},
-			{Name: "TAO_DANGEROUSLY_SKIP_PERMISSIONS", Value: "false", Source: "default"},
-			{Name: "TAO_MERGE_VERIFY_COMMAND", Value: "auto-detect", Source: "default"},
-			{Name: "TAO_MERGE_REVIEW_MAX_ATTEMPTS", Value: "5", Source: "default"},
-			{Name: "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", Value: "2", Source: "default"},
-			{Name: "TAO_APPROVED_BY", Value: "", Source: "default"},
-			{Name: "TAO_RUN_HEADER", Value: "true", Source: "default"},
-			{Name: "TAO_THEME", Value: "tokyonight", Source: "default"},
-			{Name: "TAO_PLANNER_ROUTING", Value: "not set (default: off)", Source: "default"},
-			{Name: "TAO_PLANNER_ROUTING_ARMS", Value: "not set (comma list, e.g. pi=0.5,claude=0.5)", Source: "default"},
-			{Name: "TAO_PLANNER_ROUTING_FLOOR", Value: "not set (default: 0.1)", Source: "default"},
-			{Name: "TAO_MODEL", Value: "", Source: "default"},
-			{Name: "TAO_RUN_MODEL", Value: "", Source: "default"},
-			{Name: "TAO_EFFORT", Value: "", Source: "default"},
-			{Name: "TAO_RUN_EFFORT", Value: "", Source: "default"},
-			{Name: "TAO_REVIEW_MODEL", Value: "", Source: "default"},
-			{Name: "TAO_MERGE_REVIEW_MODEL", Value: "", Source: "default"},
-			{Name: "TAO_RESOLVER_MODEL", Value: "", Source: "default"},
-			{Name: "TAO_REWORK_ESCALATION_MODEL", Value: "", Source: "default"},
-			{Name: "TAO_REVIEW_EFFORT", Value: "", Source: "default"},
-			{Name: "TAO_MERGE_REVIEW_EFFORT", Value: "", Source: "default"},
-			{Name: "TAO_RESOLVER_EFFORT", Value: "", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS_WARN", Value: "40000", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_COST_WARN", Value: "5", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_TOOL_CALLS_WARN", Value: "120", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_ASSISTANT_MESSAGES_WARN", Value: "80", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_ERRORED_MESSAGES_WARN", Value: "0", Source: "default"},
-			{Name: "TAO_BUDGET_PLAN_OUTPUT_TOKENS_WARN", Value: "150000", Source: "default"},
-			{Name: "TAO_BUDGET_PLAN_COST_WARN", Value: "20", Source: "default"},
-			{Name: "TAO_BUDGET_PLAN_TOOL_CALLS_WARN", Value: "400", Source: "default"},
-			{Name: "TAO_BUDGET_PLAN_ASSISTANT_MESSAGES_WARN", Value: "300", Source: "default"},
-			{Name: "TAO_BUDGET_PLAN_ERRORED_MESSAGES_WARN", Value: "0", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_OUTPUT_TOKENS_STOP", Value: "disabled", Source: "default"},
-			{Name: "TAO_BUDGET_SLICE_COST_STOP", Value: "disabled", Source: "default"},
-		},
+		CollectedAt: now, InheritedPullRequest: env.Defaults().PullRequestValue(), DisplayHome: "/preview",
+		RuntimeDefaults: rows,
 		Repositories: []tui.RepositorySetting{
 			{ID: "alpha", Name: "alpha", Root: "/preview/alpha", Health: "ok", Finding: "ok", PullRequest: &explicitFalse},
 			{ID: "beta", Name: "βeta", Root: "/preview/beta", Health: "ok", Finding: "ok"},
@@ -364,6 +331,9 @@ func settingsWithoutOverridesFixture(now time.Time) tui.SettingsSnapshot {
 	for index := range snapshot.RuntimeDefaults {
 		snapshot.RuntimeDefaults[index].Source = "default"
 		snapshot.RuntimeDefaults[index].Warning = ""
+		if snapshot.RuntimeDefaults[index].Name == runtimeconfig.EnvPullRequest {
+			snapshot.RuntimeDefaults[index].Value = strconv.FormatBool(snapshot.InheritedPullRequest)
+		}
 	}
 	for index := range snapshot.Repositories {
 		snapshot.Repositories[index].PullRequest = nil
@@ -373,13 +343,17 @@ func settingsWithoutOverridesFixture(now time.Time) tui.SettingsSnapshot {
 
 func debugWithoutAnomaliesFixture(now time.Time) tui.DebugSnapshot {
 	snapshot := debugFixture(now)
+	defaults := settingsWithoutOverridesFixture(now).RuntimeDefaults
 	rows := snapshot.RuntimeDefaults[:0]
 	for _, row := range snapshot.RuntimeDefaults {
 		if row.Name == "TAO_RESOLVER_MODEL" {
 			continue
 		}
-		if row.Name == "TAO_PULL_REQUEST" {
-			row.Value = "false"
+		for _, baseline := range defaults {
+			if row.Name == baseline.Name {
+				row.Value = baseline.Value
+				break
+			}
 		}
 		row.Warning = ""
 		rows = append(rows, row)

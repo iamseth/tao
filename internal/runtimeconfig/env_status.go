@@ -128,8 +128,10 @@ type EnvVarStatus struct {
 // one new table entry.
 type runtimeEnvVar struct {
 	// name is the environment variable key.
-	name    string
-	setting SettingDefinition
+	name string
+	// displayGroup is presentation-only metadata for Settings.
+	displayGroup string
+	setting      SettingDefinition
 	// aliasOf names the canonical key this deprecated row feeds. Alias rows
 	// share the canonical apply function, yield to a set canonical key, and
 	// are omitted from status while unset.
@@ -160,6 +162,7 @@ func (v runtimeEnvVar) hasOverride(value string, present bool) bool {
 var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	{
 		name:         EnvCommitPolicy,
+		displayGroup: "execution",
 		setting:      scopedSetting("commit_policy", "string", "slice", "none"),
 		defaultValue: func(d RunOptionsPatch) string { return d.CommitPolicy.String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -173,6 +176,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvExecutionMode,
+		displayGroup: "execution",
 		setting:      scopedSetting("execution_mode", "string", "isolated", "current"),
 		defaultValue: func(d RunOptionsPatch) string { return d.ExecutionModeValue().String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -186,6 +190,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvAgent,
+		displayGroup: "execution",
 		setting:      scopedSetting("agent", "string", "pi", "claude"),
 		defaultValue: func(d RunOptionsPatch) string { return d.Agent.String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -199,6 +204,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvReviewAgent,
+		displayGroup: "execution",
 		setting:      scopedSetting("review_agent", "string", "pi", "claude"),
 		defaultValue: func(d RunOptionsPatch) string { return d.ReviewAgent.String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -216,6 +222,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvSessionTimeout,
+		displayGroup: "execution",
 		setting:      scopedSetting("session_timeout", "string"),
 		defaultValue: func(d RunOptionsPatch) string { return d.SessionTimeoutValue().String() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -229,6 +236,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvSessionWarnPercent,
+		displayGroup: "execution",
 		setting:      scopedSetting("session_warn_percent", "integer"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultSessionWarnPercent) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -243,6 +251,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 }, modelEnvVars()...), []runtimeEnvVar{
 	{
 		name:         EnvUpdate,
+		displayGroup: "safety-update",
 		setting:      SettingDefinition{Key: "update", Kind: "string", Scopes: []string{"global"}, Choices: []string{"warn", "auto", "off"}},
 		defaultValue: func(RunOptionsPatch) string { return string(selfupdate.ModeWarn) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -256,6 +265,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvPullRequest,
+		displayGroup: "workflow",
 		setting:      scopedSetting("pull_request", "boolean"),
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.PullRequestValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -269,6 +279,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvReview,
+		displayGroup: "workflow",
 		setting:      scopedSetting("review_enabled", "boolean"),
 		defaultValue: func(d RunOptionsPatch) string { return strconv.FormatBool(d.ReviewEnabledValue()) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -283,6 +294,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	{
 		// Canonical counts precede the compatibility alias.
 		name:         EnvMaxReworkAttempts,
+		displayGroup: "workflow",
 		setting:      scopedSetting("max_rework_attempts", "integer"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultMaxReworkAttempts) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -298,6 +310,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvAutoRework,
+		displayGroup: "workflow",
 		aliasOf:      EnvMaxReworkAttempts,
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(true) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -316,6 +329,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvMergeReviewMaxAttempts,
+		displayGroup: "other",
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultMergeReviewMaxAttempts) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			parsed, err := parseMaxReworkAttempts(value)
@@ -328,6 +342,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvReworkEscalationFromAttempt,
+		displayGroup: "workflow",
 		setting:      scopedSetting("rework_escalation_from_attempt", "integer"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultReworkEscalationFromAttempt) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -341,6 +356,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvSkipPermissions,
+		displayGroup: "safety-update",
 		setting:      scopedSetting("dangerously_skip_permissions", "boolean"),
 		defaultValue: func(RunOptionsPatch) string { return strconv.FormatBool(false) },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -356,6 +372,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 		// An explicitly empty merge command disables verification, while an unset
 		// variable allows command auto-detection.
 		name: EnvMergeVerifyCommand, applyWhenEmpty: true,
+		displayGroup: "other",
 		defaultValue: func(RunOptionsPatch) string { return "auto-detect" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			defaults.MergeVerifyCommand = value
@@ -365,6 +382,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvAggregateReviewConvergenceWindow,
+		displayGroup: "other",
 		setting:      SettingDefinition{Key: "aggregate_review_convergence_window", Kind: "integer"},
 		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return strconv.Itoa(DefaultAggregateReviewConvergenceWindow) },
@@ -379,6 +397,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvApprovedBy,
+		displayGroup: "other",
 		defaultValue: func(RunOptionsPatch) string { return "" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
 			defaults.ApprovedBy = value
@@ -387,6 +406,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:              EnvRunHeader,
+		displayGroup:      "other",
 		setting:           scopedSetting("run_header", "boolean"),
 		fallbackOnInvalid: true,
 		defaultValue:      func(RunOptionsPatch) string { return strconv.FormatBool(true) },
@@ -401,6 +421,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvPlannerRouting,
+		displayGroup: "workflow",
 		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (default: off)" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -415,6 +436,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvPlannerRoutingArms,
+		displayGroup: "workflow",
 		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (comma list, e.g. pi=0.5,claude=0.5)" },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -429,6 +451,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name:         EnvPlannerRoutingFloor,
+		displayGroup: "workflow",
 		setting:      SettingDefinition{Key: "planner_routing_floor", Kind: "number"},
 		blankIsEmpty: true,
 		defaultValue: func(RunOptionsPatch) string { return "not set (default: 0.1)" },
@@ -444,6 +467,7 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 	{
 		name: EnvTheme, fallbackOnInvalid: true,
+		displayGroup: "other",
 		setting:      SettingDefinition{Key: "theme", Kind: "string", Scopes: []string{"global"}, Choices: theme.Names()},
 		defaultValue: func(RunOptionsPatch) string { return theme.Default().Name() },
 		apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -457,11 +481,23 @@ var runtimeEnvVars = append(append(append([]runtimeEnvVar{
 	},
 }...), budgetEnvVars...)
 
+// RuntimeEnvDisplayGroup returns registry-owned Settings presentation metadata.
+// Unknown names use the other group and report false.
+func RuntimeEnvDisplayGroup(name string) (string, bool) {
+	for _, row := range runtimeEnvVars {
+		if row.name == name {
+			return row.displayGroup, true
+		}
+	}
+	return "other", false
+}
+
 func modelEnvVars() []runtimeEnvVar {
 	var rows []runtimeEnvVar
 	for _, setting := range configtypes.ModelSettings() {
 		rows = append(rows, runtimeEnvVar{
 			name: "TAO_" + setting.EnvSuffix, applyWhenEmpty: true,
+			displayGroup: "execution",
 			setting:      scopedSetting(setting.Key, "string"),
 			defaultValue: func(RunOptionsPatch) string { return "" },
 			apply: func(defaults *EnvDefaults, value string) (string, error) {
@@ -538,6 +574,7 @@ func agentBudgetRuntimeEnvVars() []runtimeEnvVar {
 func budgetIntegerEnvVar(name, defaultValue string, set func(*plan.AgentBudget, int64)) runtimeEnvVar {
 	return runtimeEnvVar{
 		name:           name,
+		displayGroup:   "budgets",
 		applyWhenEmpty: strings.HasSuffix(name, "_STOP"),
 		setting:        budgetSetting(name, "integer"),
 		defaultValue:   func(RunOptionsPatch) string { return defaultValue },
@@ -559,6 +596,7 @@ func budgetIntegerEnvVar(name, defaultValue string, set func(*plan.AgentBudget, 
 func budgetCostEnvVar(name, defaultValue string, set func(*plan.AgentBudget, float64)) runtimeEnvVar {
 	return runtimeEnvVar{
 		name:           name,
+		displayGroup:   "budgets",
 		applyWhenEmpty: strings.HasSuffix(name, "_STOP"),
 		setting:        budgetSetting(name, "number"),
 		defaultValue:   func(RunOptionsPatch) string { return defaultValue },

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/term/cells"
 	"github.com/iamseth/tao/internal/theme"
 )
@@ -680,21 +681,11 @@ func settingsRuntimeIsOverride(row SettingsRuntimeDefault) bool {
 }
 
 func settingsDefaultGroupForName(name string) (string, bool) {
-	switch name {
-	case "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_AGENT", "TAO_REVIEW_AGENT", "TAO_SESSION_TIMEOUT", "TAO_SESSION_WARN_PERCENT",
-		"TAO_MODEL", "TAO_RUN_MODEL", "TAO_REVIEW_MODEL", "TAO_MERGE_REVIEW_MODEL", "TAO_RESOLVER_MODEL", "TAO_REWORK_ESCALATION_MODEL",
-		"TAO_EFFORT", "TAO_RUN_EFFORT", "TAO_REVIEW_EFFORT", "TAO_MERGE_REVIEW_EFFORT", "TAO_RESOLVER_EFFORT":
-		return settingsGroupExecution, true
-	case "TAO_PULL_REQUEST", "TAO_REVIEW", "TAO_AUTO_REWORK", "TAO_MAX_REWORK_ATTEMPTS", "TAO_REWORK_ESCALATION_FROM_ATTEMPT",
-		"TAO_PLANNER_ROUTING", "TAO_PLANNER_ROUTING_ARMS", "TAO_PLANNER_ROUTING_FLOOR":
-		return settingsGroupWorkflow, true
-	case "TAO_UPDATE", "TAO_DANGEROUSLY_SKIP_PERMISSIONS":
-		return settingsGroupSafety, true
-	case "TAO_MERGE_VERIFY_COMMAND", "TAO_MERGE_REVIEW_MAX_ATTEMPTS", "TAO_AGGREGATE_REVIEW_CONVERGENCE_WINDOW", "TAO_APPROVED_BY", "TAO_RUN_HEADER", "TAO_THEME":
-		return settingsGroupOther, true
-	default:
+	group, ok := runtimeconfig.RuntimeEnvDisplayGroup(name)
+	if group == "budgets" {
 		return settingsGroupOther, false
 	}
+	return group, ok
 }
 
 func humanizeSettingsName(name string) string {

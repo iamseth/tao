@@ -9,6 +9,78 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 )
 
+func TestRuntimeEnvDisplayGroups(t *testing.T) {
+	members := map[string][]string{
+		"execution":     {EnvCommitPolicy, EnvExecutionMode, EnvAgent, EnvReviewAgent, EnvSessionTimeout, EnvSessionWarnPercent, EnvModel, EnvRunModel, EnvReviewModel, EnvMergeReviewModel, EnvResolverModel, EnvReworkEscalationModel, EnvEffort, EnvRunEffort, EnvReviewEffort, EnvMergeReviewEffort, EnvResolverEffort},
+		"workflow":      {EnvPullRequest, EnvReview, EnvAutoRework, EnvMaxReworkAttempts, EnvReworkEscalationFromAttempt, EnvPlannerRouting, EnvPlannerRoutingArms, EnvPlannerRoutingFloor},
+		"safety-update": {EnvUpdate, EnvSkipPermissions},
+		"other":         {EnvMergeVerifyCommand, EnvMergeReviewMaxAttempts, EnvAggregateReviewConvergenceWindow, EnvApprovedBy, EnvRunHeader, EnvTheme},
+		"budgets":       BudgetEnvKeys(),
+	}
+	want := make(map[string]string)
+	for group, names := range members {
+		for _, name := range names {
+			want[name] = group
+		}
+	}
+	if len(want) != len(runtimeEnvVars) {
+		t.Fatalf("membership count = %d, registry = %d", len(want), len(runtimeEnvVars))
+	}
+	for _, row := range runtimeEnvVars {
+		t.Run(row.name, func(t *testing.T) {
+			group, ok := RuntimeEnvDisplayGroup(row.name)
+			if !ok || group != want[row.name] || row.displayGroup != group || group == "" {
+				t.Fatalf("group = %q, %v; want %q", group, ok, want[row.name])
+			}
+			if row.aliasOf != "" {
+				canonical, _ := RuntimeEnvDisplayGroup(row.aliasOf)
+				if group != canonical {
+					t.Fatal("alias metadata differs from canonical")
+				}
+				for _, status := range snapshotFrom(nil).Status() {
+					if status.Name == row.name {
+						t.Fatal("unset alias reported")
+					}
+				}
+				value := "1"
+				if row.name == EnvAutoRework {
+					value = "true"
+				}
+				found := false
+				for _, status := range snapshotFrom(map[string]string{row.name: value, row.aliasOf: "0"}).Status() {
+					if status.Name == row.name {
+						found = true
+						if !strings.Contains(status.Warning, "deprecated") {
+							t.Fatalf("missing deprecation: %+v", status)
+						}
+					}
+					if status.Name == row.aliasOf && status.Value != "0" {
+						t.Fatalf("canonical precedence lost: %+v", status)
+					}
+				}
+				if !found {
+					t.Fatal("set alias omitted")
+				}
+			}
+		})
+	}
+	for _, row := range modelEnvVars() {
+		if row.displayGroup != "execution" {
+			t.Errorf("model row: %+v", row)
+		}
+	}
+	for _, row := range agentBudgetRuntimeEnvVars() {
+		if row.displayGroup != "budgets" {
+			t.Errorf("budget row: %+v", row)
+		}
+	}
+	for _, name := range []string{"", "TAO_UNKNOWN"} {
+		if group, ok := RuntimeEnvDisplayGroup(name); group != "other" || ok {
+			t.Fatalf("unknown = %q, %v", group, ok)
+		}
+	}
+}
+
 // Legacy reader tests are replaced by the snapshot's complete-table writes,
 // built-ins, empty/zero/presence, boolean grammar, consumption and status tests.
 // Exercise invalid syntax for every model role rather than a legacy filter.

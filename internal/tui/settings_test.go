@@ -225,16 +225,42 @@ func lineContainsAll(lines []string, values ...string) bool {
 }
 
 func TestSettingsDefaultsClassifyAndRenderEveryRuntimeStatusOnce(t *testing.T) {
-	statuses := runtimeconfig.LoadEnv(nil).Status()
+	statuses := runtimeconfig.LoadEnv(func(string) (string, bool) { return "", false }).Status()
 	rows := make([]SettingsRuntimeDefault, 0, len(statuses))
 	for _, status := range statuses {
 		rows = append(rows, SettingsRuntimeDefault{Name: status.Name, Value: status.Value, Source: "default"})
 	}
 	groups := settingsDefaultGroups(rows)
 	counts := make(map[string]int)
-	for _, group := range groups {
+	wantGroups := []string{settingsGroupExecution, settingsGroupWorkflow, settingsGroupSafety, settingsGroupOther}
+	if len(groups) != len(wantGroups) {
+		t.Fatalf("groups = %+v", groups)
+	}
+	for index, group := range groups {
+		if group.key != wantGroups[index] {
+			t.Errorf("group %d = %s, want %s", index, group.key, wantGroups[index])
+		}
+		position := 0
+		for _, status := range statuses {
+			key, _ := runtimeconfig.RuntimeEnvDisplayGroup(status.Name)
+			if key != group.key {
+				continue
+			}
+			if position >= len(group.rows) || group.rows[position].Name != status.Name {
+				t.Fatalf("group %s row order differs at %s", group.key, status.Name)
+			}
+			position++
+		}
+		if position != len(group.rows) {
+			t.Fatalf("extra rows in %s", group.key)
+		}
 		for _, row := range group.rows {
 			counts[row.Name]++
+		}
+	}
+	for _, key := range append(runtimeconfig.BudgetEnvKeys(), "TAO_UNKNOWN") {
+		if group, ok := settingsDefaultGroupForName(key); group != settingsGroupOther || ok {
+			t.Errorf("compatibility lookup %s = %s, %v", key, group, ok)
 		}
 	}
 	renderedLines, _ := renderSettingsDefaultGroups(Model{Page: PageSettings, Width: 200, SettingsSnapshot: SettingsSnapshot{RuntimeDefaults: rows}})
