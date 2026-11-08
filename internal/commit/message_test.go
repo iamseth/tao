@@ -56,6 +56,76 @@ func TestValidateProposal(t *testing.T) {
 	}
 }
 
+func TestProposalBodyTrailerBoundary(t *testing.T) {
+	cases := []struct {
+		name     string
+		line     string
+		reserved bool
+	}{
+		{"existing prose", "Keep every Tao-owned commit consistent and recoverable.", false},
+		{"leading prose", "Tao-owned commit consistent and recoverable.", false},
+		{"gates prose", "Tao-owned gates protect commits: keep them enabled.", false},
+		{"space before colon", "Tao-Plan : prose", false},
+		{"nonletter key", "Tao-1Plan: prose", false},
+		{"empty key", "Tao-: prose", false},
+		{"invalid key character", "Tao-Plan_Name: prose", false},
+		{"reviewed by", "Tao-Reviewed-By: x", true},
+		{"lowercase", "tao-plan: y", true},
+		{"mixed case", "tAo-pLaN: y", true},
+		{"indented", " \tTao-Plan: y", true},
+		{"trailing whitespace", "Tao-Plan: y \t", true},
+		{"empty value", "Tao-Plan:", true},
+		{"whitespace value", "Tao-Plan: \t", true},
+		{"no space", "Tao-Plan:y", true},
+		{"key digits and hyphens", "TAO-A1-B2: y", true},
+	}
+	for _, tc := range cases {
+		for _, section := range []string{"what", "why"} {
+			for _, position := range []string{"initial", "internal", "final paragraph"} {
+				t.Run(tc.name+"/"+section+"/"+position, func(t *testing.T) {
+					text := tc.line + "\nContinue the explanation."
+					switch position {
+					case "internal":
+						text = "Start the explanation.\n" + text
+					case "final paragraph":
+						text = "Start the explanation.\n\n" + tc.line
+					}
+					// Keep body-edge trimming independent of the reserved-line check.
+					if text != strings.TrimSpace(text) {
+						t.Skip("body-edge whitespace is invalid independently; covered on internal lines")
+					}
+					p := validProposal()
+					if section == "what" {
+						p.What = text
+					} else {
+						p.Why = text
+					}
+					// Construct untrusted input independently of the trusted formatter.
+					subject := "feat(commit): centralize commit messages"
+					body := "What:\n" + p.What + "\n\nWhy:\n" + p.Why
+					t.Run("structured", func(t *testing.T) {
+						checkProposalTrailerBoundary(t, ValidateProposal(p), tc.reserved)
+					})
+					t.Run("canonical", func(t *testing.T) {
+						checkProposalTrailerBoundary(t, ValidateProposalMessage(subject, body), tc.reserved)
+					})
+				})
+			}
+		}
+	}
+}
+
+func checkProposalTrailerBoundary(t *testing.T, err error, reserved bool) {
+	t.Helper()
+	if reserved {
+		if err == nil || err.Error() != "proposal must not contain reserved Tao-* lines" {
+			t.Fatalf("error = %v, want reserved trailer error", err)
+		}
+	} else if err != nil {
+		t.Fatalf("prose rejected: %v", err)
+	}
+}
+
 func TestValidateProposalAcceptsExistingSupportedTypes(t *testing.T) {
 	for _, commitType := range []string{"feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"} {
 		t.Run(commitType, func(t *testing.T) {
@@ -123,6 +193,41 @@ func TestFormatProposalMessageAppendsOnlyTrustedTrailers(t *testing.T) {
 	}
 	if _, err := FormatProposalMessage("feat(review): persist approved proposal", "What:\nPersist it.\n\nWhy:\nReuse it.\n\nTao-Plan: forged", planTrailer); err == nil {
 		t.Fatal("FormatProposalMessage() accepted an untrusted Tao trailer")
+	}
+}
+
+func TestFormatTaoOwnedProseWithTrustedTrailers(t *testing.T) {
+	p := validProposal()
+	p.What = "Tao-owned gates protect commits.\nKeep the checks enabled."
+	p.Why = "Keep every Tao-owned commit consistent and recoverable.\n\nTao-owned evidence stays separate."
+	subject := "feat(commit): centralize commit messages"
+	body := "What:\nTao-owned gates protect commits.\nKeep the checks enabled.\n\nWhy:\nKeep every Tao-owned commit consistent and recoverable.\n\nTao-owned evidence stays separate."
+	trailer, err := NewTrustedTrailer("Tao-Plan", "plan-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, trusted := range []bool{false, true} {
+		var trailers []TrustedTrailer
+		want := subject + "\n\n" + body
+		if trusted {
+			trailers = append(trailers, trailer)
+			want += "\n\nTao-Plan: plan-a"
+		}
+		for name, format := range map[string]func() (string, error){
+			"Format":                func() (string, error) { return Format(p, trailers...) },
+			"FormatProposalMessage": func() (string, error) { return FormatProposalMessage(subject, body, trailers...) },
+		} {
+			message, err := format()
+			if err != nil {
+				t.Fatalf("%s(trusted=%t): %v", name, trusted, err)
+			}
+			if message != want {
+				t.Fatalf("%s(trusted=%t) = %q, want %q", name, trusted, message, want)
+			}
+			if err := ValidateMessage(message); err != nil {
+				t.Fatalf("ValidateMessage(%s(trusted=%t)): %v", name, trusted, err)
+			}
+		}
 	}
 }
 

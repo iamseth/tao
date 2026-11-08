@@ -27,10 +27,11 @@ type TrustedTrailer struct {
 }
 
 var (
-	scopePattern   = regexp.MustCompile(`^[a-z0-9-]+$`)
-	subjectPattern = regexp.MustCompile(`^([a-z]+)\(([a-z0-9-]+)\): (.+)$`)
-	summaryVerb    = regexp.MustCompile(`^[a-z][a-z-]*$`)
-	trailerPattern = regexp.MustCompile(`^Tao-[A-Za-z][A-Za-z0-9-]*$`)
+	scopePattern               = regexp.MustCompile(`^[a-z0-9-]+$`)
+	subjectPattern             = regexp.MustCompile(`^([a-z]+)\(([a-z0-9-]+)\): (.+)$`)
+	summaryVerb                = regexp.MustCompile(`^[a-z][a-z-]*$`)
+	trailerPattern             = regexp.MustCompile(`^Tao-[A-Za-z][A-Za-z0-9-]*$`)
+	reservedTrailerLinePattern = regexp.MustCompile(`(?i)^Tao-[A-Za-z][A-Za-z0-9-]*:`)
 )
 
 var supportedTypes = map[string]bool{
@@ -118,7 +119,7 @@ func validateBodyPart(name, value string) error {
 
 func containsReservedTrailerLine(value string) bool {
 	for line := range strings.SplitSeq(value, "\n") {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "tao-") {
+		if reservedTrailerLinePattern.MatchString(strings.TrimSpace(line)) {
 			return true
 		}
 	}
