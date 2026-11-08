@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -348,9 +349,9 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 		},
 		{
 			name: "session timeout",
-			// Long enough that the session starts before the deadline even
-			// when the package runs in parallel.
-			timeout: 250 * time.Millisecond,
+			// Keep timeout classification enabled; the handshake, not this
+			// noncompetitive deadline, triggers cancellation.
+			timeout: time.Hour,
 			serve: func(ctx context.Context, _ *fakePiProcess) {
 				<-ctx.Done()
 			},
@@ -360,6 +361,9 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			t.Cleanup(func() { cancel(context.Canceled) })
+			promptObserved := make(chan bool, 1)
 			root := t.TempDir()
 			detail := interruptedServiceRunDetail(t, root)
 			persistRunArtifacts(t, detail.Dir, detail)
@@ -372,6 +376,12 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 					if _, err := readPiPrompt(proc); err != nil {
 						return
 					}
+					// Publish the successful handshake and live context before
+					// issuing the test-owned deadline cancellation.
+					promptObserved <- ctx.Err() == nil
+					if tt.wantTimeoutEvt {
+						cancel(context.DeadlineExceeded)
+					}
 					tt.serve(ctx, proc)
 				}()
 				return proc, nil
@@ -383,18 +393,45 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 				return fileRepo.AppendEvent(planDir, event)
 			})
 			delayCalls := 0
+			gitRunner := piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" })
 			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				RepositoryAdmission: testRepositoryAdmission,
-				CommandRunner:       piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
+				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+					actualCWD := cwd
+					if len(args) >= 2 && args[0] == "-C" {
+						actualCWD = args[1]
+					}
+					// Keep the fake control checkout fingerprint available after
+					// caller cancellation so it cannot mask the session error.
+					if actualCWD == detail.State.Repo.Root && name == "git" {
+						switch runGitKey(args) {
+						case "ls-files --stage -z", "ls-files --others --exclude-standard -z":
+							return nil
+						}
+					}
+					return gitRunner(ctx, cwd, name, args, stdout, stderr)
+				},
 				ProcessStarter:      starter,
 				TransportRetryDelay: func(context.Context, time.Duration) error { delayCalls++; return nil },
 				EventAppender:       appender,
 				LogAppender:         fileRepo,
 			}})
 
-			err := service.Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice, SessionTimeout: tt.timeout}})
+			err := service.Execute(ctx, Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice, SessionTimeout: tt.timeout}})
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("execute error = %v, want %q", err, tt.wantError)
+			}
+			select {
+			case live := <-promptObserved:
+				if !live {
+					t.Fatal("session context canceled before prompt handshake")
+				}
+			default:
+				t.Fatal("prompt handshake not observed before Execute returned")
+			}
+			var timeoutErr *agent.SessionTimeoutError
+			if tt.wantTimeoutEvt && !errors.As(err, &timeoutErr) {
+				t.Fatalf("execute error = %v, want *agent.SessionTimeoutError", err)
 			}
 			if processStarts != 1 || delayCalls != 0 {
 				t.Fatalf("sessions=%d delays=%d, want one session and no retry delay", processStarts, delayCalls)
@@ -405,8 +442,12 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 					timeoutEvents++
 				}
 			}
-			if (timeoutEvents == 1) != tt.wantTimeoutEvt {
-				t.Fatalf("timeout events = %d, want event=%t", timeoutEvents, tt.wantTimeoutEvt)
+			wantTimeoutEvents := 0
+			if tt.wantTimeoutEvt {
+				wantTimeoutEvents = 1
+			}
+			if timeoutEvents != wantTimeoutEvents {
+				t.Fatalf("timeout events = %d, want %d", timeoutEvents, wantTimeoutEvents)
 			}
 		})
 	}
