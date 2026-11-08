@@ -16,6 +16,24 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestScorecardTrendMaturityIsIndependent(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, -2, 0)
+	observations := []planObservation{
+		observePlan(sourceIdentity{}, plan.PlanSummary{Status: plan.StatusCompleted}, planData{createdAt: now}, now),
+		observePlan(sourceIdentity{}, plan.PlanSummary{Status: plan.StatusInProgress, LastActivityAt: &old}, planData{createdAt: old}, now),
+		observePlan(sourceIdentity{}, plan.PlanSummary{Status: plan.StatusPlanned, LastActivityAt: &old}, planData{createdAt: old}, now),
+	}
+	before := buildScorecard(observations)
+	trend := buildTrend(observations, now)
+	if before.Coverage.Matured != 3 || trend.Coverage.Eligible != 0 || trend.Coverage.Immature != 1 || trend.Coverage.Active != 1 || trend.Coverage.NeverStarted != 1 {
+		t.Fatalf("scorecard=%+v trend=%+v", before.Coverage, trend.Coverage)
+	}
+	if after := buildScorecard(observations); !reflect.DeepEqual(before, after) {
+		t.Fatal("trend mutated scorecard observations")
+	}
+}
+
 func scorecardFixtures() []plan.PlanSummary {
 	recent := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
 	old := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)

@@ -59,6 +59,103 @@ func routingFixture(t *testing.T) []plannerroute.Record {
 	return records
 }
 
+func TestAggregateTrendCreationEvidence(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	for _, history := range []string{
+		`{"type":"plan_created","timestamp":"bad","agent":"pi"}`,
+		`{"type":"plan_created","timestamp":"2027-01-01T00:00:00Z","agent":"pi"}`,
+		`{"type":"slice_started","timestamp":"2020-01-01T00:00:00Z"}`,
+		"",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(history), 0600); err != nil {
+			t.Fatal(err)
+		}
+		lister := fixtureLister{summaries: []plan.PlanSummary{{ID: "20200101-not-creation", Dir: dir, Status: plan.StatusCompleted}}}
+		report, err := AggregateWithOptions(context.Background(), lister, Options{Now: now, IncludeTrend: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Trend.Coverage.Unbucketed != 1 || report.Trend.Coverage.Eligible != 0 || len(report.Trend.Buckets) != 0 {
+			t.Fatalf("history %q: %+v", history, report.Trend)
+		}
+	}
+}
+
+func TestAggregateTrendOptIn(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	content := []byte("{\"type\":\"plan_created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"agent\":\"pi\"}\nmalformed\n")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lister := fixtureLister{summaries: []plan.PlanSummary{{ID: "duplicate", Dir: dir, Status: plan.StatusCompleted}}}
+	baseline, err := AggregateWithOptions(context.Background(), lister, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opted, err := AggregateWithOptions(context.Background(), lister, Options{Now: now, IncludeTrend: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opted.Trend == nil || opted.Trend.Coverage.Eligible != 1 || opted.Trend.Coverage.MalformedHistory != 1 || !opted.Trend.AsOf.Equal(now) {
+		t.Fatal(opted.Trend)
+	}
+	opted.Trend = nil
+	if !reflect.DeepEqual(baseline, opted) {
+		t.Fatal("trend changed legacy projection")
+	}
+	encoded, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"trend"`) {
+		t.Fatal("default JSON changed")
+	}
+	sources := fixtureSourceLister{sources: []RepositorySource{{ID: "a", Plans: lister}, {ID: "b", Plans: lister}}}
+	combined, err := AggregateSourcesWithOptions(context.Background(), sources, Options{Now: now, IncludeTrend: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combined.Trend.Coverage.Eligible != 2 {
+		t.Fatal("cross-repository IDs deduplicated", combined.Trend)
+	}
+	legacy, err := AggregateSourcesWithOptions(context.Background(), sources, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined.Trend = nil
+	if !reflect.DeepEqual(legacy, combined) {
+		t.Fatal("multi-source default changed")
+	}
+	after, err := os.ReadFile(path) // #nosec G304 -- path is the history fixture in t.TempDir.
+	if err != nil || string(after) != string(content) {
+		t.Fatal("source changed", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := AggregateWithOptions(ctx, lister, Options{Now: now, IncludeTrend: true}); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := AggregateSourcesWithOptions(ctx, sources, Options{Now: now, IncludeTrend: true}); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	// A directory in place of the history file is unreadable on all platforms.
+	bad := t.TempDir()
+	if err := os.Mkdir(filepath.Join(bad, "events.jsonl"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	lister.summaries = append(lister.summaries, plan.PlanSummary{ID: "bad", Dir: bad, Status: plan.StatusCompleted}, plan.PlanSummary{ID: "missing", Dir: t.TempDir(), Status: plan.StatusCompleted})
+	partial, err := AggregateWithOptions(context.Background(), lister, Options{Now: now, IncludeTrend: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partial.Trend.Coverage.Plans != 3 || partial.Trend.Coverage.Unbucketed != 2 || partial.Trend.Coverage.MissingEvidence != 3 || partial.Trend.Coverage.SkippedPlans != 1 {
+		t.Fatal(partial.Trend.Coverage)
+	}
+}
+
 func TestAggregatePlannerRouting(t *testing.T) {
 	plans := fixtureLister{summaries: []plan.PlanSummary{
 		{ID: "done", Status: plan.StatusCompleted, Dir: t.TempDir()},

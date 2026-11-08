@@ -64,6 +64,14 @@ func zshEntry(t *testing.T, alias, command, subcommand string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(zshSingleQuote(alias+":"+description), "'"), "'")
 }
 
+func TestInsightsTrendCompletion(t *testing.T) {
+	for _, name := range []string{"trend", "json"} {
+		if spec := zshFlagSpec(t, "insights", "", name, ""); !strings.HasPrefix(spec, "--"+name+"[") {
+			t.Fatalf("flag spec = %q", spec)
+		}
+	}
+}
+
 func TestReviewAgentFlagScopeAndCompletion(t *testing.T) {
 	for _, command := range []commandMetadata{runCommand, reviewCommand, reworkCommand} {
 		fs := flag.NewFlagSet(command.name, flag.ContinueOnError)

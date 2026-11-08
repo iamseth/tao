@@ -15,14 +15,17 @@ import (
 var insightsCommand = commandMetadata{
 	name:                  "insights",
 	minPrefix:             "insi",
-	usageLines:            []string{"insights (insi) [--digest|--scorecard] [--all-repos]"},
+	usageLines:            []string{"insights (insi) [--digest|--scorecard|--trend [--json]] [--all-repos]"},
 	completionDescription: "Show repository failure and telemetry insights",
-	long:                  "Summarize failure patterns, rework loops, operational events, and agent usage across plan history. Use --all-repos to read every registered repository's data-home history, including repositories whose source root is missing. Use --digest for compact deterministic Markdown suitable for planning prompts, or --scorecard for planner cohorts, coverage, and downstream outcomes (not a causal ranking).",
+	long:                  "Summarize failure patterns, rework loops, operational events, and agent usage across plan history. Use --all-repos to read every registered repository's data-home history, including repositories whose source root is missing. Use --digest for compact deterministic Markdown suitable for planning prompts, or --scorecard for planner cohorts, coverage, and downstream outcomes (not a causal ranking). Use --trend for monthly creation-cohort trends or --trend --json for dedicated JSON; trend cannot be combined with digest or scorecard.",
 	examples: "  tao insights\n" +
 		"  tao insights --digest\n" +
 		"  tao insights --all-repos --digest\n" +
 		"  tao insights --scorecard\n" +
-		"  tao insights --all-repos --scorecard",
+		"  tao insights --all-repos --scorecard\n" +
+		"  tao insights --trend\n" +
+		"  tao insights --trend --json\n" +
+		"  tao insights --all-repos --trend",
 	registerFlags: registerInsightsFlags,
 	repository:    repositoryDefault,
 	execute: func(c commandContext) error {
@@ -31,6 +34,8 @@ var insightsCommand = commandMetadata{
 }
 
 func registerInsightsFlags(fs *flag.FlagSet) {
+	fs.Bool("trend", false, "write monthly creation-cohort trends")
+	fs.Bool("json", false, "write dedicated JSON (requires --trend)")
 	fs.Bool("digest", false, "write compact deterministic Markdown")
 	fs.Bool("scorecard", false, "write the planner scorecard")
 	fs.Bool("all-repos", false, "include plan history from all registered repositories")
@@ -41,12 +46,20 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 	if err != nil {
 		return err
 	}
-	if err := requireNoArgs(positional, "usage: tao insights [--digest|--scorecard] [--all-repos]"); err != nil {
+	if err := requireNoArgs(positional, "usage: tao insights [--digest|--scorecard|--trend [--json]] [--all-repos]"); err != nil {
 		return err
 	}
 	if flagBoolValue(fs, "scorecard") && flagBoolValue(fs, "digest") {
 		return errors.New("--scorecard cannot be combined with --digest")
 	}
+	trend := flagBoolValue(fs, "trend")
+	if trend && (flagBoolValue(fs, "digest") || flagBoolValue(fs, "scorecard")) {
+		return errors.New("--trend cannot be combined with --digest or --scorecard")
+	}
+	if flagBoolValue(fs, "json") && !trend {
+		return errors.New("--json requires --trend")
+	}
+	options := insights.Options{IncludeTrend: trend}
 	allRepos := flagBoolValue(fs, "all-repos")
 	if allRepos && plansDir != "" {
 		return errors.New("--all-repos cannot be combined with --plans-dir")
@@ -54,10 +67,10 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 	scope := view.InsightsScopeRepository
 	var report insights.Report
 	if allRepos {
-		report, err = insights.AggregateSources(ctx, catalogInsightSources{
+		report, err = insights.AggregateSourcesWithOptions(ctx, catalogInsightSources{
 			registry:   taodata.NewRegistry(""),
 			repository: a.repository,
-		})
+		}, options)
 		scope = view.InsightsScopeAllRepositories
 	} else {
 		var routes insights.RouteLister
@@ -71,12 +84,19 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 				return lookupErr
 			}
 		}
-		report, err = insights.AggregateWithRoutes(ctx, repo, routes)
+		options.Routes = routes
+		report, err = insights.AggregateWithOptions(ctx, repo, options)
 	}
 	if err != nil {
 		return err
 	}
+	if trend && flagBoolValue(fs, "json") {
+		return view.RenderInsightsTrendJSON(a.Out, *report.Trend, scope)
+	}
 	format := view.InsightsFormatReport
+	if trend {
+		format = view.InsightsFormatTrend
+	}
 	if flagBoolValue(fs, "digest") {
 		format = view.InsightsFormatDigest
 	}

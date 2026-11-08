@@ -41,6 +41,7 @@ const (
 	InsightsFormatReport    InsightsFormat = "report"
 	InsightsFormatDigest    InsightsFormat = "digest"
 	InsightsFormatScorecard InsightsFormat = "scorecard"
+	InsightsFormatTrend     InsightsFormat = "trend"
 )
 
 // InsightsOptions defines the presentation variant for an insights report.
@@ -57,10 +58,13 @@ func RenderInsights(out io.Writer, report insights.Report, options InsightsOptio
 	if options.Scope != InsightsScopeRepository && options.Scope != InsightsScopeAllRepositories {
 		return fmt.Errorf("invalid insights scope %q", options.Scope)
 	}
-	if options.Format != InsightsFormatReport && options.Format != InsightsFormatDigest && options.Format != InsightsFormatScorecard {
+	if options.Format != InsightsFormatReport && options.Format != InsightsFormatDigest && options.Format != InsightsFormatScorecard && options.Format != InsightsFormatTrend {
 		return fmt.Errorf("invalid insights format %q", options.Format)
 	}
 
+	if options.Format == InsightsFormatTrend {
+		return renderInsightsTrend(out, report.Trend, options.Scope)
+	}
 	projection := projectInsights(report, options)
 	return projection.render(out)
 }

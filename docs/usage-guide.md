@@ -495,6 +495,57 @@ only; active plans are censored, not counted as failures. Read these limits
 before interpreting differences: the scorecard never declares a winner, makes
 causal claims, or drives routing.
 
+### Monthly trends — compare creation cohorts
+
+```sh
+tao insights --trend
+tao insights --trend --json
+tao insights --all-repos --trend
+tao insights --all-repos --trend --json
+tao --plans-dir /path/to/plans insights --trend
+```
+
+Trend is monthly-only, read-only evidence, not lifecycle or recovery authority.
+It uses the existing current-repository selection; `--all-repos` includes registered
+repositories even when source checkouts are missing. Explicit `--plans-dir` cannot
+be combined with `--all-repos`. `--trend` conflicts with `--digest` and `--scorecard`;
+`--json` requires `--trend` and emits a dedicated safe projection, not raw reports,
+events, prompts, paths, or diagnostics.
+
+Buckets use recorded creation months in UTC, from month start inclusive to next
+month start exclusive. Eligibility requires **terminal status plus at least 14
+days of creation age**, measured at UTC day boundaries. Active and never-started
+plans remain censored. This differs from the unchanged scorecard maturity rule,
+which admits terminal plans immediately and also admits nonterminal plans after
+14 days of inactivity. Historical percentages need not agree across these views
+or reproduce earlier analyses with different denominators.
+
+Read eligible denominators and evidence counts together. Rates count plans, not
+repeated events; missing reviews/history are unknown, not proof that nothing
+happened. Damaged histories, skipped plans, unreadable repositories and missing
+creation dates remain coverage limitations; missing dates are not inferred from
+plan IDs. Cost and approval/merge-time medians use only measured samples, with
+separate sample counts. Partial cost telemetry is visible and is not a full-plan
+cost guarantee; absent measurements are unavailable, not zero.
+
+Planner-runtime cohorts come from low-confidence normalization of recorded
+planner labels, not proof of implementation runtime. Unknown and ambiguous
+attribution remain visible. Current months are provisional; closed months can
+still contain age-immature plans. Sparse cells (fewer than five samples) do not
+support directional comparisons. Adjacent-calendar-month comparisons require the
+same cohort, complete evidence coverage and strictly non-overlapping Wilson 95%
+rate intervals. Overlap is inconclusive; missing adjacent evidence is unavailable.
+Non-overlap is a conservative observational signal, **not causal improvement**.
+Medians have neither better/worse verdicts nor confidence intervals.
+
+Terminal-only selection introduces survivorship bias; changing project, task,
+repository or planner composition can explain shifts even within runtime cohorts.
+Do not treat incomplete coverage, provisional months or differing denominators
+as proof of improvement. Unattended rate and escaped defects remain explicitly
+unavailable pending separate intervention-attribution and defect-linkage evidence.
+Weekly/rolling windows, TUI integration, causal recommendations and median
+confidence intervals are outside this version.
+
 ---
 
 ## Build commands

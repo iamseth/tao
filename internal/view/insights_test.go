@@ -53,6 +53,8 @@ func TestBlockedLabelsAcrossInsightsViews(t *testing.T) {
 func TestRenderInsightsValidatesOptions(t *testing.T) {
 	report := insights.Report{}
 	valid := []InsightsOptions{
+		{Scope: InsightsScopeRepository, Format: InsightsFormatTrend},
+		{Scope: InsightsScopeAllRepositories, Format: InsightsFormatTrend},
 		{Scope: InsightsScopeRepository, Format: InsightsFormatScorecard},
 		{Scope: InsightsScopeAllRepositories, Format: InsightsFormatScorecard},
 		{Scope: InsightsScopeRepository, Format: InsightsFormatReport},

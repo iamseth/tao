@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,128 @@ func renderInsightsScorecard(out *bytes.Buffer, report insights.Report) error {
 
 func renderAllInsightsScorecard(out *bytes.Buffer, report insights.Report) error {
 	return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeAllRepositories, Format: view.InsightsFormatScorecard})
+}
+
+func TestInsightsTrendFlags(t *testing.T) {
+	for mask := 0; mask < 16; mask++ {
+		args := []string{}
+		for i, name := range []string{"--trend", "--json", "--digest", "--scorecard"} {
+			if mask&(1<<i) != 0 {
+				args = append(args, name)
+			}
+		}
+		trend, jsonFormat, digest, scorecard := mask&1 != 0, mask&2 != 0, mask&4 != 0, mask&8 != 0
+		invalid := (trend && (digest || scorecard)) || (jsonFormat && !trend) || (digest && scorecard)
+		var out bytes.Buffer
+		app := newTestApp(App{Out: &out, Err: &out})
+		source := fakeRepository{}
+		if invalid {
+			source.err = errors.New("aggregation must not run")
+		}
+		err := app.insights(context.Background(), source, t.TempDir(), args)
+		if invalid && err != nil && strings.Contains(err.Error(), "aggregation must not run") {
+			t.Fatalf("aggregated before rejecting %v", args)
+		}
+		if (err != nil) != invalid {
+			t.Fatalf("%v: error = %v, invalid = %v", args, err, invalid)
+		}
+		if !invalid {
+			err = app.insights(context.Background(), source, t.TempDir(), append(args, "--all-repos"))
+			if err == nil || !strings.Contains(err.Error(), "--all-repos cannot be combined with --plans-dir") {
+				t.Fatalf("explicit store conflict %v: %v", args, err)
+			}
+		}
+	}
+}
+
+func TestInsightsTrendCommandFormats(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", dataHome)
+	registry := taodata.NewRegistry(dataHome)
+	for _, id := range []string{"history", "empty", "unreadable"} {
+		if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: id, Name: id, Root: filepath.Join(dataHome, "missing-"+id)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	history := []byte(`{"type":"plan_created","timestamp":"2020-01-01T00:00:00Z","agent":"pi"}` + "\n" + `{"type":"agent_metrics","metrics":{"unknown_private_field":"secret-marker"}}` + "\n" + "broken-history\n")
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, history, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := fakeRepository{summaries: []plan.PlanSummary{{ID: "private-id", Dir: dir, Status: plan.StatusCompleted}}}
+	for _, all := range []bool{false, true} {
+		for _, empty := range []bool{false, true} {
+			var out bytes.Buffer
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(path string) Repository {
+				if empty {
+					return fakeRepository{}
+				}
+				if all {
+					switch filepath.Base(filepath.Dir(path)) {
+					case "empty":
+						return fakeRepository{}
+					case "unreadable":
+						return fakeRepository{err: errors.New("private-error")}
+					}
+				}
+				return repo
+			}})
+			args := []string{"--plans-dir", dir, "insi", "--trend"}
+			scope := view.InsightsScopeRepository
+			if all {
+				args = []string{"insi", "--trend", "--all-repos"}
+				scope = view.InsightsScopeAllRepositories
+			}
+			if err := app.Run(context.Background(), append(append([]string(nil), args...), "--json")); err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				insights.TrendReport
+				Scope view.InsightsScope `json:"scope"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Scope != scope || decoded.MaturityDays != 14 {
+				t.Fatalf("JSON = %s", &out)
+			}
+			if !empty && decoded.Coverage.Plans != 1 {
+				t.Fatalf("coverage = %+v", decoded.Coverage)
+			}
+			if !empty && all && decoded.Coverage.UnreadableRepositories != 1 {
+				t.Fatalf("coverage = %+v", decoded.Coverage)
+			}
+			for _, forbidden := range []string{"secret-marker", "private-id", "private-error", dir, "planner_routing", "session_timeout"} {
+				if strings.Contains(out.String(), forbidden) {
+					t.Fatalf("raw report data leaked: %s", forbidden)
+				}
+			}
+			out.Reset()
+			if err := app.Run(context.Background(), append([]string(nil), args...)); err != nil {
+				t.Fatal(err)
+			}
+			var expected bytes.Buffer
+			if err := view.RenderInsights(&expected, insights.Report{Trend: &decoded.TrendReport}, view.InsightsOptions{Scope: scope, Format: view.InsightsFormatTrend}); err != nil {
+				t.Fatal(err)
+			}
+			// Invocations have independent clocks; historical cohort evidence is fixed.
+			textLines, expectedLines := strings.Split(out.String(), "\n"), strings.Split(expected.String(), "\n")
+			textLines[2], expectedLines[2] = "", ""
+			if !reflect.DeepEqual(textLines, expectedLines) {
+				t.Fatalf("text and JSON semantics differ:\n%s\n%s", &out, &expected)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := app.Run(ctx, args); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation = %v", err)
+			}
+		}
+	}
+	got, err := os.ReadFile(path) // #nosec G304 -- test-owned temporary history.
+	if err != nil || !reflect.DeepEqual(got, history) {
+		t.Fatalf("history changed: %v", err)
+	}
 }
 
 func TestInsightsScorecardFlags(t *testing.T) {
@@ -150,11 +274,21 @@ func TestInsightsCatalogRoutes(t *testing.T) {
 
 func TestInsightsRenderersGolden(t *testing.T) {
 	report := representativeInsightsReport()
+	report.Trend = new(representativeTrend())
 	tests := []struct {
 		name    string
 		fixture string
 		render  func(*bytes.Buffer, insights.Report) error
 	}{
+		{name: "repository trend", fixture: "repository-trend.golden", render: func(out *bytes.Buffer, r insights.Report) error {
+			return view.RenderInsights(out, r, view.InsightsOptions{Scope: view.InsightsScopeRepository, Format: view.InsightsFormatTrend})
+		}},
+		{name: "all-repositories trend", fixture: "all-repositories-trend.golden", render: func(out *bytes.Buffer, r insights.Report) error {
+			return view.RenderInsights(out, r, view.InsightsOptions{Scope: view.InsightsScopeAllRepositories, Format: view.InsightsFormatTrend})
+		}},
+		{name: "repository trend JSON", fixture: "repository-trend-json.golden", render: func(out *bytes.Buffer, r insights.Report) error {
+			return view.RenderInsightsTrendJSON(out, *r.Trend, view.InsightsScopeRepository)
+		}},
 		{name: "repository scorecard", fixture: "repository-scorecard.golden", render: renderInsightsScorecard},
 		{name: "all-repositories scorecard", fixture: "all-repositories-scorecard.golden", render: renderAllInsightsScorecard},
 		{name: "repository report", fixture: "repository-report.golden", render: renderInsightsReport},
@@ -221,6 +355,26 @@ func TestInsightsCorrectedVerificationEventsRetainExistingGoldenProjection(t *te
 				}
 			}
 		})
+	}
+}
+
+func representativeTrend() insights.TrendReport {
+	return insights.TrendReport{
+		AsOf: time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC), MaturityDays: 14, MinimumSamples: 5,
+		Coverage: insights.TrendCoverage{Plans: 12, Terminal: 8, Eligible: 6, Immature: 2, Active: 2, NeverStarted: 2, Unbucketed: 1, UnknownRuntime: 2, AmbiguousRuntime: 1, EventEvidence: 6, ReviewEvidence: 5, MissingEvidence: 1, SkippedPlans: 1, UnreadableRepositories: 1},
+		Buckets: []insights.TrendBucket{
+			{Month: "2026-09", Cohort: "overall", Coverage: insights.TrendCoverage{Plans: 5, Terminal: 5, Eligible: 5, EventEvidence: 5}, Metrics: []insights.TrendMetric{
+				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(0, 5, 5)), Comparison: "unavailable"},
+			}},
+			{Month: "2026-10", Cohort: "overall", AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 4, Terminal: 2, Eligible: 1, Immature: 1, Active: 1, NeverStarted: 1}, Metrics: []insights.TrendMetric{
+				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 1, EvidencePlans: 1, Rate: new(insights.EstimateRate(1, 1, 5)), Comparison: "inconclusive"},
+				{Key: "median_cost_per_plan", Direction: "lower", Availability: "incomplete", EligiblePlans: 1, EvidencePlans: 1, PartialSamples: 1, Median: new(insights.EstimateMedian([]float64{0}, 5)), Comparison: "unavailable"},
+				{Key: "unattended_rate", Direction: "higher", Availability: "unavailable", Reason: "intervention_attribution_missing", EligiblePlans: 1, Comparison: "unavailable"},
+				{Key: "escaped_defects_per_plan", Direction: "lower", Availability: "unavailable", Reason: "defect_linkage_missing", EligiblePlans: 1, Comparison: "unavailable"},
+			}},
+			{Month: "2026-10", Cohort: "pi", AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 2, Terminal: 2, Eligible: 1, Immature: 1}},
+			{Month: "2026-11", Cohort: "unknown", Provisional: true, AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 2, Terminal: 1, Immature: 1, Active: 1, UnknownRuntime: 2}},
+		},
 	}
 }
 
@@ -530,7 +684,7 @@ func TestInsightsAllReposHelpAndFlagConflict(t *testing.T) {
 	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"insights", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all-repos", "all registered repositories", "tao insights --all-repos --digest"} {
+	for _, want := range []string{"--all-repos", "--trend", "--json", "all registered repositories", "tao insights --all-repos --digest", "tao insights --trend --json"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help missing %q:\n%s", want, out.String())
 		}

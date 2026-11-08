@@ -332,7 +332,7 @@ _tao() {
       _arguments '--completed-window[completed-plan lookback window (all includes all history; 0 omits completed plans)]:duration or all:' '--interval[dashboard refresh interval (must be greater than zero)]:duration:'
       ;;
     insi|insig|insigh|insight|insights)
-      _arguments '--all-repos[include plan history from all registered repositories]' '--digest[write compact deterministic Markdown]' '--scorecard[write the planner scorecard]'
+      _arguments '--all-repos[include plan history from all registered repositories]' '--digest[write compact deterministic Markdown]' '--json[write dedicated JSON (requires --trend)]' '--scorecard[write the planner scorecard]' '--trend[write monthly creation-cohort trends]'
       ;;
     c|cl|cle|clea|clean|cleanu|cleanup)
       _arguments '--dry-run[show branches and worktrees that would be removed]' '--force[also remove unmerged branches and dirty worktrees]'

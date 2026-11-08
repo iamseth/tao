@@ -154,6 +154,10 @@ type roleTotals struct {
 }
 
 type planObservation struct {
+	createdAt, firstApprovalAt, mergeAt                               time.Time
+	historyPresent, historyMalformed                                  bool
+	recordedBlocker, recordedRework                                   bool
+	trendCostPartial                                                  bool
 	repository                                                        sourceIdentity
 	planID                                                            string
 	treatment                                                         PlannerTreatment
@@ -189,6 +193,9 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 		validationWarnings: len(summary.Warnings),
 		severities:         make(map[string]int), roles: make(map[string]roleTotals), reliability: make(map[string]int),
 		planningMetrics: len(data.planningMetrics) > 0,
+		createdAt:       data.createdAt, historyPresent: data.historyPresent, historyMalformed: data.historyMalformed,
+		recordedBlocker: len(data.blockedReasons) > 0,
+		recordedRework:  len(data.reworkEvents) > 0 || summary.ReworkTotalCount > 0,
 	}
 	// Missing/malformed creation evidence remains missing even if metrics exist.
 	if !data.createdAt.IsZero() {
@@ -213,6 +220,15 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 	var approvalAt time.Time
 	approvalSeen := false
 	for _, event := range data.lifecycle {
+		// Trend timing never uses the scorecard's unrelated-event fallback.
+		if !o.createdAt.IsZero() && !event.Timestamp.IsZero() && !event.Timestamp.Before(o.createdAt) && !event.Timestamp.After(now) {
+			if event.Type == plan.EventTypePlanReviewed && event.Review != nil && event.Review.Status == plan.ReviewStatusCompleted && event.Review.IsApproved() && (o.firstApprovalAt.IsZero() || event.Timestamp.Before(o.firstApprovalAt)) {
+				o.firstApprovalAt = event.Timestamp
+			}
+			if event.Type == plan.EventTypePlanMerged && (o.mergeAt.IsZero() || event.Timestamp.Before(o.mergeAt)) {
+				o.mergeAt = event.Timestamp
+			}
+		}
 		switch event.Type {
 		case plan.EventTypeSliceStarted:
 			o.started = true
@@ -313,6 +329,7 @@ func (o *planObservation) observeMetrics(data planData) {
 		}
 		for role, events := range byRole {
 			metrics := plan.SummarizeAgentMetrics(events).Totals
+			o.trendCostPartial = o.trendCostPartial || !metrics.CostPresent || metrics.Availability.Partial > 0 || metrics.Availability.Unavailable > 0 || metrics.Availability.Unknown > 0
 			totals := o.roles[role]
 			// The scanner gives anonymous events distinct session keys. Repeated
 			// metrics for a named session contribute usage but only one session/role.

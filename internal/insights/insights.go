@@ -60,6 +60,7 @@ type Report struct {
 	OutlierPlans       []PlanOutlier        `json:"outlier_plans"`
 	RecentLogs         RecentLogReport      `json:"recent_logs"`
 	PlannerRouting     PlannerRoutingReport `json:"planner_routing"`
+	Trend              *TrendReport         `json:"trend,omitempty"`
 	Scorecard          Scorecard            `json:"scorecard"`
 }
 
@@ -206,15 +207,18 @@ type PlanOutlier struct {
 }
 
 type accumulator struct {
-	observations []planObservation
-	buckets      map[string]*ReasonBucket
-	sessions     []session
-	signals      map[string]*signalAccumulator
-	logs         *logAccumulator
-	routes       map[routingCohortKey]*routingAccumulator
+	trendObservations []planObservation
+	observations      []planObservation
+	buckets           map[string]*ReasonBucket
+	sessions          []session
+	signals           map[string]*signalAccumulator
+	logs              *logAccumulator
+	routes            map[routingCohortKey]*routingAccumulator
 }
 
 type planData struct {
+	historyPresent   bool
+	historyMalformed bool
 	createdAgent     string
 	createdAt        time.Time
 	earliestAt       time.Time
@@ -273,6 +277,7 @@ func AggregateWithRoutes(ctx context.Context, repository PlanLister, routes Rout
 
 // Options supplies read-time aggregation context.
 type Options struct {
+	IncludeTrend bool
 	// Now defaults to time.Now when zero.
 	Now time.Time
 	// Routes supplies optional advisory evidence for single-repository aggregation.
@@ -299,6 +304,9 @@ func AggregateWithOptions(ctx context.Context, repository PlanLister, options Op
 		return Report{}, err
 	}
 	finalize(&report, &acc)
+	if err := populateTrend(ctx, &report, &acc, options, now); err != nil {
+		return Report{}, err
+	}
 	return report, nil
 }
 
@@ -354,6 +362,9 @@ func AggregateSourcesWithOptions(ctx context.Context, lister SourceLister, optio
 		return Report{}, err
 	}
 	finalize(&report, &acc)
+	if err := populateTrend(ctx, &report, &acc, options, now); err != nil {
+		return Report{}, err
+	}
 	return report, nil
 }
 
@@ -390,6 +401,7 @@ func aggregateSource(ctx context.Context, report *Report, acc *accumulator, repo
 				return err
 			}
 			report.PlansSkipped++
+			acc.trendObservations = append(acc.trendObservations, observePlan(repository, summary, planData{}, now))
 			continue
 		}
 		report.PlansScanned++
@@ -556,6 +568,7 @@ func readPlanEvents(ctx context.Context, dir string) (planData, error) {
 	}
 	defer func() { _ = file.Close() }()
 
+	data.historyPresent = true
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	line := 0
@@ -566,6 +579,7 @@ func readPlanEvents(ctx context.Context, dir string) (planData, error) {
 		line++
 		var event plan.Event
 		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Type == "" {
+			data.historyMalformed = true
 			continue
 		}
 		consumeEvent(&data, event, line)
@@ -643,7 +657,9 @@ func consumeEvent(data *planData, event plan.Event, line int) {
 
 func mergePlan(report *Report, acc *accumulator, repository sourceIdentity, summary plan.PlanSummary, data planData, now time.Time) {
 	planID := summary.ID
-	acc.observations = append(acc.observations, observePlan(repository, summary, data, now))
+	o := observePlan(repository, summary, data, now)
+	acc.observations = append(acc.observations, o)
+	acc.trendObservations = append(acc.trendObservations, o)
 	for _, event := range data.signals {
 		addSignal(acc.signals, repository, planID, event)
 	}
