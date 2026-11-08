@@ -169,5 +169,7 @@ Rules for the JSON block:
 - Every finding must be tied to the scoped diff and include the best available `file` and `line`; use `null` for `line` only when no specific line applies.
 - Each finding's `file` becomes its rework slice's expected file, and its `suggestion` becomes that slice's task list. Write suggestions as imperative fix steps.
 - `required_files` lists repository-relative paths the fix must create or change besides `file`; compare them with `expected_files` across `slices.json` and state in prose when they extend the plan's scope. This never changes severity or verdict.
+- For each finding whose required files fall outside `expected_files` across `slices.json`, OR whose fix adds a guarantee, subsystem, or compatibility surface not required by the plan intent, include one short scope-expansion decision block in the prose review, outside `tao-review-json`. Include all five elements: the original requirement; the proposed contract expansion; the smallest compliant in-scope alternative; the consequences of both accepting and declining the expansion; and a recommendation with its reason. If no compliant in-scope alternative exists, say so and explain why rather than inventing one.
+- The scope-expansion decision block is advisory only: it never lifts the rework scope gate or authorizes an amendment. Leave JSON findings and their shape unchanged; existing severity, verdict, suggestion, convergence, and approval rules still apply.
 - Do not include Markdown comments inside the JSON block.
 {{- end }}
