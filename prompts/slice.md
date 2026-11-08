@@ -84,6 +84,8 @@ Before any artifact update, check for execution having begun (for example, activ
 - Emit optional `plan.runtime_prerequisites` only for true execution dependencies explicitly established by the planning packet; never infer them from sequence order.
 - Run `tao insights --digest` for the current repository and factor recurring failure patterns—such as environment-caused verification failures, rework-prone areas, and cost outliers—into slice boundaries and verification-command choices.
 - Slice work into small serial steps.
+- When dependencies allow, order slices so the highest-risk or least-understood work runs first, so a wrong direction surfaces early.
+- Give every slice goal a concrete observable outcome.
 - Each slice must be independently reviewable.
 - Each slice should leave the repo in a valid state.
 - Prefer 30–90 minute slices.
@@ -92,6 +94,7 @@ Before any artifact update, check for execution having begun (for example, activ
 - For large or multi-theme requests, prefer multiple independent plans over one long serial plan. Create a separate `tao init --slug ... --json` plan for each theme that can be reviewed and merged independently, and summarize the plan set in your final response.
 - If you intentionally keep multiple themes in one plan, explain why they share one review/merge boundary in `planning-brief.md`.
 - Include verification commands for every slice; every slice must include at least one deterministic verification command.
+- When a plan crosses runtime boundaries, include a final no-edit integration slice that exercises the assembled system. For example, exercise a CLI together with its extension and a separate process. This uses the existing clear-value final-validation exception in Verification command selection, not an extra mandatory repository-wide gate: use narrow commands and explicit success criteria, and retain implementation slices' gates. A final-validation slice must never be the first place the repository gate runs.
 - Declare only concrete repository files or directories that must exist before a slice can begin as `required_inputs`.
 - Record rollback notes where useful in `plan.md`'s Risks section.
 - Do not invent requirements.
