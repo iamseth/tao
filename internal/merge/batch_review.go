@@ -663,21 +663,19 @@ func (r BatchAggregateReviewer) finishAggregateRework(ctx context.Context, git G
 	if err := validateAggregateResolutionCommitMessage(state.Review.CommitMessage, state.ID, state.Attempts.AggregateRework); err != nil {
 		return state, fmt.Errorf("aggregate rework commit proposal is invalid: %w", err)
 	}
-	changes, statusErr := concretePorcelainChanges(ctx, git)
+	changes, statusErr := prepareMergeEdits(ctx, git)
 	if statusErr != nil {
 		return state, fmt.Errorf("inspect aggregate rework: %w", statusErr)
 	}
-	paths := append([]string(nil), changes.changedPaths...)
-	slices.Sort(paths)
-	if !slices.Equal(paths, state.Review.ResolutionPaths) {
+	if !changes.matchesPaths(state.Review.ResolutionPaths) {
 		return state, fmt.Errorf("%w: edit set changed", errAggregateReworkContentDrift)
 	}
 	if state.Review.ResolutionFingerprint != "" {
-		fingerprint, fingerprintErr := aggregateReworkContentFingerprint(integrationRoot, paths)
+		matches, fingerprintErr := changes.matchesContent(integrationRoot, state.Review.ResolutionFingerprint)
 		if fingerprintErr != nil {
 			return state, fmt.Errorf("%w: cannot fingerprint file content before staging: %w", errAggregateReworkContentDrift, fingerprintErr)
 		}
-		if fingerprint != state.Review.ResolutionFingerprint {
+		if !matches {
 			return state, fmt.Errorf("%w: file content changed", errAggregateReworkContentDrift)
 		}
 	}
@@ -690,7 +688,12 @@ func (r BatchAggregateReviewer) finishAggregateRework(ctx context.Context, git G
 	case agentEditIssueNoChanges, agentEditIssueUnsafePaths:
 		return state, errors.New("aggregate rework has no safe edits matching durable intent")
 	}
-	if err := git.Add(ctx, "."); err != nil {
+	// Only fingerprint-less historical batch intents retain broad staging.
+	stage := func() error { return changes.stage(ctx, git) }
+	if state.Review.ResolutionFingerprint == "" {
+		stage = func() error { return git.Add(ctx, ".") }
+	}
+	if err := stage(); err != nil {
 		return state, fmt.Errorf("stage aggregate rework: %w", err)
 	}
 	result, err := commitpkg.CommitPrepared(ctx, git, state.Review.CommitMessage)

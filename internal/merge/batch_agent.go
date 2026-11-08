@@ -255,7 +255,7 @@ func (r BatchAgentResolver) Resolve(ctx context.Context, state BatchState, integ
 				}
 				messageResolved = message != directMessage
 			}
-			contentFingerprint, fingerprintErr := resolvedCandidateContentFingerprint(integrationRoot, changed)
+			contentFingerprint, fingerprintErr := aggregateReworkContentFingerprint(integrationRoot, changed)
 			if fingerprintErr != nil {
 				return r.block(ctx, result, state, git, BatchBlockKindResumable, fmt.Sprintf("fingerprint agent edits for %s: %v", candidate.PlanID, fingerprintErr))
 			}
@@ -484,7 +484,7 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 	var changed []string
 	var stage func(context.Context) error
 	if resolution.ContentFingerprint != "" {
-		changes, err := concretePorcelainChanges(ctx, git)
+		changes, err := prepareMergeEdits(ctx, git)
 		if err != nil {
 			return state, false, false, fmt.Errorf("%w for %s: inspect edit set: %w", errResolvedCandidateContentDrift, planID, err)
 		}
@@ -494,15 +494,15 @@ func (r BatchAgentResolver) finishResolvedCandidate(ctx context.Context, state B
 		// rejects it, and tracked changes under a newly ignored directory stage
 		// only through the forced tracked path.
 		changed = changes.changedPaths
-		stage = func(ctx context.Context) error { return stageResolutionChanges(ctx, git, changes) }
-		if !slices.Equal(changed, resolution.ChangedPaths) {
+		stage = func(ctx context.Context) error { return changes.stage(ctx, git) }
+		if !changes.matchesPaths(resolution.ChangedPaths) {
 			return state, false, false, fmt.Errorf("%w for %s: edit set changed", errResolvedCandidateContentDrift, planID)
 		}
-		fingerprint, err := resolvedCandidateContentFingerprint(git.Root(), changed)
+		matches, err := changes.matchesContent(git.Root(), resolution.ContentFingerprint)
 		if err != nil {
 			return state, false, false, fmt.Errorf("%w for %s: cannot fingerprint file content before staging: %w", errResolvedCandidateContentDrift, planID, err)
 		}
-		if fingerprint != resolution.ContentFingerprint {
+		if !matches {
 			return state, false, false, fmt.Errorf("%w for %s: file content changed", errResolvedCandidateContentDrift, planID)
 		}
 	} else {
@@ -586,10 +586,6 @@ func (r BatchAgentResolver) prepareFreshResolvedCandidate(ctx context.Context, g
 		candidate.CommitMessageResolved = false
 	}
 	return state, nil
-}
-
-func resolvedCandidateContentFingerprint(root string, paths []string) (string, error) {
-	return aggregateReworkContentFingerprint(root, paths)
 }
 
 func (r BatchAgentResolver) settleResolvedCandidate(state BatchState, integrationIndex, candidateIndex int, head string) (BatchState, error) {

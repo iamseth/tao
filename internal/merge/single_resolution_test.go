@@ -753,7 +753,7 @@ func TestSingleResolutionSettlementRejectsOriginalWidthMarkersAfterAttributesCha
 	if err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := resolutionContentFingerprint(fixture.repoRoot, changes.changedPaths)
+	fingerprint, err := aggregateReworkContentFingerprint(fixture.repoRoot, changes.changedPaths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +802,7 @@ func TestSingleResolutionSettlementRejectsResidualConflictMarkersAndRollsBack(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			fingerprint, err := resolutionContentFingerprint(fixture.repoRoot, changes.changedPaths)
+			fingerprint, err := aggregateReworkContentFingerprint(fixture.repoRoot, changes.changedPaths)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1068,6 +1068,33 @@ func TestSingleResolutionSettlementRejectsRecoveryWithInexactCommittedTree(t *te
 			}
 		})
 	}
+}
+
+func TestSingleResolutionSettlementRefusesMissingFingerprint(t *testing.T) {
+	testenv.SkipIfShort(t)
+	fixture, request, git := preparedSingleResolutionFixture(t)
+	store := &recordingSingleResolutionStore{current: request.Intent}
+	resolver := GuardedSingleConflictResolver{Git: git, Recorder: store, Agent: batchResolutionAgentFunc(func(_ context.Context, root, _ string) (string, error) {
+		return batchResolutionJSON("resolved"), os.WriteFile(filepath.Join(root, "README.md"), []byte("combined\n"), 0o600)
+	})}
+	resolved, err := resolver.ResolveConflict(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Intent = resolved.Intent
+	request.Intent.Resolution.ContentFingerprint = ""
+	before := realGitOutput(t, fixture.repoRoot, "status", "--porcelain")
+	index := realGitOutput(t, fixture.repoRoot, "ls-files", "--stage")
+	if _, err := resolver.SettleResolved(context.Background(), request); err == nil {
+		t.Fatal("accepted missing fingerprint")
+	}
+	if after := realGitOutput(t, fixture.repoRoot, "status", "--porcelain"); after != before {
+		t.Fatal("refusal changed status")
+	}
+	if after := realGitOutput(t, fixture.repoRoot, "ls-files", "--stage"); after != index {
+		t.Fatal("refusal changed index")
+	}
+	assertRef(t, fixture.repoRoot, "HEAD", request.Intent.DefaultParent)
 }
 
 func TestSingleResolutionSettlementRefusesContentDriftAfterResolvedCrashWithoutMutation(t *testing.T) {
@@ -2337,7 +2364,7 @@ func TestSingleResolutionSharedGuardsHandleDeleteRenameSymlinkAndQuotedPaths(t *
 		t.Fatal(err)
 	}
 	paths := []string{"deleted.txt", "link.txt", "old name.txt", "quoted\tname.txt", "renamed name.txt"}
-	first, err := resolutionContentFingerprint(root, paths)
+	first, err := aggregateReworkContentFingerprint(root, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2347,7 +2374,7 @@ func TestSingleResolutionSharedGuardsHandleDeleteRenameSymlinkAndQuotedPaths(t *
 	if err := os.Symlink("quoted\tname.txt", filepath.Join(root, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	second, err := resolutionContentFingerprint(root, paths)
+	second, err := aggregateReworkContentFingerprint(root, paths)
 	if err != nil {
 		t.Fatal(err)
 	}

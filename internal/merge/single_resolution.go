@@ -234,7 +234,7 @@ func (r GuardedSingleConflictResolver) ResolveConflict(ctx context.Context, requ
 	if unsafeResolutionPaths(beforeChanges.changedPaths) {
 		return reject(result, request.Intent, errors.New("prepared conflict contains unsafe paths"))
 	}
-	beforeFingerprint, err := resolutionContentFingerprint(r.Git.Root(), beforeChanges.changedPaths)
+	beforeFingerprint, err := aggregateReworkContentFingerprint(r.Git.Root(), beforeChanges.changedPaths)
 	if err != nil {
 		return reject(result, request.Intent, fmt.Errorf("fingerprint prepared conflict: %w", err))
 	}
@@ -352,7 +352,7 @@ func (r GuardedSingleConflictResolver) ResolveConflict(ctx context.Context, requ
 	if err := singleResolutionValidationError(validation); err != nil {
 		return reject(result, result.Intent, err)
 	}
-	afterFingerprint, err := resolutionContentFingerprint(r.Git.Root(), afterChanges.changedPaths)
+	afterFingerprint, err := aggregateReworkContentFingerprint(r.Git.Root(), afterChanges.changedPaths)
 	if err != nil {
 		return reject(result, result.Intent, fmt.Errorf("fingerprint resolver edits: %w", err))
 	}
@@ -456,20 +456,20 @@ func (r GuardedSingleConflictResolver) SettleResolved(ctx context.Context, reque
 	if branchErr != nil || strings.TrimSpace(currentBranch) != request.Intent.DefaultBranch {
 		return settlement, fmt.Errorf("%w: settlement worktree is not on %s: %w", ErrSingleResolutionDrift, request.Intent.DefaultBranch, branchErr)
 	}
-	changes, err := concretePorcelainChanges(ctx, r.Git)
+	changes, err := prepareMergeEdits(ctx, r.Git)
 	if err != nil {
 		return settlement, r.settlementReject(ctx, request.Intent, boundary, fmt.Errorf("inspect durable resolution edits: %w", err))
 	}
 	// These checks precede Tao's staging. Mismatches may be intervening user
 	// work after a crash, so refuse them without running destructive rollback.
-	if !slices.Equal(changes.changedPaths, resolution.ChangedPaths) {
+	if !changes.matchesPaths(resolution.ChangedPaths) {
 		return settlement, fmt.Errorf("%w: changed path set differs", ErrSingleResolutionDrift)
 	}
-	fingerprint, err := resolutionContentFingerprint(r.Git.Root(), changes.changedPaths)
+	matches, err := changes.matchesContent(r.Git.Root(), resolution.ContentFingerprint)
 	if err != nil {
 		return settlement, fmt.Errorf("%w: inspect content: %w", ErrSingleResolutionDrift, err)
 	}
-	if fingerprint != resolution.ContentFingerprint {
+	if !matches {
 		return settlement, fmt.Errorf("%w: content differs", ErrSingleResolutionDrift)
 	}
 	markerPaths := append(append([]string(nil), changes.markerScanPaths...), presentMarkerScanPaths(r.Git.Root(), resolution.ConflictFiles)...)
@@ -483,7 +483,7 @@ func (r GuardedSingleConflictResolver) SettleResolved(ctx context.Context, reque
 	if err := singleResolutionValidationError(validateAgentEditsAtMarkerSizes(ctx, r.Git.Root(), changes.changedPaths, markerPaths, originalMarkerSizes)); err != nil {
 		return settlement, r.settlementReject(ctx, request.Intent, boundary, err)
 	}
-	if err := stageResolutionChanges(ctx, r.Git, changes); err != nil {
+	if err := changes.stage(ctx, r.Git); err != nil {
 		return settlement, r.settlementReject(ctx, request.Intent, boundary, fmt.Errorf("stage exact resolution edits: %w", err))
 	}
 	staged, err := concretePorcelainChanges(ctx, r.Git)
@@ -2191,10 +2191,6 @@ func singleResolutionValidationError(validation agentEditValidation) error {
 	default:
 		return nil
 	}
-}
-
-func resolutionContentFingerprint(root string, paths []string) (string, error) {
-	return aggregateReworkContentFingerprint(root, paths)
 }
 
 func (r GuardedSingleConflictResolver) timestamp(notBefore time.Time) time.Time {

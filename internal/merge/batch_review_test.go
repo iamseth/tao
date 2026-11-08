@@ -248,6 +248,52 @@ func TestBatchReviewDiffStatFailureBlocksResumably(t *testing.T) {
 	}
 }
 
+func TestFinishAggregateReworkRejectsBeforeStaging(t *testing.T) {
+	for _, scenario := range []string{"legacy-path-drift", "path-drift", "content-drift", "markers"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := t.TempDir()
+			content := "fixed\n"
+			if scenario == "markers" {
+				content = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n"
+			}
+			if err := os.WriteFile(filepath.Join(root, "file"), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fingerprint, err := aggregateReworkContentFingerprint(root, []string{"file"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{"file"}
+			switch scenario {
+			case "legacy-path-drift":
+				fingerprint = ""
+				paths = []string{"other"}
+			case "path-drift":
+				paths = []string{"other"}
+			case "content-drift":
+				fingerprint = strings.Repeat("0", 64)
+			}
+			state := BatchState{ID: "batch-1", Attempts: BatchAttempts{AggregateRework: 1}, Review: &BatchReview{Status: "applying", CommitMessage: editSettlementTestMessage(t, "batch-1"), ResolutionPaths: paths, ResolutionFingerprint: fingerprint}}
+			git := &fakeGitClient{root: root, status: " M file\n"}
+			_, err = (BatchAggregateReviewer{}).finishAggregateRework(context.Background(), git, state, root)
+			if err == nil {
+				t.Fatal("accepted invalid edits")
+			}
+			if scenario != "markers" && !errors.Is(err, errAggregateReworkContentDrift) {
+				t.Fatalf("lost drift classification: %v", err)
+			}
+			if scenario == "markers" && !strings.Contains(err.Error(), "conflict markers") {
+				t.Fatalf("marker error: %v", err)
+			}
+			for _, call := range git.calls {
+				if strings.HasPrefix(call, "add") || strings.HasPrefix(call, "commit") {
+					t.Fatalf("refusal mutated git: %s", call)
+				}
+			}
+		})
+	}
+}
+
 func TestFinishAggregateReworkStagesDotBeforePreparedCommit(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

@@ -182,7 +182,7 @@ func TestFinishResolvedCandidatePreparedCommitPhases(t *testing.T) {
 				t.Fatal(err)
 			}
 			paths := []string{"README.md"}
-			fingerprint, err := resolvedCandidateContentFingerprint(root, paths)
+			fingerprint, err := aggregateReworkContentFingerprint(root, paths)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -480,7 +480,7 @@ func TestFinishResolvedCandidateStagesByPorcelainBucket(t *testing.T) {
 			t.Fatal(err)
 		}
 		paths := []string{"NOTES.md", "README.md"}
-		fingerprint, err := resolvedCandidateContentFingerprint(root, paths)
+		fingerprint, err := aggregateReworkContentFingerprint(root, paths)
 		if err != nil {
 			t.Fatal(err)
 		}

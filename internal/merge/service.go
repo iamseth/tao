@@ -304,7 +304,7 @@ func (s Service) inspectSingleMergeRestartBoundary(ctx context.Context, git GitC
 	if resolution := intent.Resolution; resolution != nil && resolution.Phase == plan.SingleMergeResolutionPhaseResolved && statusErr == nil {
 		changes, changesErr := concretePorcelainChanges(ctx, git)
 		if changesErr == nil && slices.Equal(changes.changedPaths, resolution.ChangedPaths) {
-			fingerprint, fingerprintErr := resolutionContentFingerprint(git.Root(), changes.changedPaths)
+			fingerprint, fingerprintErr := aggregateReworkContentFingerprint(git.Root(), changes.changedPaths)
 			live.ExactResolutionEdits = fingerprintErr == nil && fingerprint == resolution.ContentFingerprint
 		}
 	}

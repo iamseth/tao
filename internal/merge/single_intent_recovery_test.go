@@ -93,7 +93,7 @@ func resolvedExactEditsFixture(t *testing.T) (realGitWorktree, *plan.PlanDetail,
 	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "README.md"), []byte("resolved\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := resolutionContentFingerprint(fixture.repoRoot, []string{"README.md"})
+	fingerprint, err := aggregateReworkContentFingerprint(fixture.repoRoot, []string{"README.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
