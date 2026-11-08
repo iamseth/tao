@@ -376,11 +376,10 @@ func (a App) executeResolvedRunWithSources(ctx context.Context, repo planRunRepo
 	defer closeHeader()
 	service := run.NewService(repo, runOut, run.Options{
 		ExecutionConfig: run.ExecutionConfig{
-			RuntimeEnv:         &snapshot,
-			ResolvedRunOptions: request.ResolvedRunOptions,
-			OptionSources:      run.RunOptionSources{PullRequest: sources[runtimeconfig.EnvPullRequest], ExecutionMode: sources[runtimeconfig.EnvExecutionMode]},
-			SkipPermissions:    skipPermissions,
-			MaxReworkAttempts:  policy.MaxAttempts,
+			RuntimeEnv:        &snapshot,
+			OptionSources:     run.RunOptionSources{PullRequest: sources[runtimeconfig.EnvPullRequest], ExecutionMode: sources[runtimeconfig.EnvExecutionMode]},
+			SkipPermissions:   skipPermissions,
+			MaxReworkAttempts: policy.MaxAttempts,
 		},
 		RunDependencies: run.RunDependencies{RepositoryAdmission: a.RepositoryAdmission, CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, HeaderReporter: headerReporter, SessionLogWriter: runOut, Now: a.now},
 	})

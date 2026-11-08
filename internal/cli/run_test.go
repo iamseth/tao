@@ -895,6 +895,10 @@ func TestRunAgentPiEnvRoutesSliceRunToPi(t *testing.T) {
 func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 	clearTaoEnv(t)
 	t.Setenv("TAO_AGENT", "claude")
+	t.Setenv(runtimeconfig.EnvRunModel, "selected-model")
+	t.Setenv(runtimeconfig.EnvRunEffort, "high")
+	t.Setenv(runtimeconfig.EnvSessionTimeout, "37s")
+	t.Setenv(runtimeconfig.EnvSkipPermissions, "true")
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	var out bytes.Buffer
 	claudeCalls := 0
@@ -909,6 +913,16 @@ func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 		return nil
 	}, ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (run.Process, error) {
 		claudeCalls++
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 10*time.Minute+37*time.Second || time.Until(deadline) < 10*time.Minute {
+			t.Fatalf("request timeout lost: %v, %v", deadline, ok)
+		}
+		state, err := plan.ReadState(fixture.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cwd != state.Repo.Root {
+			t.Fatalf("execution root = %s", cwd)
+		}
 		if name != "claude" {
 			t.Fatalf("unexpected claude command %s", name)
 		}
@@ -929,7 +943,7 @@ func TestRunAgentClaudeEnvRoutesSliceRunToClaude(t *testing.T) {
 	if claudeCalls != 1 {
 		t.Fatalf("expected one claude call, got %d", claudeCalls)
 	}
-	if strings.Join(gotArgs, " ") != "--print --output-format stream-json --verbose --no-session-persistence --permission-mode auto" {
+	if strings.Join(gotArgs, " ") != "--print --output-format stream-json --verbose --no-session-persistence --permission-mode bypassPermissions --model selected-model --effort high" {
 		t.Fatalf("unexpected claude args: %#v", gotArgs)
 	}
 }

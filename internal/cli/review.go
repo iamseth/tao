@@ -133,7 +133,7 @@ func (a App) runPlanReviewWithOptions(ctx context.Context, repo runpkg.Repositor
 	request := runpkg.Request{Input: input, ResolvedRunOptions: options.RunOptions}
 	snapshot := a.envSnapshot()
 	runner := runpkg.NewService(repo, a.Out, runpkg.Options{
-		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, ResolvedRunOptions: request.ResolvedRunOptions, SkipPermissions: options.SkipPermissions},
+		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, SkipPermissions: options.SkipPermissions},
 		RunDependencies: runpkg.RunDependencies{CommandRunner: a.CommandRunner, ProcessStarter: a.ProcessStarter, StatusReporter: a.StatusReporter, SessionLogWriter: a.Out, Now: a.Now,
 			ReviewRangePresenter: func(detail *plan.PlanDetail, base, head string) {
 				presentUnchangedReviewRange(a.Out, detail, base, head)

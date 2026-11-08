@@ -20,16 +20,16 @@ func (o Options) executionConfig() ExecutionConfig {
 	return o.ExecutionConfig
 }
 
-// prepareRequestConfig re-applies a resolved request on top of the run-service
-// defaults so per-request overrides win. Process-only settings stay on
-// ExecutionConfig.
+// prepareRequestConfig derives executor output from service defaults and the
+// request, the sole invocation option input. Process-only settings stay on the
+// copied ExecutionConfig; preparation never mutates the service defaults.
 func prepareRequestConfig(defaults ExecutionConfig, request Request) (ExecutionConfig, error) {
-	config, err := runtimeconfig.NewConfigFromStages(defaults.RunOptionsPatch(), request.RunOptionsPatch())
+	resolved, err := runtimeconfig.ResolveRunOptions(defaults.RunOptionsPatch(), request.RunOptionsPatch())
 	if err != nil {
 		return ExecutionConfig{}, err
 	}
 	// Fields not explicitly overridden inherit from the service defaults by design.
 	execution := defaults
-	execution.ResolvedRunOptions = config.ResolvedOptions()
+	execution.ResolvedRunOptions = resolved
 	return execution, nil
 }

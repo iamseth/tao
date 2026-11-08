@@ -17,9 +17,10 @@ type RecoveryMode struct {
 	Reverify           bool
 }
 
-// Request is the run service's input: a plan addressed by Input plus the
-// resolved run options the executor reads. Callers build it from the staged
-// runtimeconfig model (NewConfigFromStages(...).ResolvedOptions()).
+// Request is the sole caller-owned invocation option input to run and review,
+// together with the plan addressed by Input. Callers build resolved options from
+// the staged runtimeconfig model (NewConfigFromStages(...).ResolvedOptions()).
+// Do not also copy them into the service's ExecutionConfig defaults.
 type Request struct {
 	Input string
 	RecoveryMode

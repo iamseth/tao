@@ -554,6 +554,36 @@ func TestReviewAgentUnregisteredAndMissingRepository(t *testing.T) {
 	}
 }
 
+func TestReviewRequestOptionsReachService(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	started := false
+	stop := errors.New("observed review startup")
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard,
+		RuntimeEnv: snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "claude", runtimeconfig.EnvReviewModel: "review-model", runtimeconfig.EnvReviewEffort: "high", runtimeconfig.EnvSessionTimeout: "37s", runtimeconfig.EnvSkipPermissions: "true"}),
+		CommandRunner: func(_ context.Context, _ string, name string, args []string, stdout, _ io.Writer) error {
+			if name != "git" {
+				t.Fatalf("unexpected command %s", name)
+			}
+			writeRunGitOutput(stdout, args)
+			return nil
+		},
+		ProcessStarter: func(ctx context.Context, _ string, name string, args []string) (run.Process, error) {
+			started = true
+			if name != "claude" || !strings.Contains(strings.Join(args, " "), "--model review-model --effort high") || !strings.Contains(strings.Join(args, " "), "--permission-mode bypassPermissions") {
+				t.Fatalf("review options lost: %s %v", name, args)
+			}
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 37*time.Second {
+				t.Fatalf("review timeout lost: %v %v", deadline, ok)
+			}
+			return nil, stop
+		},
+	})
+	err := app.runPlanReview(context.Background(), plan.NewFileRepository(fixture.root), fixture.id, runtimeconfig.RunOptionsPatch{})
+	if !started || !errors.Is(err, stop) {
+		t.Fatalf("review startup = %v, error = %v", started, err)
+	}
+}
+
 func TestReviewAgentSnapshotAdmission(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
 	repo := plan.NewFileRepository(fixture.root)

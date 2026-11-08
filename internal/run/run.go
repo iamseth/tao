@@ -143,9 +143,10 @@ type RunOptionSources struct {
 	ExecutionMode string
 }
 
-// ExecutionConfig carries the run configuration the executor reads. It embeds
-// the resolved runtime options and adds process-only knobs that stay outside
-// runtimeconfig.
+// ExecutionConfig supplied to NewService carries service defaults, not a second
+// invocation snapshot. Preparation combines those defaults with Request into a
+// derived executor copy. Process-only knobs and automatic verification repair
+// policy stay here, outside Request and runtimeconfig.
 type ExecutionConfig struct {
 	// OptionSources is invocation-only diagnostic context, never persisted evidence.
 	OptionSources RunOptionSources

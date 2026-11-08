@@ -89,11 +89,22 @@ func TestRunRecordsResolvedEscalationPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			repo := newRecordingAutoReworkRepository(planID, detail)
+			var firstRequest run.Request
 			calls := 0
 			oldExecutor := executeSinglePlan
 			t.Cleanup(func() { executeSinglePlan = oldExecutor })
 			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
 				calls++
+				if calls == 1 {
+					firstRequest = request
+				} else {
+					want := firstRequest.ForNextRound()
+					// Escalation changes only model selection in later rounds.
+					want.Models = request.Models
+					if request != want || request.Continue || request.RestartBlocked || request.RepairVerification {
+						t.Fatalf("ordinary options changed or recovery revived: %+v, want %+v", request, want)
+					}
+				}
 				if request.SessionTimeout != 3*time.Minute {
 					t.Fatalf("automatic rework reloaded timeout: %s", request.SessionTimeout)
 				}

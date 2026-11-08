@@ -248,6 +248,61 @@ func TestPrepareRequestConfigMapsRunRequestToExecutionConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareRequestConfigInheritanceAndIsolation(t *testing.T) {
+	t.Parallel()
+	snapshot := runtimeconfig.EnvSnapshot{}
+	defaults := ExecutionConfig{
+		ResolvedRunOptions: ResolvedRunOptions{
+			Agent: AgentClaude, ReviewAgent: AgentPi, CommitPolicy: CommitPolicySlice,
+			ExecutionMode: ExecutionModeIsolated, MaxSlices: 9, Continue: true,
+			PullRequest: true, ReviewEnabled: true, SessionTimeout: time.Minute,
+			Models: runtimeconfig.ModelSelection{Base: "base", Run: "run", Review: "review", Effort: "high", RunEffort: "low"},
+		},
+		RuntimeEnv: &snapshot, SkipPermissions: true, MaxReworkAttempts: 7,
+		OptionSources: RunOptionSources{PullRequest: "environment", ExecutionMode: "flag"},
+	}
+	original := defaults
+	for _, request := range []Request{
+		{ResolvedRunOptions: ResolvedRunOptions{Agent: AgentPi, CommitPolicy: CommitPolicyNone, ExecutionMode: ExecutionModeCurrent, Models: runtimeconfig.ModelSelection{Run: "override", RunEffort: "medium"}}},
+		{},
+	} {
+		got, err := prepareRequestConfig(defaults, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := defaults
+		want.MaxSlices, want.Continue, want.PullRequest, want.ReviewEnabled, want.SessionTimeout = 0, false, false, false, 0
+		if request.Agent != "" {
+			want.Agent = request.Agent
+			want.CommitPolicy = request.CommitPolicy
+			want.ExecutionMode = request.ExecutionMode
+			want.Models.Run = request.Models.Run
+			want.Models.RunEffort = request.Models.RunEffort
+		}
+		if got != want {
+			t.Fatalf("prepared = %+v, want %+v", got, want)
+		}
+		if defaults != original {
+			t.Fatal("preparation mutated defaults")
+		}
+	}
+	for _, invalid := range []ExecutionConfig{defaults, {ResolvedRunOptions: ResolvedRunOptions{Agent: "invalid"}}} {
+		request := Request{ResolvedRunOptions: ResolvedRunOptions{Agent: "invalid"}}
+		if invalid.Agent == "invalid" {
+			request.Agent = AgentPi
+		}
+		if _, err := prepareRequestConfig(invalid, request); err == nil {
+			t.Fatal("invalid stage accepted")
+		}
+	}
+	request := Request{RecoveryMode: RecoveryMode{RestartBlocked: true, RepairVerification: true, Reverify: true}, ResolvedRunOptions: defaults.ResolvedRunOptions}
+	next := request.ForNextRound()
+	got, err := prepareRequestConfig(defaults, next)
+	if err != nil || got.Continue || next.RestartBlocked || next.RepairVerification || !next.Reverify {
+		t.Fatalf("recovery revived: %+v %+v %v", next, got, err)
+	}
+}
+
 func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
