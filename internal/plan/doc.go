@@ -31,7 +31,9 @@
 // Navigation map:
 //   - models.go points to model groupings; artifact_models.go,
 //     lifecycle_models.go, and summary_models.go define artifact schemas,
-//     lifecycle metadata, and list-view summaries.
+//     lifecycle metadata, and list-view summaries. event_models.go keeps the flat
+//     event schema; merge_models.go and finalization_models.go hold merge and
+//     finalization evidence; action_models.go defines read-only next actions.
 //   - repository.go, record.go, artifact_operations.go, artifact_files.go,
 //     artifact_mutation.go, artifact_changeset.go, resolve.go, and log.go
 //     load, resolve, bind mutable records, mutate,
