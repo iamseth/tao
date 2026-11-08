@@ -102,10 +102,11 @@ When unfinished work must be blocked, optionally leave a short resume note with 
 
 ## Rulings
 
-You may settle a small ambiguity as a ruling only in these two situations:
+You may settle a small ambiguity as a ruling only in these three situations:
 
 - The slice text is internally inconsistent and existing plan intent settles it: for example, a task bullet conflicts with a verification command, or an identifier in a consumer differs by a typo from a producer's declared symbol contract.
 - The slice is silent on a detail that `planning-brief.md` or `plan.md` already settles.
+- The task names an exact existing identifier but the wrong declaration path, and targeted inspection of that identifier's declaration demonstrates the task path is incorrect. The actual declaration file may be omitted from `expected_files` only if its exact directory matches that of an existing slice `expected_files` entry. Permit only the smallest change needed for the already specified task. Parent directories and sibling packages do not qualify; directory membership never grants blanket ownership or permission for other directory edits.
 
 A ruling is the smallest change consistent with `planning-brief.md`, not permission to invent a decision. An identifier typo may be a ruling; a missing or contradictory symbol contract is a blocker.
 
@@ -115,7 +116,9 @@ Record each ruling in the completion notes file as one line beginning with the e
 Ruling: <what was decided>; why: <reason>; cost if wrong: <cost>
 ```
 
-Only that single line is captured downstream; continuation lines are ordinary notes.
+Only that single line is captured downstream; continuation lines are ordinary notes. For a declaration-path ruling, include the identifier, real declaration file, incorrect task path, and reason on that same line, with the potential unexpected-path warning in `cost if wrong`. Do not promise that a warning is the only consequence or that completion is guaranteed.
+
+This narrow task-location correction is not behavioral scope expansion. Preserve plan intent, explicit exclusions, global invariants, and approval requirements; a declaration-path ruling cannot override them. Missing, ambiguous, or contradictory symbol contracts and unresolved declarations remain blockers. The ruling does not expand Plan-Owned Files or verification-failure ownership; it does not authorize out-of-scope failing-test repair, change or skip gates, or authorize staging, commits, approval, or completion. Those boundaries remain Tao-owned.
 
 Rulings never authorize scope expansion, new requirements, changing or dropping declared verification commands, skipping verification, commits, or passing an approval gate. Genuinely missing information, approval gates, and failing verification still use `tao slice-blocked` exactly as the existing rules describe. The Verification section still governs completion.
 

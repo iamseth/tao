@@ -285,7 +285,7 @@ func TestRenderRunPromptDefinesBoundedRulings(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Rulings",
-		"only in these two situations",
+		"only in these three situations",
 		"slice text is internally inconsistent",
 		"slice is silent on a detail",
 		"planning-brief.md",
@@ -297,6 +297,22 @@ func TestRenderRunPromptDefinesBoundedRulings(t *testing.T) {
 		"continuation lines are ordinary notes",
 		"Rulings never authorize scope expansion, new requirements, changing or dropping declared verification commands, skipping verification, commits, or passing an approval gate",
 		"missing or contradictory symbol contract is a blocker",
+		// Prompt-contract coverage for the reported EnvDefaults config.go/env_status.go
+		// location mismatch, not a live agent replay or proof of compliance.
+		"task names an exact existing identifier but the wrong declaration path",
+		"targeted inspection of that identifier's declaration demonstrates the task path is incorrect",
+		"actual declaration file may be omitted from `expected_files` only if its exact directory matches that of an existing slice `expected_files` entry",
+		"smallest change needed for the already specified task",
+		"Parent directories and sibling packages do not qualify",
+		"directory membership never grants blanket ownership or permission for other directory edits",
+		"Preserve plan intent, explicit exclusions, global invariants, and approval requirements",
+		"Missing, ambiguous, or contradictory symbol contracts and unresolved declarations remain blockers",
+		"narrow task-location correction is not behavioral scope expansion",
+		"identifier, real declaration file, incorrect task path, and reason",
+		"potential unexpected-path warning",
+		"Do not promise that a warning is the only consequence or that completion is guaranteed",
+		"does not expand Plan-Owned Files or verification-failure ownership",
+		"does not authorize out-of-scope failing-test repair, change or skip gates, or authorize staging, commits, approval, or completion",
 		"Genuinely missing information, approval gates, and failing verification still use `tao slice-blocked`",
 	} {
 		if !strings.Contains(got, want) {
