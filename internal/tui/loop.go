@@ -1,4 +1,3 @@
-// Package tui implements Tao's interactive terminal dashboard.
 package tui
 
 import (

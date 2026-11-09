@@ -1,4 +1,4 @@
-// Package tui provides Tao's terminal dashboard and detail views.
+// Package tui provides Tao's interactive terminal dashboard and detail views.
 //
 // Detail view navigation:
 //   - detail.go: shared state, headers, tabs, frames, and sanitization helpers.
