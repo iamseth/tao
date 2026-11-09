@@ -240,6 +240,8 @@ func TestRenderRunPromptAuthorizesPlanOwnedGateRepair(t *testing.T) {
 		"Targeted or `-short` runs are for diagnosis only and must not decide scope",
 		"every remaining out-of-scope failing path (source, test, and fixture files) from that authoritative run",
 		"in one `slice-blocked` call rather than one blocker per discovered file",
+		"record that asserted file as a `--failing-path` because it is the file that must change",
+		"Record the test file as well only when the test itself must change.",
 		"`slice-blocked` refuses a gate-evidence blocker whose every path is in scope",
 		"pass `--contract-conflict` only when the slice contract itself cannot be satisfied and explain the conflict in the reason file",
 	} {

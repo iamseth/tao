@@ -337,13 +337,13 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 					}
 					alternatives = append(alternatives, PlanAction{
 						Kind: PlanActionAmendScope, Class: PlanActionClassRecovery, Command: cmd,
-						Reason: "authorize the blocker's paths outside expected_files before tao run --continue",
+						Reason: "authorize the blocker's recorded failing paths outside expected_files before tao run --continue",
 					})
 					paths := strings.Join(uncovered[:min(5, len(uncovered))], ", ")
 					if len(uncovered) > 5 {
 						paths += ", +" + strconv.Itoa(len(uncovered)-5) + " more"
 					}
-					reason += "; the blocker names paths outside the slice's expected_files (" + paths + "); authorize them with tao edit amend " + id + " " + slice.ID + " --reason-file FILE --allow-file PATH before tao run --continue"
+					reason += "; the blocker's recorded failing paths outside the slice's expected_files are (" + paths + "); authorize the file(s) that must change with tao edit amend " + id + " " + slice.ID + " --reason-file FILE --allow-file PATH before tao run --continue"
 				}
 			}
 		}

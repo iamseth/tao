@@ -1137,7 +1137,7 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 	t.Parallel()
 	const original = "continue at the preserved boundary after resolving its blocker; use restart only for an eligible newer baseline"
 	guidance := func(paths string) string {
-		return original + "; the blocker names paths outside the slice's expected_files (" + paths + "); authorize them with tao edit amend plan-a 001-a --reason-file FILE --allow-file PATH before tao run --continue"
+		return original + "; the blocker's recorded failing paths outside the slice's expected_files are (" + paths + "); authorize the file(s) that must change with tao edit amend plan-a 001-a --reason-file FILE --allow-file PATH before tao run --continue"
 	}
 	for _, tt := range []struct {
 		name          string
@@ -1156,6 +1156,12 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 			events:        []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"owned.go", "outside.go", "also-outside.go"}}},
 			expectedFiles: []string{"owned.go"},
 			want:          guidance("outside.go, also-outside.go"),
+		},
+		{
+			name:          "documentation and reading test paths",
+			events:        []Event{{Type: EventTypeSliceBlocked, SliceID: "001-a", Paths: []string{"docs/configuration.md", "internal/runtimeconfig/configuration_doc_test.go"}}},
+			expectedFiles: []string{"owned.go"},
+			want:          guidance("docs/configuration.md, internal/runtimeconfig/configuration_doc_test.go"),
 		},
 		{
 			name:          "bounded uncovered paths",
@@ -1215,6 +1221,9 @@ func TestDeriveNextActionBlockedPathGuidance(t *testing.T) {
 					t.Fatalf("missing amend alternative: %+v", next)
 				}
 				amend := next.Alternatives[0]
+				if amend.Reason != "authorize the blocker's recorded failing paths outside expected_files before tao run --continue" {
+					t.Fatalf("amend reason = %q", amend.Reason)
+				}
 				if amend.Kind != PlanActionAmendScope || amend.Class != PlanActionClassRecovery || amend.Command != wantCommand {
 					t.Fatalf("amend = %+v, want command %q", amend, wantCommand)
 				}
