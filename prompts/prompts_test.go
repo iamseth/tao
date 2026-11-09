@@ -18,7 +18,7 @@ func TestFixPlanPromptContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"agent: build", "my-plan", "tao show", "tao edit amend", "tao run --continue", "tao run --reverify", "--repair-verification", "never run `tao run`", "ask the operator", "untrusted", "replace-verification-command", "owner ruling"} {
+	for _, want := range []string{"agent: build", "my-plan", "tao show", "tao edit amend", "tao run --continue", "tao run --reverify", "--repair-verification", "never run `tao run`", "ask the operator", "untrusted", "replace-verification-command", "owner ruling", "When asking the operator for an owner ruling, quote the finding's scope-expansion decision block."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("fix-plan prompt missing %q", want)
 		}
@@ -801,7 +801,7 @@ func TestRenderReviewProposalCorrectionCannotChangeSubstantiveReview(t *testing.
 			t.Fatalf("rendered correction prompt missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "Completeness", "success_criteria", "## Invariants", "global_invariants", "repository guidance", "checked invariant", "invariant violations", "failing-first run", "before-and-after comparison", "Grade severity", "Use `changes_requested`", "Use `approve`", "Use `comment`", "tao-review-json\n{\n  \"verdict\""} {
+	for _, forbidden := range []string{"scope-expansion decision block", "Assess the scoped diff", "Review criteria", "reasonable user", "Declined to judge", "Review Focus", "Completeness", "success_criteria", "## Invariants", "global_invariants", "repository guidance", "checked invariant", "invariant violations", "failing-first run", "before-and-after comparison", "Grade severity", "Use `changes_requested`", "Use `approve`", "Use `comment`", "tao-review-json\n{\n  \"verdict\""} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("rendered correction prompt retained substantive review instruction %q:\n%s", forbidden, got)
 		}
@@ -813,6 +813,27 @@ func TestRenderReviewPromptDefinesReworkConvergenceAndFindingsContract(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("scope expansion decision block", func(t *testing.T) {
+		got, err := Render(PromptReview, Data{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"include one short scope-expansion decision block in the prose review, outside `tao-review-json`",
+			"the original requirement",
+			"the proposed contract expansion",
+			"the smallest compliant in-scope alternative",
+			"the consequences of both accepting and declining the expansion",
+			"a recommendation with its reason",
+			"If no compliant in-scope alternative exists, say so and explain why rather than inventing one.",
+			"The scope-expansion decision block is advisory only: it never lifts the rework scope gate or authorizes an amendment.",
+			"Leave JSON findings and their shape unchanged",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("rendered review prompt missing scope-expansion guidance %q", want)
+			}
+		}
+	})
 	t.Run("required files", func(t *testing.T) {
 		for _, want := range []string{
 			`"required_files": []`,
