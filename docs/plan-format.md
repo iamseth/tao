@@ -80,7 +80,7 @@ These files are Tao-owned operational state, not agent-authored plan artifacts o
 | File | Lifetime | Purpose |
 | --- | --- | --- |
 | `agent-run.log` | Created and appended by agent-backed runtime sessions | Captured session log read by `tao log`; it is diagnostic data, not lifecycle or recovery authority. |
-| `ui-launch.log` | Created and truncated by each detached dashboard action for that plan | Stderr of the detached `tao` child (run, approve, single merge); best-effort, local-only, diagnostic data, never lifecycle or recovery authority, never read by plan loaders. |
+| `ui-launch.log` | Created and truncated by each detached dashboard action for that plan | Stderr of the detached `tao` child (run, approve, single merge); best-effort, local-only, diagnostic data, never lifecycle or recovery authority, never read by plan loaders. Detached batch merge uses `<data-home>/repos/<repo-id>/merge-batches/ui-launch.log` instead, with the same semantics. |
 | `prompts/` | Created by non-interactive agent sessions | One file per session with a header and raw rendered prompt; best-effort, local-only, never lifecycle or recovery authority, and never read by plan loaders. |
 | `.run.lock` | Present while a plan driver owns the plan; normally removed on release | Cross-process run ownership and contention metadata. |
 | `.mutation.lock` | Created by journal-capable persistence and retained | Stable-inode advisory lock shared by journal writers and recovering readers. |

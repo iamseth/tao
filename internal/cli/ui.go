@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -102,6 +103,24 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Executable: executable,
 		Launcher:   a.uiCommandLauncher(),
 		Now:        a.now,
+		MergeBatchLogPath: func(repositoryID string) string {
+			registry, ok := a.registry().(interface {
+				ReadRepo(string) (taodata.Repo, error)
+				MergeBatchesDir(taodata.Repo) string
+			})
+			if !ok {
+				return ""
+			}
+			repo, err := registry.ReadRepo(repositoryID)
+			if err != nil {
+				return ""
+			}
+			dir := registry.MergeBatchesDir(repo)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return ""
+			}
+			return filepath.Join(dir, "ui-launch.log")
+		},
 	})
 	if err != nil {
 		return err

@@ -27,6 +27,7 @@ type BatchCoordinatorOptions struct {
 type BatchCoordinatorResult struct {
 	State                BatchState
 	Candidates           []BatchCandidate
+	Integrated           []BatchIntegratedSkip
 	Blockers             []BatchBlocker
 	Deferred             []BatchDeferral
 	Resumed              bool
@@ -251,6 +252,7 @@ func (c *BatchCoordinator) run(ctx context.Context, options BatchCoordinatorOpti
 		}
 		preflight, discoverErr := c.seams.Discovery.Discover(ctx)
 		result.Candidates = preflight.Candidates
+		result.Integrated = preflight.Integrated
 		result.Blockers = preflight.Blockers
 		if discoverErr != nil {
 			return result, discoverErr

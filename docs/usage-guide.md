@@ -268,7 +268,14 @@ its plan. Foreground planning ends with dashboard shutdown, unlike detached run,
 approval, and merge actions, which survive exit and still enforce normal gates.
 Detached run, approval, and single-merge actions write the child's stderr to the
 plan's `ui-launch.log` in its data-home plan directory (truncated each launch),
-so an early exit is inspectable.
+so an early exit is inspectable. Dashboard batch merge (`M`) instead writes to
+`<data-home>/repos/<repo-id>/merge-batches/ui-launch.log`, also truncated per launch.
+If repository lookup or log-directory creation fails, it falls back to the null
+device. When no batch activity is observed during the startup window, the dashboard
+clears the pending row label and shows a neutral “No batch activity observed for
+merge --all” hint naming the log when available; this does not mark the batch failed.
+Both logs are Tao-owned, local-only diagnostics, never lifecycle or recovery
+authority and never read by loaders.
 The plan detail **Overview** shows a last-run-exited line and the **Activity** tab
 shows the exit diagnostic while a run exit is the newest event.
 Check durable state: ordering, heartbeats, and `stalled?`/`crashed?` labels are
@@ -1427,7 +1434,10 @@ cannot be overridden with force; wait for or finish the active operation first.
 **When to use:** when every reviewed and approved plan in the current repository
 should land as one all-or-nothing change. Tao strictly preflights the complete
 eligible set; an unhealthy, stale, dirty, or otherwise invalid candidate blocks
-the batch rather than being silently skipped.
+the batch rather than being silently skipped. A PR-complete plan whose branch
+is already an ancestor of the default branch and carries plan work is reported
+as already integrated and skipped instead of blocking the batch. Discovery
+writes nothing; run `tao merge <id>` to record that plan's `plan_merged` evidence.
 
 **Preview and ordering:** `tao merge --all --dry-run` reports the immutable
 candidate snapshot, blockers, inferred low-overlap order, and likely deferrals.

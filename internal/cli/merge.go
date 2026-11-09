@@ -432,6 +432,11 @@ func renderMergeBatchResult(out io.Writer, result mergeBatchResult) error {
 			return err
 		}
 	}
+	for _, integrated := range result.Integrated {
+		if err := writef(out, "Already integrated %s: %s\n", integrated.PlanID, integrated.Reason); err != nil {
+			return err
+		}
+	}
 	for _, blocker := range result.Blockers {
 		if err := writef(out, "Blocked [%s] %s: %s\n", blocker.Stage, blocker.PlanID, blocker.Reason); err != nil {
 			return err

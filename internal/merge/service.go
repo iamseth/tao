@@ -1249,6 +1249,17 @@ func (s Service) detectExternalMerge(ctx context.Context, git GitClient, detail 
 	if err != nil {
 		return externalMerge{}, false, err
 	}
+	ref, integrated, err := s.integratedByAncestry(ctx, git, detail)
+	if err != nil {
+		return externalMerge{}, false, err
+	}
+	if integrated {
+		sha, err := captureMergedDefaultSHA(ctx, git, defaultBranch)
+		if err != nil {
+			return externalMerge{}, false, err
+		}
+		return externalMerge{Ref: ref, DefaultBranch: defaultBranch, MergedDefaultSHA: sha, AncestryVerified: true}, true, nil
+	}
 	planBranch := ""
 	planBranchTip := ""
 	if branch, branchErr := resolvePlanBranch(detail); branchErr == nil {
@@ -1264,7 +1275,8 @@ func (s Service) detectExternalMerge(ctx context.Context, git GitClient, detail 
 	// unrelated commits landing on default would satisfy it while the plan's
 	// actual work sits uncommitted or stashed. Skip detection entirely; the
 	// explicit --record-only --force override below remains available.
-	if planBranch != defaultBranch {
+	_, noChangesComplete := plan.NoChangesCompletionHead(detail)
+	if planBranch != defaultBranch && noChangesComplete {
 		for _, ref := range externalMergeRefs(detail) {
 			if staleExternalMergeRef(ctx, git, ref, planBranch, planBranchTip) {
 				continue
@@ -1306,11 +1318,7 @@ func (s Service) detectExternalMerge(ctx context.Context, git GitClient, detail 
 				}
 				continue
 			}
-			mergedDefaultSHA, err := captureMergedDefaultSHA(ctx, git, defaultBranch)
-			if err != nil {
-				return externalMerge{}, false, err
-			}
-			return externalMerge{Ref: ref, DefaultBranch: defaultBranch, MergedDefaultSHA: mergedDefaultSHA, AncestryVerified: true}, true, nil
+			// Work-carrying refs are handled by the shared probe above.
 		}
 	}
 	if options.RecordOnly && options.Force {
@@ -1325,6 +1333,42 @@ func (s Service) detectExternalMerge(ctx context.Context, git GitClient, detail 
 		return externalMerge{Ref: ref, DefaultBranch: defaultBranch, MergedDefaultSHA: mergedDefaultSHA}, true, nil
 	}
 	return externalMerge{}, false, nil
+}
+
+// integratedByAncestry is a read-only proof, never lifecycle completion evidence.
+func (s Service) integratedByAncestry(ctx context.Context, git GitClient, detail *plan.PlanDetail) (ref string, ok bool, err error) {
+	defaultBranch, err := resolveDefaultBranch(ctx, git, detail)
+	if err != nil {
+		return "", false, err
+	}
+	branch, _ := resolvePlanBranch(detail)
+	if branch == defaultBranch {
+		return "", false, nil
+	}
+	tip := ""
+	if branch != "" {
+		tip, _ = git.RevParse(ctx, branch)
+	}
+	for _, ref := range externalMergeRefs(detail) {
+		if staleExternalMergeRef(ctx, git, ref, branch, strings.TrimSpace(tip)) {
+			continue
+		}
+		ancestral, err := git.IsAncestor(ctx, ref, defaultBranch)
+		if err != nil {
+			return "", false, fmt.Errorf("check whether %s is already merged into %s: %w", ref, defaultBranch, err)
+		}
+		if !ancestral {
+			continue
+		}
+		work, err := s.refCarriesPlanWork(ctx, git, detail, ref)
+		if err != nil {
+			return "", false, err
+		}
+		if work {
+			return ref, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // staleExternalMergeRef reports whether ref is a recorded head snapshot that no

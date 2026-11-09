@@ -49,10 +49,18 @@ type BatchCandidate struct {
 	Deferred              *BatchDeferral            `json:"deferred,omitempty"`
 }
 
+// BatchIntegratedSkip is read-only eligibility information, not merge evidence.
+type BatchIntegratedSkip struct {
+	PlanID string `json:"plan_id"`
+	Ref    string `json:"ref"`
+	Reason string `json:"reason"`
+}
+
 // BatchPreflightResult contains every invocation-time reviewed and approved
 // plan, including candidates with blockers.
 type BatchPreflightResult struct {
 	Candidates      []BatchCandidate
+	Integrated      []BatchIntegratedSkip
 	Blockers        []BatchBlocker
 	DefaultBranch   string
 	DefaultStartSHA string
@@ -127,6 +135,25 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 		// exclusion for legacy completed artifacts without matching PR evidence.
 		if plan.PlanIsMerged(detail.Events) || (summary.Status == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail)) {
 			continue
+		}
+		if plan.PlanIsPullRequestComplete(detail) {
+			ref, integrated, probeErr := d.Merge.integratedByAncestry(ctx, git, detail)
+			if probeErr != nil {
+				d.addBlocker(&result, &candidate, "snapshot", probeErr)
+				result.Candidates = append(result.Candidates, candidate)
+				continue
+			}
+			if integrated {
+				defaultBranch, branchErr := resolveDefaultBranch(ctx, git, detail)
+				if branchErr != nil {
+					d.addBlocker(&result, &candidate, "snapshot", branchErr)
+					result.Candidates = append(result.Candidates, candidate)
+					continue
+				}
+				planID := detail.State.Plan.ID
+				result.Integrated = append(result.Integrated, BatchIntegratedSkip{PlanID: planID, Ref: ref, Reason: fmt.Sprintf("%s is already an ancestor of %s and carries plan work; run tao merge %s to record completion", ref, defaultBranch, planID)})
+				continue
+			}
 		}
 		candidate.PlanID = detail.State.Plan.ID
 		candidate.PlanTitle = strings.TrimSpace(detail.State.Plan.Title)

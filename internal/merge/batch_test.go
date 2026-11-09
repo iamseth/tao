@@ -138,6 +138,71 @@ func TestBatchCandidateDiscoveryIncludesPRCompletePlanWithoutMergeEvidence(t *te
 	}
 }
 
+func TestBatchCandidateDiscoveryIntegratedSkip(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"integrated", "no-work", "base-equals-tip", "reopened", "default-branch", "non-pr", "probe-error"} {
+		t.Run(mode, func(t *testing.T) {
+			detail := batchReadyDetail("plan-a", "tao/plan-a")
+			detail.State.Plan.PullRequest = &plan.PullRequest{HeadSHA: "tip-a"}
+			sibling := batchReadyDetail("plan-b", "tao/plan-b")
+			git := &fakeGitClient{root: "/repo", defaultBranch: "main", mergeBase: "base",
+				revParse:  map[string]string{"main": "default-start", "tao/plan-a": "tip-a", "tip-a": "tip-a", "tao/plan-b": "tip-b"},
+				ancestors: map[string]bool{"tao/plan-a..main": true, "base..tao/plan-a": true, "tip-a..main": true, "base..tip-a": true},
+			}
+			switch mode {
+			case "integrated":
+				git.mergeBase = "tip-a" // The integrated plan's review base would fail the gate.
+				sibling.State.Plan.Review.Base = "tip-a"
+			case "no-work":
+				git.ancestors["base..tao/plan-a"] = false
+				git.ancestors["base..tip-a"] = false
+			case "base-equals-tip":
+				git.ancestors["tao/plan-a..base"] = true
+				git.ancestors["tip-a..base"] = true
+			case "reopened":
+				detail.Events = []plan.Event{{Type: plan.EventTypePlanReopened}}
+				git.ancestors["tao/plan-a..main"] = false
+			case "default-branch":
+				detail.State.Workspace.Branch = "main"
+			case "non-pr":
+				detail.State.Plan.PullRequest = nil
+			case "probe-error":
+				git.ancestorErr = errors.New("ancestry unavailable")
+			}
+			if mode == "reopened" {
+				_, ok, err := (Service{}).integratedByAncestry(context.Background(), git, detail)
+				if err != nil || ok {
+					t.Fatalf("reopened probe trusted a recorded head: ok=%v err=%v", ok, err)
+				}
+			}
+			repo := &batchRepository{
+				summaries: []plan.PlanSummary{
+					{ID: "plan-a", Status: plan.StatusInProgress, Reviewed: true, ReviewVerdict: plan.ReviewVerdictApprove},
+					{ID: "plan-b", Status: plan.StatusInProgress, Reviewed: true, ReviewVerdict: plan.ReviewVerdictApprove},
+				},
+				details: map[string]*plan.PlanDetail{"plan-a": detail, "plan-b": sibling},
+			}
+			got, err := (BatchCandidateDiscovery{Repository: repo, Merge: newTestService(Service{Git: git}), Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "probe-error" && !blockersContain(got.Blockers, "plan-a", "ancestry unavailable") {
+				t.Fatalf("missing fail-closed probe blocker: %+v", got)
+			}
+			if mode == "integrated" {
+				if len(got.Integrated) != 1 || got.Integrated[0].PlanID != "plan-a" || got.Integrated[0].Ref != "tao/plan-a" || !strings.Contains(got.Integrated[0].Reason, "run tao merge plan-a") {
+					t.Fatalf("integrated skips = %+v", got.Integrated)
+				}
+				if !reflect.DeepEqual(candidateIDs(got.Candidates), []string{"plan-b"}) || len(got.Blockers) != 0 {
+					t.Fatalf("preflight = %+v", got)
+				}
+			} else if len(got.Integrated) != 0 || !reflect.DeepEqual(candidateIDs(got.Candidates), []string{"plan-a", "plan-b"}) {
+				t.Fatalf("expected both plans to remain candidates: %+v", got)
+			}
+		})
+	}
+}
+
 func TestBatchPreflightMixedEligibleAndIneligibleReportsAllBlockers(t *testing.T) {
 	t.Parallel()
 	good := batchReadyDetail("plan-a", "tao/plan-a")

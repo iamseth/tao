@@ -28,11 +28,12 @@ type CommandLauncher func(context.Context, CommandRequest) error
 
 // ActionOptions supplies the process, observation, and clock seams for Actions.
 type ActionOptions struct {
-	Executable     string
-	Launcher       CommandLauncher
-	ReadRunLock    func(string) (plan.RunLock, error)
-	Now            func() time.Time
-	StartupTimeout time.Duration
+	MergeBatchLogPath func(repositoryID string) string
+	Executable        string
+	Launcher          CommandLauncher
+	ReadRunLock       func(string) (plan.RunLock, error)
+	Now               func() time.Time
+	StartupTimeout    time.Duration
 }
 
 type actionKind string
@@ -50,18 +51,21 @@ type actionFeedback struct {
 	startedAt       time.Time
 	approvalSliceID string
 	initialStatus   string
+	batch           bool
+	stderrPath      string
 }
 
 // Actions launches Tao commands and tracks their best-effort startup feedback.
 type Actions struct {
-	executable     string
-	launcher       CommandLauncher
-	readRunLock    func(string) (plan.RunLock, error)
-	now            func() time.Time
-	startupTimeout time.Duration
-	feedback       map[string]actionFeedback
-	message        string
-	messageKey     string
+	mergeBatchLogPath func(repositoryID string) string
+	executable        string
+	launcher          CommandLauncher
+	readRunLock       func(string) (plan.RunLock, error)
+	now               func() time.Time
+	startupTimeout    time.Duration
+	feedback          map[string]actionFeedback
+	message           string
+	messageKey        string
 }
 
 // NewActions constructs the action controller used by one dashboard loop.
@@ -82,12 +86,13 @@ func NewActions(options ActionOptions) (*Actions, error) {
 		options.StartupTimeout = defaultActionStartupTimeout
 	}
 	return &Actions{
-		executable:     options.Executable,
-		launcher:       options.Launcher,
-		readRunLock:    options.ReadRunLock,
-		now:            options.Now,
-		startupTimeout: options.StartupTimeout,
-		feedback:       make(map[string]actionFeedback),
+		mergeBatchLogPath: options.MergeBatchLogPath,
+		executable:        options.Executable,
+		launcher:          options.Launcher,
+		readRunLock:       options.ReadRunLock,
+		now:               options.Now,
+		startupTimeout:    options.StartupTimeout,
+		feedback:          make(map[string]actionFeedback),
 	}, nil
 }
 
@@ -108,11 +113,11 @@ func (a *Actions) RunPlan(ctx context.Context, row monitor.Row) {
 			return
 		}
 	}
-	if err := a.launch(ctx, row, args, true); err != nil {
+	if err := a.launch(ctx, row, args, planActionStderrPath(row)); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
-	a.recordPending(row, actionRun, "starting…", "")
+	a.recordPending(row, actionRun, "starting…", "", false, "")
 }
 
 // ApprovalPrompt returns the confirmation text for an approval-gated row.
@@ -133,11 +138,11 @@ func (a *Actions) ApproveSlice(ctx context.Context, row monitor.Row) {
 		return
 	}
 	args := []string{"approve", "--slice", row.ApprovalSliceID, row.PlanID}
-	if err := a.launch(ctx, row, args, true); err != nil {
+	if err := a.launch(ctx, row, args, planActionStderrPath(row)); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
-	a.recordPending(row, actionApprove, "starting…", row.ApprovalSliceID)
+	a.recordPending(row, actionApprove, "starting…", row.ApprovalSliceID, false, "")
 }
 
 // MergePlanPrompt returns confirmation text only for a reviewed plan row.
@@ -154,11 +159,11 @@ func (a *Actions) MergePlan(ctx context.Context, row monitor.Row) {
 	if _, ok := a.MergePlanPrompt(row); !ok {
 		return
 	}
-	if err := a.launch(ctx, row, []string{"merge", row.PlanID}, true); err != nil {
+	if err := a.launch(ctx, row, []string{"merge", row.PlanID}, planActionStderrPath(row)); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
-	a.recordPending(row, actionMerge, "merging…", "")
+	a.recordPending(row, actionMerge, "merging…", "", false, "")
 }
 
 // MergeAllPrompt returns confirmation text for a repository-scoped batch.
@@ -174,16 +179,21 @@ func (a *Actions) MergeAll(ctx context.Context, row monitor.Row) {
 	if _, ok := a.MergeAllPrompt(row); !ok {
 		return
 	}
-	if err := a.launch(ctx, row, []string{"merge", "--all"}, false); err != nil {
+	stderrPath := ""
+	if a.mergeBatchLogPath != nil {
+		stderrPath = a.mergeBatchLogPath(row.RepositoryID)
+	}
+	if err := a.launch(ctx, row, []string{"merge", "--all"}, stderrPath); err != nil {
 		a.recordFailure(row, err)
 		return
 	}
-	a.recordPending(row, actionMerge, "merging…", "")
+	a.recordPending(row, actionMerge, "merging…", "", true, stderrPath)
 }
 
 // Reconcile clears observed starts and turns unobserved pending actions into
 // failed-to-start feedback after the bounded startup window. Merge feedback
-// expires silently because a detached merge may legitimately run for longer.
+// expires without failure because a detached merge may legitimately run for longer;
+// batch launches leave a neutral diagnostic hint.
 func (a *Actions) Reconcile(snapshot monitor.Snapshot) {
 	rows := make(map[string]monitor.Row, len(snapshot.Rows))
 	for _, row := range snapshot.Rows {
@@ -206,6 +216,13 @@ func (a *Actions) Reconcile(snapshot monitor.Snapshot) {
 			continue
 		}
 		if feedback.kind == actionMerge {
+			if feedback.batch {
+				a.messageKey = key
+				a.message = "No batch activity observed for merge --all"
+				if feedback.stderrPath != "" {
+					a.message += "; stderr: " + feedback.stderrPath
+				}
+			}
 			delete(a.feedback, key)
 			continue
 		}
@@ -249,15 +266,20 @@ func (a *Actions) statusMessage() string {
 	return a.message
 }
 
-func (a *Actions) launch(ctx context.Context, row monitor.Row, args []string, logStderr bool) error {
+func planActionStderrPath(row monitor.Row) string {
+	if strings.TrimSpace(row.PlanDir) == "" {
+		return ""
+	}
+	return plan.UILaunchLogPath(row.PlanDir)
+}
+
+func (a *Actions) launch(ctx context.Context, row monitor.Row, args []string, stderrPath string) error {
 	request := CommandRequest{
 		CWD:        row.RepositoryRoot,
 		Executable: a.executable,
 		Args:       append([]string(nil), args...),
 		Detached:   true,
-	}
-	if logStderr && strings.TrimSpace(row.PlanDir) != "" {
-		request.StderrPath = plan.UILaunchLogPath(row.PlanDir)
+		StderrPath: stderrPath,
 	}
 	return a.launcher(ctx, request)
 }
@@ -281,7 +303,7 @@ func (a *Actions) liveRunLock(planDir string) bool {
 	return err == nil && lock.ProcessAlive
 }
 
-func (a *Actions) recordPending(row monitor.Row, kind actionKind, label, approvalSliceID string) {
+func (a *Actions) recordPending(row monitor.Row, kind actionKind, label, approvalSliceID string, batch bool, stderrPath string) {
 	key := actionRowKey(row)
 	a.feedback[key] = actionFeedback{
 		kind:            kind,
@@ -289,6 +311,8 @@ func (a *Actions) recordPending(row monitor.Row, kind actionKind, label, approva
 		startedAt:       a.now(),
 		approvalSliceID: approvalSliceID,
 		initialStatus:   row.Status,
+		batch:           batch,
+		stderrPath:      stderrPath,
 	}
 	if a.messageKey == key {
 		a.message = ""

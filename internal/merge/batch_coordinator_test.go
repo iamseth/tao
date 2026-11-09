@@ -413,6 +413,44 @@ func TestBatchCoordinatorRevalidatesConcurrentAbandonmentBeforeInitialization(t 
 	}
 }
 
+func TestBatchCoordinatorPreservesIntegratedSkips(t *testing.T) {
+	t.Parallel()
+	skip := BatchIntegratedSkip{PlanID: "integrated", Ref: "head", Reason: "already integrated; run tao merge integrated to record completion"}
+	for _, dryRun := range []bool{false, true} {
+		for _, hasCandidate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("dryRun=%t/candidate=%t", dryRun, hasCandidate), func(t *testing.T) {
+				var candidates []BatchCandidate
+				if hasCandidate {
+					candidates = []BatchCandidate{{PlanID: "clean"}}
+				}
+				store := &coordinatorStore{}
+				result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
+					RepositoryAdmission: testRepositoryAdmission,
+					Store:               store, Workspace: &coordinatorWorkspace{},
+					Discovery: coordinatorDiscovery{result: BatchPreflightResult{
+						Candidates: candidates, Integrated: []BatchIntegratedSkip{skip},
+						RepoRoot: "/repo", DefaultBranch: "main", DefaultStartSHA: "base",
+					}},
+					Planner:    coordinatorPlanner{result: BatchPlanningResult{Ordered: candidates}},
+					Integrator: &coordinatorIntegrator{},
+				}).Run(context.Background(), BatchCoordinatorOptions{DryRun: dryRun})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(result.Integrated, []BatchIntegratedSkip{skip}) {
+					t.Fatalf("integrated skips = %#v", result.Integrated)
+				}
+				if hasCandidate && len(result.State.ChosenOrder) != 1 {
+					t.Fatalf("clean candidate did not reach planning: %#v", result)
+				}
+				if !hasCandidate && store.initialized.ID != "" {
+					t.Fatal("no-op batch initialized durable state")
+				}
+			})
+		}
+	}
+}
+
 func TestBatchCoordinatorReportsDiscoveryAndPlanningBlockersWithoutDurableState(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -434,12 +472,16 @@ func TestBatchCoordinatorReportsDiscoveryAndPlanningBlockersWithoutDurableState(
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &coordinatorStore{}
+			tt.preflight.Integrated = []BatchIntegratedSkip{{PlanID: "integrated", Ref: "head", Reason: "already integrated"}}
 			result, err := newTestBatchCoordinator(BatchCoordinatorSeams{
 				RepositoryAdmission: testRepositoryAdmission,
 				Store:               store, Workspace: &coordinatorWorkspace{}, Discovery: coordinatorDiscovery{result: tt.preflight}, Planner: coordinatorPlanner{result: tt.planning},
 			}).Run(context.Background(), BatchCoordinatorOptions{})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tt.want)
+			}
+			if !reflect.DeepEqual(result.Integrated, tt.preflight.Integrated) {
+				t.Fatalf("blocked result lost integrated skips: %#v", result)
 			}
 			if len(result.Candidates) != len(tt.preflight.Candidates) || len(result.Blockers) == 0 {
 				t.Fatalf("blocker result lost characterized data: %#v", result)

@@ -621,12 +621,20 @@ func newTestActions(t *testing.T, launcher *recordingActionLauncher, readLock fu
 
 func TestActionsLaunchStderrPath(t *testing.T) {
 	for _, dir := range []string{"/data/plans/plan-a", "", "   "} {
-		for _, action := range []string{"run", "approve", "merge", "merge-all"} {
+		for _, action := range []string{"run", "approve", "merge", "merge-all", "merge-all-nil"} {
 			t.Run(action+"/"+dir, func(t *testing.T) {
 				launcher := &recordingActionLauncher{}
 				actions := newTestActions(t, launcher, nil, nil)
 				row := testActionRow()
 				row.PlanDir = dir
+				if action != "merge-all-nil" {
+					actions.mergeBatchLogPath = func(id string) string {
+						if id != row.RepositoryID {
+							t.Fatalf("repository ID = %q", id)
+						}
+						return "/data/repos/r/merge-batches/ui-launch.log"
+					}
+				}
 				switch action {
 				case "run":
 					actions.RunPlan(context.Background(), row)
@@ -636,11 +644,13 @@ func TestActionsLaunchStderrPath(t *testing.T) {
 				case "merge":
 					row.Status = plan.StatusReviewed
 					actions.MergePlan(context.Background(), row)
-				case "merge-all":
+				case "merge-all", "merge-all-nil":
 					actions.MergeAll(context.Background(), row)
 				}
 				want := ""
-				if strings.TrimSpace(dir) != "" && action != "merge-all" {
+				if action == "merge-all" {
+					want = "/data/repos/r/merge-batches/ui-launch.log"
+				} else if strings.TrimSpace(dir) != "" && action != "merge-all-nil" {
 					want = plan.UILaunchLogPath(dir)
 				}
 				if len(launcher.calls) != 1 || launcher.calls[0].StderrPath != want {
@@ -648,6 +658,55 @@ func TestActionsLaunchStderrPath(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestActionsMergeExpiry(t *testing.T) {
+	for _, mode := range []string{"single", "batch", "batch-no-log"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Now()
+			logPath := "/data/repos/r/merge-batches/ui-launch.log"
+			actions, err := NewActions(ActionOptions{
+				Executable: "/bin/tao",
+				Launcher:   (&recordingActionLauncher{}).launch,
+				Now:        func() time.Time { return now },
+				MergeBatchLogPath: func(string) string {
+					if mode == "batch-no-log" {
+						return ""
+					}
+					return logPath
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := testActionRow()
+			row.Status = plan.StatusReviewed
+			if mode == "single" {
+				actions.MergePlan(context.Background(), row)
+			} else {
+				actions.MergeAll(context.Background(), row)
+			}
+			actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
+			if actions.labels()[actionRowKey(row)] != "merging…" {
+				t.Fatal("pending label cleared early")
+			}
+			now = now.Add(time.Minute)
+			actions.Reconcile(monitor.Snapshot{Rows: []monitor.Row{row}})
+			want := ""
+			if mode != "single" {
+				want = "No batch activity observed for merge --all"
+				if mode == "batch" {
+					want += "; stderr: " + logPath
+				}
+			}
+			if got := actions.statusMessage(); got != want {
+				t.Fatalf("message = %q, want %q", got, want)
+			}
+			if actions.labels()[actionRowKey(row)] != "" {
+				t.Fatal("expired merge retained row label")
+			}
+		})
 	}
 }
 

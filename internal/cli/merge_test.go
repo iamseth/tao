@@ -1353,6 +1353,26 @@ func TestMergeBatchResultWarnsAboutOrphanedIntegrations(t *testing.T) {
 	}
 }
 
+func TestMergeBatchResultRendersIntegratedSkips(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dryRun=%t", dryRun), func(t *testing.T) {
+			var out bytes.Buffer
+			result := mergeBatchResult{
+				DryRun:     dryRun,
+				Candidates: []mergepkg.BatchCandidate{{PlanID: "clean"}},
+				Integrated: []mergepkg.BatchIntegratedSkip{{PlanID: "landed", Reason: "already integrated; run tao merge landed to record completion"}},
+			}
+			if err := renderMergeBatchResult(&out, result); err != nil {
+				t.Fatal(err)
+			}
+			want := "Already integrated landed: already integrated; run tao merge landed to record completion\n"
+			if !strings.Contains(out.String(), want) || strings.Contains(out.String(), "Blocked [") {
+				t.Fatalf("unexpected rendering: %s", out.String())
+			}
+		})
+	}
+}
+
 func TestMergeBatchResultCharacterizesBlockersNewBatchAndOrdinaryResume(t *testing.T) {
 	candidate := mergepkg.BatchCandidate{PlanID: "plan-a", Branch: "tao/plan-a", SourceTip: "head-a", ReviewBase: "base", ReviewHead: "head-a"}
 	tests := []struct {

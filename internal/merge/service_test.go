@@ -1100,7 +1100,7 @@ func TestDetectExternalMergeSkipsSnapshotBehindAdvancedBranchTip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !ok || merged.Ref != "merged-head" {
+		if !ok || merged.Ref != "merged-head" || !merged.AncestryVerified || merged.NoChanges {
 			t.Fatalf("snapshot matching the live tip should be detected, got ok=%v merged=%#v", ok, merged)
 		}
 	})
