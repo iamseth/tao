@@ -213,5 +213,22 @@ func TestDoctorClaudeGolden(t *testing.T) {
 	if err := renderClaudeReadiness(&out, probeClaudeReadiness(context.Background(), "", nil), false, theme.Palette{}); err != nil {
 		t.Fatal(err)
 	}
+	for _, tc := range []struct {
+		name, reason string
+	}{
+		{"healthy compact", claudeLocalLoginNotInvoked},
+		{"probe-failed compact", "probe failed"},
+	} {
+		fmt.Fprintln(&out, tc.name)
+		report := &claudeReadiness{version: "2.1.308", stages: []claudeReadinessStage{
+			{"executable", "ok", "found in PATH"},
+			{"version", "ok", "measured with --version"},
+			{"launch_flags", "ok", "launch options advertised"},
+			{"local_login", "unknown", tc.reason},
+		}}
+		if err := renderClaudeReadiness(&out, report, false, theme.Palette{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	assertGolden(t, "testdata/doctor_claude.golden", out.Bytes())
 }

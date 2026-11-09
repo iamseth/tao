@@ -14,6 +14,7 @@ import (
 )
 
 const claudeProbeLimit = 32 * 1024
+const claudeLocalLoginNotInvoked = "offline status semantics not established; not invoked"
 
 var claudeDoctorFlags = []string{"--print", "--output-format", "--verbose", "--no-session-persistence", "--permission-mode", "--model", "--effort"}
 var claudeDoctorModes = []string{"auto", "plan", "bypassPermissions"}
@@ -23,6 +24,11 @@ var claudeWordPattern = regexp.MustCompile(`[A-Za-z0-9_-]+`)
 var claudeChoicesPattern = regexp.MustCompile(`\(choices:\s*([^)]*)\)`)
 
 type claudeReadinessStage struct{ name, status, reason string }
+
+func (s claudeReadinessStage) actionable() bool {
+	return s.name != "local_login" || s.status != "unknown" || s.reason != claudeLocalLoginNotInvoked
+}
+
 type claudeReadiness struct {
 	version string
 	stages  []claudeReadinessStage
@@ -50,7 +56,7 @@ func probeClaudeReadiness(ctx context.Context, path string, offlineStatusKnown f
 		{"executable", "warning", "not found in PATH"},
 		{"version", "unknown", "executable unavailable"},
 		{"launch_flags", "unknown", "executable unavailable"},
-		{"local_login", "unknown", "offline status semantics not established; not invoked"},
+		{"local_login", "unknown", claudeLocalLoginNotInvoked},
 	}}
 	if path == "" {
 		return r
@@ -197,7 +203,7 @@ func renderClaudeReadiness(out io.Writer, r *claudeReadiness, verbose bool, pale
 	}
 	shown := false
 	for _, stage := range r.stages {
-		if !verbose && stage.status == "ok" {
+		if !verbose && (stage.status == "ok" || !stage.actionable()) {
 			continue
 		}
 		if !shown {

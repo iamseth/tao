@@ -11,7 +11,6 @@ Pi readiness (passive; no model request; shared merge probe):
 
 Claude readiness (passive; no model request):
   ⚠ warning Claude 2.1.308: launch_flags — help does not advertise --verbose
-  • unknown Claude 2.1.308: local_login — offline status semantics not established; not invoked
 verbose=true
 implementation: claude
 plan reviewer: pi
@@ -36,4 +35,8 @@ Claude readiness (passive; no model request):
   ⚠ warning Claude version unknown: executable — not found in PATH
   • unknown Claude version unknown: version — executable unavailable
   • unknown Claude version unknown: launch_flags — executable unavailable
-  • unknown Claude version unknown: local_login — offline status semantics not established; not invoked
+healthy compact
+probe-failed compact
+
+Claude readiness (passive; no model request):
+  • unknown Claude 2.1.308: local_login — probe failed

@@ -364,7 +364,9 @@ required. Pi's bounded passive readiness probe runs once when either role select
 Pi, using the shared merge probe. Claude's CLI-local probe likewise runs once
 when either role selects Claude, even when its executable is missing. It reports
 `executable`, `version`, `launch_flags`, and `local_login` stages alongside Pi.
-Compact output shows problems; verbose output shows every stage. Claude warnings
+Compact output shows problems; verbose output shows every stage. Compact output
+omits the policy-closed `local_login` stage because it is never actionable, while
+verbose output still lists it. Claude warnings
 include the measured version (or `version unknown`). Subprocesses have closed
 stdin, two-second deadlines and bounded output; no prompt or model request is
 sent. Launch checks compare exact option declarations and advertised enumerated
