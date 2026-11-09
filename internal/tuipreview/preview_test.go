@@ -212,14 +212,12 @@ func TestDebugPreviewShowsOnlyRepositoryRuntimeAnomalies(t *testing.T) {
 		"RUNTIME ANOMALIES", "TAO_PULL_REQUEST", "true", "false", "repository",
 		"TAO_UPDATE", "warning: fixture warning", "TAO_RESOLVER_MODEL", "enabled",
 		"3 active of 3 registered",
-		// The unchanged Debug fixture uses 20m; registry status renders 20m0s.
-		"TAO_SESSION_TIMEOUT", "20m0s",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("mixed Debug preview missing %q:\n%s", want, frame)
 		}
 	}
-	for _, identical := range []string{"TAO_AGENT", "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_REVIEW"} {
+	for _, identical := range []string{"TAO_AGENT", "TAO_COMMIT_POLICY", "TAO_EXECUTION_MODE", "TAO_REVIEW", "TAO_SESSION_TIMEOUT"} {
 		if strings.Contains(frame, identical) {
 			t.Errorf("mixed Debug preview includes identical row %q:\n%s", identical, frame)
 		}

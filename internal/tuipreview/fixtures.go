@@ -387,7 +387,7 @@ func debugFixture(now time.Time) tui.DebugSnapshot {
 			{Name: "TAO_EXECUTION_MODE", Value: "isolated", Source: "default"},
 			{Name: "TAO_PULL_REQUEST", Value: "true", Source: "repository"},
 			{Name: "TAO_REVIEW", Value: "true", Source: "default"},
-			{Name: "TAO_SESSION_TIMEOUT", Value: "20m", Source: "default"},
+			{Name: "TAO_SESSION_TIMEOUT", Value: runtimeconfig.DefaultSessionTimeout.String(), Source: "default"},
 			{Name: "TAO_UPDATE", Value: "warn", Source: "env", Warning: "fixture warning"},
 			{Name: "TAO_RESOLVER_MODEL", Value: "enabled", Source: "repository"},
 		},
