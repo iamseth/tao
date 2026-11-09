@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,6 +365,7 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 			ctx, cancel := context.WithCancelCause(context.Background())
 			t.Cleanup(func() { cancel(context.Canceled) })
 			promptObserved := make(chan bool, 1)
+			var handshakes atomic.Int32
 			root := t.TempDir()
 			detail := interruptedServiceRunDetail(t, root)
 			persistRunArtifacts(t, detail.Dir, detail)
@@ -378,7 +380,11 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 					}
 					// Publish the successful handshake and live context before
 					// issuing the test-owned deadline cancellation.
-					promptObserved <- ctx.Err() == nil
+					handshakes.Add(1)
+					select {
+					case promptObserved <- ctx.Err() == nil:
+					default:
+					}
 					if tt.wantTimeoutEvt {
 						cancel(context.DeadlineExceeded)
 					}
@@ -428,6 +434,9 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 				}
 			default:
 				t.Fatal("prompt handshake not observed before Execute returned")
+			}
+			if count := handshakes.Load(); count != 1 {
+				t.Fatalf("prompt handshakes = %d, want exactly 1", count)
 			}
 			var timeoutErr *agent.SessionTimeoutError
 			if tt.wantTimeoutEvt && !errors.As(err, &timeoutErr) {
