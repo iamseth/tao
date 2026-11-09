@@ -9,6 +9,29 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-11-02
+
+#### Added
+- See advisory overlap with open plans touching the same expected files in slice handoffs, substantive reviews, plan-bound runs, and `tao validate`. The context highlights overlap without granting ownership or changing approval and validation rules.
+- Explore monthly plan outcomes with `tao insights --trend` or `tao insights --trend --json`, including cohort coverage and explicit limits on what the comparisons show.
+- See observed operator-intervention rates and unknown-attribution coverage in insights scorecards, without treating missing history as evidence of unattended work.
+- Check Claude setup with `tao doctor`: it reports executable, version, and launch-option readiness without network calls or model usage; local login status remains unknown.
+- Validate a source note before allocating a plan with `tao init --slug ... --note ID`, avoiding an unlinked plan when the note is ineligible. Legacy planning-session-only promoted notes remain supported.
+- Record recognized blocker categories with `tao slice-blocked` so insights can report structured diagnostics rather than relying only on inference.
+- Get a non-blocking warning when a literal negative-search gate may also match preserved text, with the relevant line locations.
+
+#### Changed
+- Correct slice verification gates through recorded, one-for-one replacements in amendments; preview the changes and show the old/new commands with their audit context.
+- Give dependent slices the full notes from their completed prerequisite slices in the run packet, and allow read-only fallback reads of packet-listed files in the plan directory.
+- Get planning and slicing guidance that calls for evidence-backed scope, early risk discovery, concrete slice outcomes, and focused integration checks across runtime boundaries.
+- Get reviewer guidance that lays out scope-expansion alternatives and tradeoffs, and permits a narrowly bounded ruling when an inspected identifier’s declaration path was misstated.
+- Treat staged file moves as a deletion and addition, so slices that move files can complete without Git’s rename pairing obscuring the changed paths.
+
+#### Fixed
+- Avoid losing an active pre-landing merge batch: single merges, including restart and applicable record-only operations, are refused until the batch is safely landed or recovered.
+- Continue PR finalization and metadata repair when GitHub returns a successful but blank label search; Tao now treats it as no matching labels.
+- Accept ordinary commit prose beginning with “Tao-” while still rejecting proposal-supplied evidence trailers
+
 ### Week of 2026-10-26
 
 #### Added
