@@ -63,6 +63,23 @@
             "sparse": false
           },
           "comparison": "unavailable"
+        },
+        {
+          "key": "unattended_rate",
+          "direction": "higher",
+          "availability": "available",
+          "eligible_plans": 5,
+          "evidence_plans": 5,
+          "partial_samples": 0,
+          "rate": {
+            "numerator": 2,
+            "denominator": 5,
+            "rate": 0.4,
+            "lower": 0.11762077314099711,
+            "upper": 0.7692757205908813,
+            "sparse": false
+          },
+          "comparison": "unavailable"
         }
       ]
     },

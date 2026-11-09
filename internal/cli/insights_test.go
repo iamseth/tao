@@ -370,6 +370,7 @@ func representativeTrend() insights.TrendReport {
 		Buckets: []insights.TrendBucket{
 			{Month: "2026-09", Cohort: "overall", Coverage: insights.TrendCoverage{Plans: 5, Terminal: 5, Eligible: 5, EventEvidence: 5}, Metrics: []insights.TrendMetric{
 				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(0, 5, 5)), Comparison: "unavailable"},
+				{Key: "unattended_rate", Direction: "higher", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(2, 5, 5)), Comparison: "unavailable"},
 			}},
 			{Month: "2026-10", Cohort: "overall", AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 4, Terminal: 2, Eligible: 1, Immature: 1, Active: 1, NeverStarted: 1}, Metrics: []insights.TrendMetric{
 				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 1, EvidencePlans: 1, Rate: new(insights.EstimateRate(1, 1, 5)), Comparison: "inconclusive"},

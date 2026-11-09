@@ -137,7 +137,10 @@ func TestTrendMeasurementsAndRecordedOutcomes(t *testing.T) {
 	if ms[6].Median.Median != 2 || ms[7].Median.Median != 9 {
 		t.Fatal(ms)
 	}
-	for _, m := range ms[8:] {
+	if m := ms[8]; m.Availability != "unavailable" || m.Reason != "intervention_attribution_missing" || m.Rate != nil {
+		t.Fatal(m)
+	}
+	for _, m := range ms[9:] {
 		if m.Availability != "unavailable" || m.Reason == "" || m.Rate != nil || m.Median != nil {
 			t.Fatal(m)
 		}
@@ -159,6 +162,55 @@ func TestTrendMeasurementsAndRecordedOutcomes(t *testing.T) {
 	pr := observePlan(sourceIdentity{}, plan.PlanSummary{Status: plan.StatusCompleted, Complete: true}, planData{createdAt: data.createdAt, lifecycle: []plan.Event{{Type: plan.EventTypePullRequestCreated, Timestamp: now}}}, now)
 	if !pr.mergeAt.IsZero() {
 		t.Fatal("PR manufactured merge timing")
+	}
+}
+
+func TestTrendUnattendedCoverageStates(t *testing.T) {
+	attributed := planObservation{attributionComplete: true}
+	unattended := planObservation{attributionComplete: true, unattended: true}
+	for _, tt := range []struct {
+		name         string
+		observations []planObservation
+		availability string
+		evidence     int
+		numerator    int
+	}{
+		{"complete", []planObservation{unattended, attributed, unattended}, "available", 3, 2},
+		{"partial", []planObservation{unattended, attributed, {}}, "incomplete", 2, 1},
+		{"missing", []planObservation{{}, {}}, "unavailable", 0, 0},
+		{"empty", nil, "unavailable", 0, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := trendMetrics(tt.observations)
+			keys := []string{"first_review_approved", "any_rework", "any_verification_repair", "rework_stopped", "recorded_blocker", "median_cost_per_plan", "median_hours_to_approval", "median_hours_to_merge", "unattended_rate", "escaped_defects_per_plan"}
+			if len(ms) != len(keys) {
+				t.Fatalf("metric count = %d", len(ms))
+			}
+			for i, key := range keys {
+				if ms[i].Key != key {
+					t.Fatalf("metric %d = %s, want %s", i, ms[i].Key, key)
+				}
+			}
+			m := ms[8]
+			if m.Availability != tt.availability || m.EvidencePlans != tt.evidence || m.EligiblePlans != len(tt.observations) || m.Direction != "higher" || m.Comparison != "unavailable" {
+				t.Fatalf("unexpected metric: %+v", m)
+			}
+			if tt.evidence == 0 {
+				if m.Rate != nil || m.Reason != "intervention_attribution_missing" {
+					t.Fatal(m)
+				}
+			} else if m.Rate == nil || m.Rate.Numerator != tt.numerator || m.Rate.Denominator != len(tt.observations) || m.Reason != "" {
+				t.Fatal(m)
+			}
+			if d := ms[9]; d.Availability != "unavailable" || d.Reason != "defect_linkage_missing" || d.Direction != "lower" || d.Rate != nil {
+				t.Fatal(d)
+			}
+		})
+	}
+	previous := trendMetrics([]planObservation{unattended})[8]
+	current := trendMetrics([]planObservation{unattended, {}})[8]
+	if got := compareTrendRates(previous, current); got != "unavailable" {
+		t.Fatalf("partial coverage comparison = %s", got)
 	}
 }
 

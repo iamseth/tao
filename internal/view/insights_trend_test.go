@@ -24,6 +24,7 @@ func presentationTrend() insights.TrendReport {
 			{Month: "2026-10", Cohort: "overall", AgeImmature: true, Metrics: []insights.TrendMetric{
 				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 6, EvidencePlans: 6, Rate: &rate, Comparison: "inconclusive"},
 				{Key: "median_cost_per_plan", Direction: "lower", Availability: "incomplete", EligiblePlans: 6, EvidencePlans: 2, PartialSamples: 1, Median: &median, Comparison: "unavailable"},
+				{Key: "unattended_rate", Direction: "higher", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(2, 5, 5)), Comparison: "inconclusive"},
 				{Key: "unattended_rate", Direction: "higher", Availability: "unavailable", Reason: "intervention_attribution_missing", Comparison: "unavailable"},
 			}},
 		}}
@@ -65,7 +66,7 @@ func TestInsightsTrendPresentation(t *testing.T) {
 		if !bytes.Equal(before, after) {
 			t.Fatal("mutated input")
 		}
-		for _, want := range []string{"0/6 = 0.00%", "recorded_blocker", "median 0", "2 (insufficient samples)", "6 / 2 / 1 | incomplete", "unattended_rate", "intervention_attribution_missing", "active (censored): 1", "never-started (censored): 1", "unbucketed: 1", "unknown attribution: 1", "provisional: false; age-immature: true", "provisional: true; age-immature: true", "inconclusive", "Adjacent calendar month", "Medians have no directional verdict"} {
+		for _, want := range []string{"0/6 = 0.00%", "2/5 = 40.00%", "5 / 5 / 0 | available", "recorded_blocker", "median 0", "2 (insufficient samples)", "6 / 2 / 1 | incomplete", "unattended_rate", "intervention_attribution_missing", "active (censored): 1", "never-started (censored): 1", "unbucketed: 1", "unknown attribution: 1", "provisional: false; age-immature: true", "provisional: true; age-immature: true", "inconclusive", "Adjacent calendar month", "Medians have no directional verdict"} {
 			if !strings.Contains(text.String(), want) {
 				t.Errorf("missing %q: %s", want, text.String())
 			}

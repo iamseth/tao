@@ -277,13 +277,27 @@ func trendMetrics(observations []planObservation) []TrendMetric {
 		}
 		metrics = append(metrics, m)
 	}
-	for _, key := range []string{"unattended_rate", "escaped_defects_per_plan"} {
-		reason, direction := "intervention_attribution_missing", "higher"
-		if key == "escaped_defects_per_plan" {
-			reason, direction = "defect_linkage_missing", "lower"
+	unattended := TrendMetric{Key: "unattended_rate", Direction: "higher", Availability: "unavailable", Reason: "intervention_attribution_missing", EligiblePlans: len(observations), Comparison: "unavailable"}
+	numerator := 0
+	for _, o := range observations {
+		if o.attributionComplete {
+			unattended.EvidencePlans++
 		}
-		metrics = append(metrics, TrendMetric{Key: key, Direction: direction, Availability: "unavailable", Reason: reason, EligiblePlans: len(observations), Comparison: "unavailable"})
+		if o.unattended {
+			numerator++
+		}
 	}
+	if unattended.EvidencePlans > 0 {
+		rate := EstimateRate(numerator, len(observations), scorecardMinimumSamples)
+		unattended.Rate = &rate
+		unattended.Reason = ""
+		unattended.Availability = "available"
+		if unattended.EvidencePlans < len(observations) {
+			unattended.Availability = "incomplete"
+		}
+	}
+	metrics = append(metrics, unattended)
+	metrics = append(metrics, TrendMetric{Key: "escaped_defects_per_plan", Direction: "lower", Availability: "unavailable", Reason: "defect_linkage_missing", EligiblePlans: len(observations), Comparison: "unavailable"})
 	return metrics
 }
 

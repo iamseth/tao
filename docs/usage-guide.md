@@ -573,8 +573,12 @@ Medians have neither better/worse verdicts nor confidence intervals.
 Terminal-only selection introduces survivorship bias; changing project, task,
 repository or planner composition can explain shifts even within runtime cohorts.
 Do not treat incomplete coverage, provisional months or differing denominators
-as proof of improvement. Unattended rate and escaped defects remain explicitly
-unavailable pending separate intervention-attribution and defect-linkage evidence.
+as proof of improvement. Unattended rate is available only for buckets whose
+eligible plans all carry complete intervention attribution coverage. Partial
+coverage is incomplete: unknown coverage stays in the denominator and contributes
+no success, and no better/worse verdict is given. Without any coverage, unattended
+rate is unavailable. Escaped defects remain unavailable pending defect-linkage
+evidence.
 Weekly/rolling windows, TUI integration, causal recommendations and median
 confidence intervals are outside this version.
 
