@@ -164,6 +164,7 @@ PRs or inherit automatic slice-commit behavior.
 | `TAO_REVIEW_EFFORT` | yes | yes | yes | yes | — | — |
 | `TAO_MERGE_REVIEW_EFFORT` | — | — | — | — | yes | — |
 | `TAO_RESOLVER_EFFORT` | — | — | — | — | yes | — |
+| `workspace.setup` | yes | yes | yes | — | — | — |
 | `TAO_AUTO_REWORK` | yes | yes | yes | — | — | — |
 | `TAO_MAX_REWORK_ATTEMPTS` | yes | yes | yes | — | — | — |
 | `TAO_RUN_HEADER` | yes | yes | yes | — | — | — |

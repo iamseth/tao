@@ -75,6 +75,7 @@ var commandOptionRules = append(append([]commandOptionRule{
 	{EnvReview, []CommandProfile{CommandRun}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{ReviewEnabled: p.ReviewEnabled} }},
 	{EnvSessionTimeout, []CommandProfile{CommandRun, CommandReview, CommandMerge}, func(p RunOptionsPatch) RunOptionsPatch { return RunOptionsPatch{SessionTimeout: p.SessionTimeout} }},
 }, modelCommandOptionRules()...), []commandOptionRule{
+	{"workspace.setup", []CommandProfile{CommandRun}, nil},
 	{EnvAutoRework, []CommandProfile{CommandRun}, nil},
 	{EnvMaxReworkAttempts, []CommandProfile{CommandRun}, nil},
 	{EnvRunHeader, []CommandProfile{CommandRun}, nil},

@@ -11,6 +11,31 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 )
 
+func TestCommandWorkspaceSetupAdmission(t *testing.T) {
+	snapshot := ResolveSettings(nil, configtypes.SettingsValues{"workspace.setup": json.RawMessage(`"   "`)}, LoadEnv(nil))
+	var warning string
+	for _, row := range snapshot.SettingsStatus() {
+		if row.Key == "workspace.setup" && row.Source == "invalid" {
+			warning = row.Warning
+		}
+	}
+	if warning == "" {
+		t.Fatal("missing invalid workspace.setup status warning")
+	}
+	for _, profile := range []CommandProfile{CommandRun, CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther} {
+		t.Run(string(profile), func(t *testing.T) {
+			_, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: snapshot})
+			if profile == CommandRun {
+				if err == nil || !strings.Contains(err.Error(), warning) {
+					t.Fatalf("want status warning %q, got %v", warning, err)
+				}
+			} else if err != nil {
+				t.Fatalf("inapplicable workspace.setup rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestAllModelCommandProjections(t *testing.T) {
 	for _, profile := range []CommandProfile{CommandRun, CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther} {
 		for mask := 0; mask < 4; mask++ {

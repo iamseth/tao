@@ -101,6 +101,94 @@ func TestComposedRunFlagDefaultsAreNotOverrides(t *testing.T) {
 	}
 }
 
+func TestRunSavedWorkspaceSetupAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{"invalid", `"   "`, ""},
+		{"valid", `"echo ready"`, "echo ready"},
+		{"absent", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := configtypes.SettingsValues{}
+			if tc.raw != "" {
+				values["workspace.setup"] = []byte(tc.raw)
+			}
+			snapshot := runtimeconfig.ResolveSettings(nil, values, runtimeconfig.LoadEnv(nil))
+			defaults, err := (newTestApp(App{RuntimeEnv: &snapshot})).runEnvDefaults()
+			if tc.name == "invalid" {
+				warning := invalidWorkspaceSetupWarning(t, snapshot)
+				if err == nil || !strings.Contains(err.Error(), warning) {
+					t.Fatalf("want status warning %q, got %v", warning, err)
+				}
+				return
+			}
+			if err != nil || defaults.WorkspaceSetup != tc.want {
+				t.Fatalf("setup = %q, want %q; err = %v", defaults.WorkspaceSetup, tc.want, err)
+			}
+		})
+	}
+}
+
+func invalidWorkspaceSetupWarning(t *testing.T, snapshot runtimeconfig.EnvSnapshot) string {
+	t.Helper()
+	for _, row := range snapshot.SettingsStatus() {
+		if row.Key == "workspace.setup" {
+			if row.Source != "invalid" || row.Warning == "" {
+				t.Fatalf("expected invalid setup status with warning: %+v", row)
+			}
+			return row.Warning
+		}
+	}
+	t.Fatal("missing workspace.setup status")
+	return ""
+}
+
+func TestRunRejectsInvalidSavedWorkspaceSetup(t *testing.T) {
+	testenv.SkipIfShort(t)
+	clearTaoEnv(t)
+	ctx := context.Background()
+	home := t.TempDir()
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	repo := plan.NewFileRepository(fixture.root)
+	detail, err := repo.ResolvePlan(ctx, fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := taodata.Repo{ID: "selected", Root: detail.State.Repo.Root}
+	dir := filepath.Join(home, "repos", registered.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"schema": "tao.repo.v1", "id": registered.ID, "name": "selected", "root": registered.Root, "run_defaults": map[string]any{"workspace": map[string]any{"setup": "   "}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	service := settings.NewService(home, runtimeconfig.LoadEnv(nil))
+	view, _ := service.Read(ctx, settings.Target{RepositoryID: registered.ID})
+	warning := invalidWorkspaceSetupWarning(t, view.Effective)
+	app := (newTestApp(App{Out: io.Discard, Err: io.Discard, SettingsService: service, Registry: func() NoteRegistry {
+		return &fakeNoteRegistry{current: taodata.Repo{ID: "wrong"}, repos: []taodata.Repo{registered}}
+	}})).initializeSettings(ctx)
+	old := executeSinglePlan
+	t.Cleanup(func() { executeSinglePlan = old })
+	called := false
+	executeSinglePlan = func(run.Service, context.Context, run.Request) error {
+		called = true
+		return nil
+	}
+	err = app.run(ctx, repo, []string{fixture.id})
+	if called {
+		t.Error("executeSinglePlan called with invalid saved workspace.setup")
+	}
+	if err == nil || !strings.Contains(err.Error(), warning) {
+		t.Fatalf("want status warning %q, got %v", warning, err)
+	}
+}
+
 func TestRunScopedSettingsHandoff(t *testing.T) {
 	clearTaoEnv(t)
 	ctx := context.Background()
