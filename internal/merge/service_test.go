@@ -74,6 +74,8 @@ type fakeGitClient struct {
 	ancestorErr         error
 	status              string
 	statusErr           error
+	statusSequence      []string
+	mergeBaseErrors     []error
 	ignoredStatus       string
 	ignoredStatusErr    error
 	changedFiles        []string
@@ -154,6 +156,11 @@ func (f *fakeGitClient) CommitPathStates(ctx context.Context, parent, commit str
 func (f *fakeGitClient) MergeBase(ctx context.Context, a string, b string) (string, error) {
 	_ = ctx
 	f.calls = append(f.calls, "merge-base "+a+" "+b)
+	if len(f.mergeBaseErrors) > 0 {
+		err := f.mergeBaseErrors[0]
+		f.mergeBaseErrors = f.mergeBaseErrors[1:]
+		return f.mergeBase, err
+	}
 	return f.mergeBase, f.mergeErr
 }
 
@@ -169,6 +176,11 @@ func (f *fakeGitClient) IsAncestor(ctx context.Context, ancestor string, descend
 func (f *fakeGitClient) StatusPorcelain(ctx context.Context) (string, error) {
 	_ = ctx
 	f.calls = append(f.calls, "status")
+	if len(f.statusSequence) > 0 {
+		status := f.statusSequence[0]
+		f.statusSequence = f.statusSequence[1:]
+		return status, f.statusErr
+	}
 	return f.status, f.statusErr
 }
 
@@ -1865,6 +1877,141 @@ func TestPrepareSingleMergeIntentGeneratesLegacyProposalOnceBeforeMutation(t *te
 	}
 }
 
+func TestCleanMergeForceIsUnused(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		for _, force := range []bool{false, true} {
+			t.Run(fmt.Sprintf("external=%t/force=%t", external, force), func(t *testing.T) {
+				detail := mergeReadyDetail("base123")
+				detail.Dir = t.TempDir()
+				detail.State.Repo.Root = "/repo"
+				detail.State.Plan.Review.Head = "tip-sha"
+				git := &fakeGitClient{root: "/repo", defaultBranch: "main", mergeBase: "base123", stagedChanges: true,
+					revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha", "HEAD": "merged456"},
+					ancestors: map[string]bool{"tao/plan-a..main": external, "base123..tao/plan-a": true}}
+				events := &fakeEventAppender{}
+				service := newTestService(Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events})
+				if err := service.Merge(context.Background(), detail, Options{Force: force, NoVerify: true}); err != nil {
+					t.Fatal(err)
+				}
+				merged := events.requireSingle(t, plan.EventTypePlanMerged)
+				if merged.Actor != "automatic" || merged.Trigger != "merge_complete" {
+					t.Fatalf("completion: %#v", merged)
+				}
+				for _, event := range events.events {
+					if event.Type == plan.EventTypeInterventionObserved {
+						t.Errorf("unused force observation: actor=%s trigger=%s version=%d", event.Actor, event.Trigger, event.AttributionVersion)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestMergeForceReusedIntentDoesNotUseProposalFallback(t *testing.T) {
+	detail := mergeReadyDetail("base123")
+	detail.State.Plan.Review.Head = "tip-sha"
+	detail.State.Plan.Review.CommitMessage.Subject = ""
+	detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{SourceHead: "tip-sha"}
+	git := &fakeGitClient{mergeBase: "base123", revParse: map[string]string{"tao/plan-a": "tip-sha"}}
+	for _, reused := range []bool{false, true} {
+		want := "merge_force"
+		if reused {
+			want = ""
+		}
+		if got := mergeForceReviewEvidence(context.Background(), git, detail, mergeVerifySnapshot{defaultBranch: "main", preMergeSHA: "parent"}, false, reused); got != want {
+			t.Fatalf("reused=%t: got %q want %q", reused, got, want)
+		}
+	}
+}
+
+func TestMergeForceReviewEvidenceUncertainReads(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*fakeGitClient)
+	}{
+		{"head moved after intent", func(g *fakeGitClient) { g.revParse["tao/plan-a"] = "moved" }},
+		{"head read fails", func(g *fakeGitClient) { g.revParseErr = errors.New("inspection") }},
+		{"base read fails", func(g *fakeGitClient) { g.mergeErr = errors.New("inspection") }},
+		{"empty base", func(g *fakeGitClient) { g.mergeBase = "" }},
+		{"exact base read fails", func(g *fakeGitClient) { g.mergeBaseErrors = []error{nil, errors.New("inspection")} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := mergeReadyDetail("base123")
+			detail.State.Plan.Review.Head = "tip-sha"
+			detail.State.Plan.MergeCommitIntent = &plan.SingleMergeCommitIntent{SourceHead: "tip-sha"}
+			git := &fakeGitClient{mergeBase: "base123", revParse: map[string]string{"tao/plan-a": "tip-sha"}}
+			tc.change(git)
+			if got := mergeForceReviewEvidence(context.Background(), git, detail, mergeVerifySnapshot{defaultBranch: "main", preMergeSHA: "parent"}, false, false); got != "unknown" {
+				t.Fatalf("uncertain evidence = %q", got)
+			}
+			for _, call := range git.calls {
+				if !strings.HasPrefix(call, "merge-base ") && !strings.HasPrefix(call, "rev-parse ") {
+					t.Fatalf("non-diagnostic call: %s", call)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeForceEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		external, recordOnly bool
+		change               func(*plan.PlanDetail, *fakeGitClient)
+		want                 string
+	}{
+		{name: "approval", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review = nil }, want: "merge_force"},
+		{name: "dirty", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.status = " M a.go" }, want: "merge_force"},
+		{name: "review base", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Base = "old" }, want: "merge_force"},
+		{name: "review head", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "old" }, want: "merge_force"},
+		{name: "invalid exact proposal", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.CommitMessage.Subject = "" }, want: "merge_force"},
+		{name: "missing proposal ordinary generation", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.CommitMessage = nil }},
+		{name: "legacy head ordinary generation", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "" }},
+		{name: "status inspection fails", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusErr = errors.New("inspection") }, want: "unknown"},
+		{name: "base inspection fails", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.mergeBaseErrors = []error{nil, errors.New("inspection")} }, want: "unknown"},
+		{name: "cleanliness changes", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusSequence = []string{"", " M a.go"} }, want: "unknown"},
+		{name: "external approval", external: true, change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review = nil }, want: "merge_force"},
+		{name: "external dirty", external: true, change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.status = " M a.go" }, want: "merge_force"},
+		{name: "external inspection fails", external: true, change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusErr = errors.New("inspection") }, want: "unknown"},
+		{name: "record only proven", external: true, recordOnly: true},
+		{name: "record only unproven", recordOnly: true, want: "merge_force"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := mergeReadyDetail("base123")
+			detail.Dir = t.TempDir()
+			detail.State.Repo.Root = "/repo"
+			detail.State.Plan.Review.Head = "tip-sha"
+			git := &fakeGitClient{root: "/repo", defaultBranch: "main", mergeBase: "base123", stagedChanges: true,
+				revParse:  map[string]string{"main": "pre123", "tao/plan-a": "tip-sha", "HEAD": "merged456"},
+				ancestors: map[string]bool{"tao/plan-a..main": tc.external, "base123..tao/plan-a": true}}
+			if tc.change != nil {
+				tc.change(detail, git)
+			}
+			events := &fakeEventAppender{}
+			generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
+			service := newTestService(Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, ProposalGenerator: generator})
+			if err := service.Merge(context.Background(), detail, Options{Force: true, RecordOnly: tc.recordOnly, NoVerify: true}); err != nil {
+				t.Fatal(err)
+			}
+			events.requireSingle(t, plan.EventTypePlanMerged)
+			if tc.want == "" {
+				if events.count(plan.EventTypeInterventionObserved) != 0 {
+					t.Fatalf("unused force: %#v", events.events)
+				}
+			} else {
+				event := events.requireSingle(t, plan.EventTypeInterventionObserved)
+				actor := "operator"
+				if tc.want == "unknown" {
+					actor = "unknown"
+				}
+				if event.Trigger != tc.want || event.Actor != actor || event.AttributionVersion != 1 {
+					t.Fatalf("observation: %#v", event)
+				}
+			}
+		})
+	}
+}
+
 type failingInterventionAppender struct {
 	*fakeEventAppender
 }
@@ -1881,6 +2028,7 @@ func TestMergeForceDiagnosticFailureDoesNotPreventRecording(t *testing.T) {
 	detail := mergeReadyDetail("base123")
 	detail.Dir = t.TempDir()
 	events := failingInterventionAppender{&fakeEventAppender{}}
+	detail.State.Plan.Review = nil // Proven approval override, not flag presence.
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "merged789"},

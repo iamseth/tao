@@ -75,6 +75,10 @@ func TestInterventionHistory(t *testing.T) {
 		unknown, unattended               bool
 	}{
 		{name: "clean", unattended: true},
+		{name: "future unused merge force", unattended: true},
+		{name: "future used merge force", extra: `{"type":"intervention_observed","plan_id":"ID","actor":"operator","trigger":"merge_force","attribution_version":1}`},
+		{name: "future unknown merge force", extra: `{"type":"intervention_observed","plan_id":"ID","actor":"unknown","trigger":"unknown","attribution_version":1}`, unknown: true},
+		{name: "historical flag-only merge force remains operator", extra: `{"type":"intervention_observed","plan_id":"ID","actor":"operator","trigger":"merge_force","attribution_version":1}`},
 		{name: "manual uncommitted work cannot be identified", unattended: true},
 		{name: "refusal and no-op emit nothing", unattended: true},
 		{name: "old silence", marker: "absent", unknown: true},

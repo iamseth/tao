@@ -26,7 +26,7 @@ func TestNormalize(t *testing.T) {
 			}
 		}
 	}
-	for _, pair := range [][2]string{{"", ""}, {"unknown", "unknown"}, {"operator", "run"}, {"Operator", "approve"}, {"operator", " approve"}, {strings.Repeat("x", 10000), "approve"}, {"operator", strings.Repeat("x", 10000)}} {
+	for _, pair := range [][2]string{{"", ""}, {"unknown", "unknown"}, {"operator", "unknown"}, {"unknown", "merge_force"}, {"operator", "run"}, {"Operator", "approve"}, {"operator", " approve"}, {strings.Repeat("x", 10000), "approve"}, {"operator", strings.Repeat("x", 10000)}} {
 		a, b := Normalize(pair[0], pair[1])
 		if a != "unknown" || b != "unknown" {
 			t.Fatal("unsupported input accepted")

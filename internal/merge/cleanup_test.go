@@ -495,11 +495,8 @@ func noChangesMergeDetail(head string) *plan.PlanDetail {
 }
 
 func TestMergeNoChangesCompletion(t *testing.T) {
-	for _, recordOnly := range []bool{false, true} {
-		name := "merge"
-		if recordOnly {
-			name = "record-only"
-		}
+	for _, options := range []Options{{}, {Force: true}, {RecordOnly: true}, {RecordOnly: true, Force: true}} {
+		name := fmt.Sprintf("record-only=%t/force=%t", options.RecordOnly, options.Force)
 		t.Run(name, func(t *testing.T) {
 			reg := newFakeGitRegistry()
 			reg.seed(mergeVerifyRoot, &fakeGitClient{
@@ -513,7 +510,7 @@ func TestMergeNoChangesCompletion(t *testing.T) {
 			events := &fakeEventAppender{}
 			var logs []string
 			service := newTestService(Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: cleaner, Events: events, Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }})
-			if err := service.Merge(context.Background(), detail, Options{RecordOnly: recordOnly}); err != nil {
+			if err := service.Merge(context.Background(), detail, options); err != nil {
 				t.Fatal(err)
 			}
 			event := events.requireSingle(t, plan.EventTypePlanMerged)
@@ -541,6 +538,9 @@ func TestMergeNoChangesCompletion(t *testing.T) {
 				if strings.HasPrefix(call, "merge-squash ") || strings.HasPrefix(call, "commit") {
 					t.Fatalf("unexpected integration: %v", git.calls)
 				}
+			}
+			if events.count(plan.EventTypeInterventionObserved) != 0 {
+				t.Fatalf("unused force observed: %#v", events.events)
 			}
 		})
 	}

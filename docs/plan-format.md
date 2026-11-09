@@ -576,6 +576,15 @@ never identify a human, grant authority, or change lifecycle/next-action results
 Semantic operation retries ignore attribution, while frozen journal replay retains
 exact historical fields and bytes. Historical events are never rewritten.
 
+Future single-plan merges observe `operator`/`merge_force` only when read-only
+evidence proves force overrides an applicable refusal (including record-only
+completion without ancestry proof). Proven-unused force emits no intervention;
+indeterminate inspection emits `unknown`/`unknown`, never proof of unattended
+execution. Proposal generation alone is not an override. These best-effort checks
+and observation writes do not change merge policy or outcomes. Historical
+`operator`/`merge_force` observations retain their original interpretation, even
+when they were recorded solely because the flag was present.
+
 The optional `intervention-coverage.json` sidecar contains
 `{"schema":"tao.intervention.coverage.v1","version":1,"plan_id":"<exact plan ID>"}`.
 The codec accepts regular files only, at most 4096 bytes, with a nonempty UTF-8

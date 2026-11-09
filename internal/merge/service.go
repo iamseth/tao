@@ -449,6 +449,11 @@ func (s Service) merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 			return err
 		}
 	}
+	priorIntent := detail.State.Plan.MergeCommitIntent
+	forceEvidence := ""
+	if options.Force {
+		forceEvidence = s.mergeForceGateEvidence(ctx, git, detail)
+	}
 	var mergeSnapshot mergeVerifySnapshot
 	if options.NoSquash {
 		mergeSnapshot, err = captureMergeVerifySnapshot(ctx, git, detail)
@@ -463,7 +468,15 @@ func (s Service) merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 		return err
 	}
 	if options.Force {
-		s.observeMergeIntervention(detail, "merge_force")
+		if forceEvidence == "" && s.mergeForceGateEvidence(ctx, git, detail) != "" {
+			forceEvidence = "unknown" // Evidence changed across proposal preparation.
+		}
+		if forceEvidence == "" {
+			forceEvidence = mergeForceReviewEvidence(ctx, git, detail, mergeSnapshot, options.NoSquash, priorIntent != nil && priorIntent == detail.State.Plan.MergeCommitIntent)
+		}
+		if forceEvidence != "" {
+			s.observeMergeIntervention(detail, forceEvidence)
+		}
 	}
 	s.reportPhase(runstatus.PhaseMergeIntegrating)
 	if options.NoSquash {
@@ -1120,7 +1133,13 @@ func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, deta
 		}
 	}
 	if options.Force {
-		s.observeMergeIntervention(detail, "merge_force")
+		evidence := s.mergeForceGateEvidence(ctx, git, detail)
+		if !merged.AncestryVerified {
+			evidence = "merge_force"
+		}
+		if evidence != "" {
+			s.observeMergeIntervention(detail, evidence)
+		}
 	}
 	switch {
 	case merged.NoChanges:
@@ -1679,6 +1698,68 @@ func mergeVerifySkippedReason(resolution mergeVerifyCommandResolution) string {
 	default:
 		return "no verification command resolved"
 	}
+}
+
+// These read-only counterfactual checks are diagnostic only. In particular an
+// inspection error is unknown evidence, not a refusal that force overrode.
+// Empty evidence means every applicable bypass was proven unused.
+func (s Service) mergeForceGateEvidence(ctx context.Context, git GitClient, detail *plan.PlanDetail) string {
+	restarted, err := pendingSingleMergeRestart(ctx, git, detail)
+	if err != nil {
+		return "unknown"
+	}
+	if restarted != nil || requireApproved(detail) != nil {
+		return "merge_force"
+	}
+	if err := s.requireCleanMergeWorktrees(ctx, git, detail); err != nil {
+		var dirty *DirtyWorktreeError
+		if errors.As(err, &dirty) {
+			return "merge_force"
+		}
+		return "unknown"
+	}
+	return ""
+}
+
+func mergeForceReviewEvidence(ctx context.Context, git GitClient, detail *plan.PlanDetail, snapshot mergeVerifySnapshot, noSquash, reusedIntent bool) string {
+	branch, err := resolvePlanBranch(detail)
+	if err != nil {
+		return "unknown"
+	}
+	base, err := git.MergeBase(ctx, snapshot.defaultBranch, branch)
+	if err != nil || strings.TrimSpace(base) == "" {
+		return "unknown"
+	}
+	review := plan.PersistedReview(detail)
+	if review == nil {
+		return "unknown"
+	}
+	head, err := git.RevParse(ctx, branch)
+	if err != nil || strings.TrimSpace(head) == "" {
+		return "unknown"
+	}
+	head = strings.TrimSpace(head)
+	if !noSquash {
+		intent := detail.State.Plan.MergeCommitIntent
+		if intent == nil || intent.SourceHead != head {
+			return "unknown"
+		}
+		exactBase, err := git.MergeBase(ctx, snapshot.preMergeSHA, head)
+		if err != nil || strings.TrimSpace(exactBase) != strings.TrimSpace(base) {
+			return "unknown"
+		}
+	}
+	if strings.TrimSpace(review.Base) != strings.TrimSpace(base) || (strings.TrimSpace(review.Head) != "" && strings.TrimSpace(review.Head) != head) {
+		return "merge_force"
+	}
+	// Generation for legacy/missing proposals is not a force override. Only
+	// an invalid exact-head proposal has a force-specific fallback.
+	if !noSquash && !reusedIntent && strings.TrimSpace(review.Head) == head && review.CommitMessage != nil {
+		if _, err := singleMergeCommitMessage(*review.CommitMessage, detail.State.Plan.ID, head); err != nil {
+			return "merge_force"
+		}
+	}
+	return ""
 }
 
 func (s Service) observeMergeIntervention(detail *plan.PlanDetail, trigger string) {
