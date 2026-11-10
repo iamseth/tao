@@ -106,7 +106,7 @@ func TestInsightsTrendCommandFormats(t *testing.T) {
 	for _, all := range []bool{false, true} {
 		for _, empty := range []bool{false, true} {
 			var out bytes.Buffer
-			app := newTestApp(App{Out: &out, Err: &out, Repository: func(path string) Repository {
+			app := newTestApp(App{Out: &out, Err: new(bytes.Buffer), Repository: func(path string) Repository {
 				if empty {
 					return fakeRepository{}
 				}
@@ -160,7 +160,14 @@ func TestInsightsTrendCommandFormats(t *testing.T) {
 			}
 			// Invocations have independent clocks; historical cohort evidence is fixed.
 			textLines, expectedLines := strings.Split(out.String(), "\n"), strings.Split(expected.String(), "\n")
-			textLines[2], expectedLines[2] = "", ""
+			for _, lines := range [][]string{textLines, expectedLines} {
+				for i, line := range lines {
+					if strings.HasPrefix(line, "As of: ") {
+						_, suffix, _ := strings.Cut(line, ";")
+						lines[i] = "As of: <clock>;" + suffix
+					}
+				}
+			}
 			if !reflect.DeepEqual(textLines, expectedLines) {
 				t.Fatalf("text and JSON semantics differ:\n%s\n%s", &out, &expected)
 			}
@@ -364,8 +371,20 @@ func TestInsightsCorrectedVerificationEventsRetainExistingGoldenProjection(t *te
 }
 
 func representativeTrend() insights.TrendReport {
+	now := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	merged := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	id := "20261001-120000-example"
+	defects := insights.AttributeDefects(insights.DefectInput{RepositoryID: "example", Now: now,
+		Plans:    []insights.DefectPlan{{ID: id, CreatedAt: merged, CurrentMerged: true, MergeAt: merged, MergeSHA: strings.Repeat("a", 40), PlannerLabel: "pi"}},
+		Coverage: insights.DefectScan{Usable: true, Complete: false, PinnedTip: strings.Repeat("d", 40), Truncated: true},
+		Fixes: []insights.DefectFix{
+			{SHA: strings.Repeat("b", 40), Parent: strings.Repeat("a", 40), CommitterAt: merged.Add(24 * time.Hour), Subject: "fix: private subject", References: []string{id}, AncestorPlanIDs: []string{id}},
+			{SHA: strings.Repeat("e", 40), Parent: strings.Repeat("b", 40), CommitterAt: merged.Add(48 * time.Hour), Subject: "fix: second private subject", References: []string{id}, AncestorPlanIDs: []string{id}},
+			{SHA: strings.Repeat("c", 40), Parent: strings.Repeat("b", 40), CommitterAt: now, Subject: "fix: private later subject", References: []string{id}, AncestorPlanIDs: []string{id}},
+		}})
 	return insights.TrendReport{
-		AsOf: time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC), MaturityDays: 14, MinimumSamples: 5,
+		Defects: &defects,
+		AsOf:    time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC), MaturityDays: 14, MinimumSamples: 5,
 		Coverage: insights.TrendCoverage{Plans: 12, Terminal: 8, Eligible: 6, Immature: 2, Active: 2, NeverStarted: 2, Unbucketed: 1, UnknownRuntime: 2, AmbiguousRuntime: 1, EventEvidence: 6, ReviewEvidence: 5, MissingEvidence: 1, SkippedPlans: 1, UnreadableRepositories: 1},
 		Buckets: []insights.TrendBucket{
 			{Month: "2026-09", Cohort: "overall", Coverage: insights.TrendCoverage{Plans: 5, Terminal: 5, Eligible: 5, EventEvidence: 5}, Metrics: []insights.TrendMetric{
@@ -376,7 +395,7 @@ func representativeTrend() insights.TrendReport {
 				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 1, EvidencePlans: 1, Rate: new(insights.EstimateRate(1, 1, 5)), Comparison: "inconclusive"},
 				{Key: "median_cost_per_plan", Direction: "lower", Availability: "incomplete", EligiblePlans: 1, EvidencePlans: 1, PartialSamples: 1, Median: new(insights.EstimateMedian([]float64{0}, 5)), Comparison: "unavailable"},
 				{Key: "unattended_rate", Direction: "higher", Availability: "unavailable", Reason: "intervention_attribution_missing", EligiblePlans: 1, Comparison: "unavailable"},
-				{Key: "escaped_defects_per_plan", Direction: "lower", Availability: "unavailable", Reason: "defect_linkage_missing", EligiblePlans: 1, Comparison: "unavailable"},
+				{Key: "escaped_defects_per_plan", Direction: "lower", Availability: "incomplete", Reason: "observed_lower_bound", EligiblePlans: 1, EvidencePlans: 1, PartialSamples: 1, Count: &insights.DefectCount{Numerator: 2, Denominator: 1, Quotient: 2}, Comparison: "unavailable"},
 			}},
 			{Month: "2026-10", Cohort: "pi", AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 2, Terminal: 2, Eligible: 1, Immature: 1}},
 			{Month: "2026-11", Cohort: "unknown", Provisional: true, AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 2, Terminal: 1, Immature: 1, Active: 1, UnknownRuntime: 2}},

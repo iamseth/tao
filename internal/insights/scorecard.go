@@ -159,6 +159,10 @@ type roleTotals struct {
 }
 
 type planObservation struct {
+	defect                                                            *DefectPlanResult
+	defectMergeAt                                                     time.Time
+	defectMergeSHA                                                    string
+	defectMergeConflict                                               bool
 	attributionComplete, unattended                                   bool
 	createdAt, firstApprovalAt, mergeAt                               time.Time
 	historyPresent, historyMalformed                                  bool
@@ -226,6 +230,20 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 	var approvalAt time.Time
 	approvalSeen := false
 	for _, event := range data.lifecycle {
+		if event.Type == plan.EventTypePlanReopened {
+			o.defectMergeAt = time.Time{}
+			o.defectMergeSHA = ""
+			o.defectMergeConflict = false
+		}
+		if event.Type == plan.EventTypePlanMerged {
+			if (!o.defectMergeAt.IsZero() || o.defectMergeSHA != "") && (o.defectMergeAt != event.Timestamp || o.defectMergeSHA != event.MergedDefaultSHA) {
+				o.defectMergeConflict = true
+			}
+			if event.Timestamp.IsZero() || event.Timestamp.After(now) || (!o.createdAt.IsZero() && event.Timestamp.Before(o.createdAt)) || !defectHash.MatchString(event.MergedDefaultSHA) {
+				o.defectMergeConflict = true
+			}
+			o.defectMergeAt, o.defectMergeSHA = event.Timestamp, event.MergedDefaultSHA
+		}
 		// Trend timing never uses the scorecard's unrelated-event fallback.
 		if !o.createdAt.IsZero() && !event.Timestamp.IsZero() && !event.Timestamp.Before(o.createdAt) && !event.Timestamp.After(now) {
 			if event.Type == plan.EventTypePlanReviewed && event.Review != nil && event.Review.Status == plan.ReviewStatusCompleted && event.Review.IsApproved() && (o.firstApprovalAt.IsZero() || event.Timestamp.Before(o.firstApprovalAt)) {

@@ -3,6 +3,84 @@
   "maturity_policy": "Terminal plans aged at least maturity_days at UTC day boundaries; active and never-started plans are censored. Months are UTC creation months [start, next month).",
   "limitations": "Planner-runtime attribution is low-confidence observational evidence, not implementation-runtime certainty or causal winners. Recorded outcomes are not proof of absence; cost is recorded telemetry, not guaranteed full cost.",
   "comparison_policy": "Adjacent calendar month, same cohort only: rates require complete coverage, minimum samples and strictly non-overlapping Wilson 95% intervals for better/worse; otherwise inconclusive or unavailable (missing adjacent evidence/coverage). Medians have no directional verdict or interval.",
+  "defects": {
+    "RepositoryID": "example",
+    "ObservedAt": "2026-11-08T00:00:00Z",
+    "Plans": [
+      {
+        "ID": "20261001-120000-example",
+        "CreationMonth": "2026-10",
+        "Planner": {
+          "Runtime": "pi",
+          "Provider": "",
+          "Model": "",
+          "ReasoningEffort": "",
+          "Confidence": "high",
+          "Label": "pi",
+          "Source": "plan_created"
+        },
+        "MergeAt": "2026-10-01T00:00:00Z",
+        "Mature": true,
+        "Availability": "incomplete",
+        "WindowFixes": 2,
+        "Methods": {
+          "Explicit": 2,
+          "Line": 0,
+          "File": 0
+        },
+        "Fixes": [
+          {
+            "FixSHA": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "CommitterAt": "2026-10-02T00:00:00Z",
+            "Method": "explicit",
+            "Confidence": "assertion"
+          },
+          {
+            "FixSHA": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "CommitterAt": "2026-10-03T00:00:00Z",
+            "Method": "explicit",
+            "Confidence": "assertion"
+          }
+        ],
+        "LaterFixes": [
+          {
+            "FixSHA": "cccccccccccccccccccccccccccccccccccccccc",
+            "CommitterAt": "2026-11-08T00:00:00Z",
+            "Method": "explicit",
+            "Confidence": "assertion"
+          }
+        ]
+      }
+    ],
+    "Coverage": {
+      "Scan": {
+        "Usable": true,
+        "Complete": false,
+        "PinnedTip": "dddddddddddddddddddddddddddddddddddddddd",
+        "Truncated": true,
+        "TimedOut": false,
+        "MissingHistory": false
+      },
+      "Attribution": {
+        "Numerator": 3,
+        "Denominator": 3,
+        "Quotient": 1
+      },
+      "Examined": 3,
+      "Attributed": 3,
+      "Untagged": 0,
+      "Unattributed": 0,
+      "Unsupported": 0,
+      "InvalidReferences": 0,
+      "FutureFixes": 0
+    },
+    "Count": {
+      "Numerator": 2,
+      "Denominator": 1,
+      "Quotient": 2
+    },
+    "Availability": "incomplete"
+  },
   "as_of": "2026-11-08T00:00:00Z",
   "maturity_days": 14,
   "minimum_samples": 5,
@@ -149,12 +227,17 @@
         },
         {
           "key": "escaped_defects_per_plan",
-          "direction": "lower",
-          "availability": "unavailable",
-          "reason": "defect_linkage_missing",
+          "direction": "unknown",
+          "availability": "incomplete",
+          "reason": "observed_lower_bound",
           "eligible_plans": 1,
-          "evidence_plans": 0,
-          "partial_samples": 0,
+          "evidence_plans": 1,
+          "partial_samples": 1,
+          "count": {
+            "Numerator": 2,
+            "Denominator": 1,
+            "Quotient": 2
+          },
           "comparison": "unavailable"
         }
       ]

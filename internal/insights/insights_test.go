@@ -18,6 +18,81 @@ import (
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
+type fixtureDefectCollector func(context.Context, []DefectPlan, time.Time) (DefectReport, error)
+
+func (f fixtureDefectCollector) CollectDefects(ctx context.Context, p []DefectPlan, now time.Time) (DefectReport, error) {
+	return f(ctx, p, now)
+}
+
+func TestOptionalDefectCollection(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	calls := 0
+	collector := fixtureDefectCollector(func(_ context.Context, p []DefectPlan, at time.Time) (DefectReport, error) {
+		calls++
+		if !at.Equal(now) {
+			t.Fatal("clock not injected")
+		}
+		return AttributeDefects(DefectInput{Now: at, Plans: p}), nil
+	})
+	for _, enabled := range []bool{false, true} {
+		calls = 0
+		r, err := AggregateWithOptions(context.Background(), fixtureLister{}, Options{IncludeTrend: enabled, Now: now, Defects: collector})
+		if err != nil || calls != map[bool]int{false: 0, true: 1}[enabled] {
+			t.Fatalf("single: %d %v", calls, err)
+		}
+		if enabled && r.Trend.Defects == nil {
+			t.Fatal("missing empty report")
+		}
+		calls = 0
+		_, err = AggregateSourcesWithOptions(context.Background(), fixtureSourceLister{sources: []RepositorySource{{ID: "a", Plans: fixtureLister{}, Defects: collector}, {ID: "b", Plans: fixtureLister{}, Defects: collector}}}, Options{IncludeTrend: enabled, Now: now})
+		if err != nil || calls != map[bool]int{false: 0, true: 2}[enabled] {
+			t.Fatalf("multi: %d %v", calls, err)
+		}
+	}
+	_, err := AggregateWithOptions(context.Background(), fixtureLister{}, Options{IncludeTrend: true, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := AggregateWithOptions(ctx, fixtureLister{}, Options{IncludeTrend: true, Defects: collector}); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}
+
+func TestDefectRepositoryIsolationAndFailures(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	id := "20260101-120000-example"
+	acc := newAccumulator()
+	for _, repo := range []string{"a", "b"} {
+		acc.trendObservations = append(acc.trendObservations, planObservation{repository: sourceIdentity{id: repo}, planID: id, merged: true, createdAt: now.AddDate(0, -2, 0), defectMergeAt: now.AddDate(0, -2, 0), defectMergeSHA: strings.Repeat("a", 40)})
+	}
+	for _, repo := range []string{"a", "b"} {
+		c := fixtureDefectCollector(func(_ context.Context, p []DefectPlan, at time.Time) (DefectReport, error) {
+			if len(p) != 1 || p[0].ID != id || !p[0].CurrentMerged || p[0].MergeSHA == "" {
+				t.Fatalf("inputs: %+v", p)
+			}
+			if repo == "b" {
+				return DefectReport{}, errors.New("private git diagnostic")
+			}
+			d := AttributeDefects(DefectInput{Now: at, Plans: p, Coverage: DefectScan{Usable: true, Complete: true}})
+			d.Plans[0].WindowFixes = 2
+			return d, nil
+		})
+		if err := collectTrendDefects(context.Background(), &acc, sourceIdentity{id: repo}, c, true, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if acc.trendObservations[0].defect.WindowFixes != 2 || acc.trendObservations[1].defect.Availability != DefectUnavailable {
+		t.Fatalf("cross-repository leakage: %+v", acc.defectReports)
+	}
+	report := buildTrend(acc.trendObservations, now)
+	m := report.Buckets[0].Metrics[9]
+	if m.Count == nil || m.Count.Numerator != 2 || m.Count.Denominator != 1 || m.Availability != "incomplete" {
+		t.Fatalf("metric %+v", m)
+	}
+}
+
 type fixtureLister struct {
 	summaries []plan.PlanSummary
 	err       error

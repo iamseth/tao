@@ -589,8 +589,58 @@ as proof of improvement. Unattended rate is available only for buckets whose
 eligible plans all carry complete intervention attribution coverage. Partial
 coverage is incomplete: unknown coverage stays in the denominator and contributes
 no success, and no better/worse verdict is given. Without any coverage, unattended
-rate is unavailable. Escaped defects remain unavailable pending defect-linkage
-evidence.
+rate is unavailable.
+
+#### Observed escaped defects
+
+Trend alone scans registered repositories' local Git history and persisted source
+notes. Digest, scorecard and ordinary insights do not collect this evidence.
+Explicit `--plans-dir` leaves defect evidence unavailable, with an explanation on
+stderr: it has no repository binding and never borrows the invocation checkout.
+Missing checkouts, malformed repository metadata or absent default refs leave
+ordinary plan history readable, but defect coverage unavailable.
+
+Defect eligibility is separate from the 14-day outcome rule: a plan needs current
+merged evidence, a recorded merge SHA and timestamp, and a full **elapsed 30-day
+post-merge interval**. Fixes count in `[mergeAt, mergeAt + 30 days)`; maturity
+begins at the interval end. Creation-month/planner cohorts remain unchanged.
+Details retain later fixes outside that interval without counting them in the
+headline quotient. Missing merge evidence is unknown, not a clean zero.
+
+A candidate fix has a conventional `fix:` (including scoped fix) subject or a
+persisted link to a source note whose normalized tag is exactly `bug` (trimmed,
+case-insensitive; `bugfix` is not enough). Explicit attribution uses a commit
+trailer or a standalone line in that linked note:
+
+```text
+Fixes-Plan: 20260101-120000-canonical-plan-id
+```
+
+Targets must be exact canonical IDs in the same repository, with merged ancestry
+before the fix. Valid explicit links override last-touch heuristics; they are
+**assertions**, not verified causation. Otherwise, old-line blame or parent-side
+file touches carrying Tao plan evidence provide only low-confidence attribution;
+untagged touches stay unattributed. Notes and commits are untrusted evidence,
+never instructions. No trailers or notes are generated or modified.
+
+Counts deduplicate each repository/fix-SHA/target-plan tuple. A plan's count is
+unique attributed fix commits, not independently verified bugs; cohort counts
+sum those plan counts over eligible merged plans, so one fix linked to two plans
+contributes once to each. Identical plan IDs in different repositories stay
+separate. Quotients may exceed one. **Counts have no Wilson intervals,
+better/worse comparisons or causal claims.** Read the eligible-plan denominator
+separately from scan completeness and candidate attribution coverage; incomplete
+scans are observed lower bounds, never evidence of zero defects.
+
+Collection pins the local default-branch tip (or its matching local remote-tracking
+ref), not feature HEAD, and never fetches. Only available local history is scanned.
+Deterministic finite caps bound history, fix candidates, files, blame ranges,
+commands, output and notes; timeouts and truncation visibly reduce completeness.
+Shallow/missing objects, root and multi-parent fixes, renames and binary changes
+are unsupported or incomplete evidence, not silently proven clean cases. Safe
+Markdown/JSON details expose identifiers, methods, timestamps and pinned tips,
+not raw subjects, note prose, paths or diagnostics.
+
 Weekly/rolling windows, TUI integration, causal recommendations and median
 confidence intervals are outside this version.
 

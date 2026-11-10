@@ -16,6 +16,29 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestDefectMergeObservation(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	merge := plan.Event{Type: plan.EventTypePlanMerged, Timestamp: now.AddDate(0, -1, 0), MergedDefaultSHA: strings.Repeat("a", 40)}
+	for _, tc := range []struct {
+		name             string
+		events           []plan.Event
+		merged, conflict bool
+	}{
+		{"valid", []plan.Event{merge}, true, false},
+		{"absent", nil, false, false},
+		{"reopened", []plan.Event{merge, {Type: plan.EventTypePlanReopened}}, false, false},
+		{"contradictory", []plan.Event{merge, {Type: plan.EventTypePlanMerged, Timestamp: merge.Timestamp, MergedDefaultSHA: strings.Repeat("b", 40)}}, true, true},
+		{"missing date", []plan.Event{{Type: plan.EventTypePlanMerged, MergedDefaultSHA: merge.MergedDefaultSHA}}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := observePlan(sourceIdentity{}, plan.PlanSummary{}, planData{createdAt: now.AddDate(0, -2, 0), lifecycle: tc.events}, now)
+			if o.merged != tc.merged || o.defectMergeConflict != tc.conflict {
+				t.Fatalf("observation %+v", o)
+			}
+		})
+	}
+}
+
 func TestScorecardTrendMaturityIsIndependent(t *testing.T) {
 	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
 	old := now.AddDate(0, -2, 0)

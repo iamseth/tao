@@ -3,6 +3,7 @@ package insights
 import (
 	"cmp"
 	"context"
+	"errors"
 	"math"
 	"slices"
 	"time"
@@ -11,11 +12,13 @@ import (
 // TrendReport is a read-only projection of recorded outcomes, not causal evidence
 // or proof of absence. Eligibility is independent of scorecard inactivity maturity.
 type TrendReport struct {
-	AsOf           time.Time     `json:"as_of"`
-	MaturityDays   int           `json:"maturity_days"`
-	MinimumSamples int           `json:"minimum_samples"`
-	Coverage       TrendCoverage `json:"coverage"`
-	Buckets        []TrendBucket `json:"buckets"`
+	Defects            *DefectReport  `json:"defects,omitempty"`
+	DefectRepositories []DefectReport `json:"defect_repositories,omitempty"`
+	AsOf               time.Time      `json:"as_of"`
+	MaturityDays       int            `json:"maturity_days"`
+	MinimumSamples     int            `json:"minimum_samples"`
+	Coverage           TrendCoverage  `json:"coverage"`
+	Buckets            []TrendBucket  `json:"buckets"`
 }
 
 // Coverage counts plans, never events. MissingEvidence can overlap other counts.
@@ -38,12 +41,14 @@ type TrendCoverage struct {
 }
 
 type TrendBucket struct {
-	Month       string        `json:"month"`
-	Cohort      string        `json:"cohort"`
-	Provisional bool          `json:"provisional"`
-	AgeImmature bool          `json:"age_immature"`
-	Coverage    TrendCoverage `json:"coverage"`
-	Metrics     []TrendMetric `json:"metrics"`
+	Month          string        `json:"month"`
+	Cohort         string        `json:"cohort"`
+	Provisional    bool          `json:"provisional"`
+	AgeImmature    bool          `json:"age_immature"`
+	Coverage       TrendCoverage `json:"coverage"`
+	Metrics        []TrendMetric `json:"metrics"`
+	DefectMissing  int           `json:"defect_missing,omitempty"`
+	DefectImmature int           `json:"defect_immature,omitempty"`
 }
 
 // Optional estimates distinguish unavailable evidence from a measured zero.
@@ -57,6 +62,7 @@ type TrendMetric struct {
 	EligiblePlans  int             `json:"eligible_plans"`
 	EvidencePlans  int             `json:"evidence_plans"`
 	PartialSamples int             `json:"partial_samples"`
+	Count          *DefectCount    `json:"count,omitempty"`
 	Rate           *RateEstimate   `json:"rate,omitempty"`
 	Median         *MedianEstimate `json:"median,omitempty"`
 	Comparison     string          `json:"comparison"`
@@ -70,10 +76,121 @@ func populateTrend(ctx context.Context, report *Report, acc *accumulator, option
 	if err != nil {
 		return err
 	}
+	if len(acc.defectReports) == 1 {
+		d := acc.defectReports[0]
+		trend.Defects = &d
+	} else if len(acc.defectReports) > 1 {
+		trend.DefectRepositories = acc.defectReports
+	}
 	trend.Coverage.SkippedPlans = report.PlansSkipped
 	trend.Coverage.UnreadableRepositories = report.RepositoryCoverage.Unreadable + report.RepositoryCoverage.Skipped
 	report.Trend = &trend
 	return ctx.Err()
+}
+
+// Collection is isolated by source identity; Git errors never discard plan history.
+func collectTrendDefects(ctx context.Context, acc *accumulator, repository sourceIdentity, collector DefectCollector, enabled bool, now time.Time) error {
+	if !enabled || collector == nil {
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var plans []DefectPlan
+	for _, o := range acc.trendObservations {
+		if o.repository != repository {
+			continue
+		}
+		p := DefectPlan{ID: o.planID, CreatedAt: o.createdAt, CurrentMerged: o.merged, MergeAt: o.defectMergeAt, MergeSHA: o.defectMergeSHA, PlannerLabel: trendRuntime(o)}
+		if o.defectMergeConflict || o.historyMalformed {
+			p.MergeAt = time.Time{}
+			p.MergeSHA = ""
+		}
+		plans = append(plans, p)
+	}
+	d, err := collector.CollectDefects(ctx, plans, now)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if err != nil {
+		d = AttributeDefects(DefectInput{Now: now, Plans: plans})
+	}
+	d.RepositoryID, d.ObservedAt = repository.id, now.UTC()
+	acc.defectReports = append(acc.defectReports, d)
+	for i := range acc.trendObservations {
+		o := &acc.trendObservations[i]
+		if o.repository != repository {
+			continue
+		}
+		o.defect = &DefectPlanResult{ID: o.planID, Availability: DefectUnknown}
+		for _, p := range d.Plans {
+			if p.ID == o.planID {
+				v := p
+				o.defect = &v
+				break
+			}
+		}
+	}
+	return ctx.Err()
+}
+
+func applyDefectMetric(bucket *TrendBucket, observations []planObservation) {
+	m := TrendMetric{Key: "escaped_defects_per_plan", Direction: "lower", Availability: "unavailable", Reason: "defect_linkage_missing", Comparison: "unavailable"}
+	n, d, present, partial := 0, 0, false, false
+	for _, o := range observations {
+		p := o.defect
+		if p == nil {
+			bucket.DefectMissing++
+			partial = true
+			continue
+		}
+		present = true
+		switch p.Availability {
+		case DefectUnknown, DefectUnavailable:
+			bucket.DefectMissing++
+			partial = true
+			continue
+		case DefectImmature:
+			bucket.DefectImmature++
+			continue
+		case DefectAvailable, DefectIncomplete:
+		default:
+			bucket.DefectMissing++
+			partial = true
+			continue
+		}
+		if !p.Mature {
+			bucket.DefectImmature++
+			continue
+		}
+		if p.WindowFixes < 0 {
+			bucket.DefectMissing++
+			partial = true
+			continue
+		}
+		n += p.WindowFixes
+		d++
+		if p.Availability == DefectIncomplete {
+			partial = true
+			m.PartialSamples++
+		}
+	}
+	if !present {
+		bucket.DefectMissing = 0
+		return
+	}
+	m.EligiblePlans, m.EvidencePlans = d, d
+	if d > 0 {
+		c := defectCount(n, d)
+		m.Count = &c
+		m.Reason = ""
+		m.Availability = "available"
+		if partial {
+			m.Availability = "incomplete"
+			m.Reason = "observed_lower_bound"
+		}
+	}
+	bucket.Metrics[len(bucket.Metrics)-1] = m
 }
 
 func trendRuntime(o planObservation) string {
@@ -178,6 +295,7 @@ func buildTrendContext(ctx context.Context, observations []planObservation, now 
 			}
 		}
 		bucket.Metrics = trendMetrics(eligible)
+		applyDefectMetric(&bucket, groups[k])
 		month, _ := time.Parse("2006-01", k.month)
 		prior := key{month.AddDate(0, -1, 0).Format("2006-01"), k.cohort}
 		if index, ok := previous[prior]; ok {

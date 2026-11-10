@@ -14,6 +14,37 @@ import (
 	"github.com/iamseth/tao/internal/insights"
 )
 
+func TestDefectSafeProjection(t *testing.T) {
+	now := time.Date(2026, 3, 15, 1, 0, 0, 0, time.FixedZone("private", 3600))
+	d := insights.DefectReport{RepositoryID: "<private/path>", ObservedAt: now, Availability: "private", Coverage: insights.DefectCoverage{Scan: insights.DefectScan{PinnedTip: "private"}}, Plans: []insights.DefectPlanResult{
+		{ID: "20260102-120000-example", Planner: insights.NormalizePlannerLabel("private"), Fixes: []insights.DefectAttribution{{FixSHA: strings.Repeat("A", 40), CommitterAt: now, Method: insights.DefectLine, Confidence: "private"}, {FixSHA: "private", Method: insights.DefectExplicit}}, LaterFixes: []insights.DefectAttribution{{FixSHA: strings.Repeat("b", 40), CommitterAt: now, Method: insights.DefectExplicit, Confidence: "private"}}},
+		{ID: "private"}, {ID: "20260101-120000-example"}}}
+	trend := insights.TrendReport{Defects: &d}
+	before, _ := json.Marshal(trend)
+	var encoded bytes.Buffer
+	if err := RenderInsightsTrendJSON(&encoded, trend, InsightsScopeRepository); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(encoded.String(), "private") {
+		t.Fatal(encoded.String())
+	}
+	p := projectTrend(trend, InsightsScopeRepository)
+	if len(p.Defects.Plans) != 2 || p.Defects.Plans[0].ID != "20260101-120000-example" || p.Defects.Plans[1].Fixes[0].Confidence != insights.DefectLowConfidence || p.Defects.Plans[1].LaterFixes[0].Confidence != insights.DefectAssertion {
+		t.Fatalf("projection %+v", p.Defects)
+	}
+	after, _ := json.Marshal(trend)
+	if !bytes.Equal(before, after) {
+		t.Fatal("input mutated")
+	}
+	for _, value := range []float64{math.NaN(), math.Inf(1), -1} {
+		trend.Buckets = []insights.TrendBucket{{Metrics: []insights.TrendMetric{{Key: "escaped_defects_per_plan", Count: &insights.DefectCount{Numerator: 1, Denominator: 1, Quotient: value}, Comparison: "better"}}}}
+		p := projectTrend(trend, InsightsScopeRepository)
+		if m := p.Buckets[0].Metrics[0]; m.Count != nil || m.Availability != "unavailable" || m.Comparison != "unavailable" {
+			t.Fatal(m)
+		}
+	}
+}
+
 func presentationTrend() insights.TrendReport {
 	rate := insights.EstimateRate(0, 6, 5)
 	median := insights.EstimateMedian([]float64{0, 2}, 5)

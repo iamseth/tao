@@ -21,6 +21,57 @@ func buildTrend(observations []planObservation, now time.Time) TrendReport {
 	return report
 }
 
+func TestTrendDefectCoverage(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name                           string
+		results                        []*DefectPlanResult
+		denominator, missing, immature int
+		availability                   string
+	}{
+		{"missing", []*DefectPlanResult{{Availability: DefectUnknown}}, 0, 1, 0, "unavailable"},
+		{"immature", []*DefectPlanResult{{Availability: DefectImmature}}, 0, 0, 1, "unavailable"},
+		{"zero", []*DefectPlanResult{{Mature: true, Availability: DefectAvailable}}, 1, 0, 0, "available"},
+		{"partial", []*DefectPlanResult{{Mature: true, Availability: DefectAvailable, WindowFixes: 2}, nil, {Availability: DefectImmature}}, 1, 1, 1, "incomplete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var obs []planObservation
+			for _, p := range tc.results {
+				o := trendFixture(now)
+				o.defect = p
+				obs = append(obs, o)
+			}
+			r := buildTrend(obs, now)
+			for _, b := range r.Buckets {
+				m := b.Metrics[9]
+				if m.Availability != tc.availability || m.EligiblePlans != tc.denominator || b.DefectMissing != tc.missing || b.DefectImmature != tc.immature {
+					t.Fatalf("bucket %+v", b)
+				}
+				if m.Rate != nil || m.Comparison != "unavailable" {
+					t.Fatal(m)
+				}
+			}
+		})
+	}
+}
+
+func TestTrendDefectIndependentWindow(t *testing.T) {
+	now := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	o := trendFixture(now)
+	o.class = observationActive // legacy eligibility must not control defect counts
+	o.defect = &DefectPlanResult{Mature: true, Availability: DefectIncomplete, WindowFixes: 3}
+	report := buildTrend([]planObservation{o}, now)
+	for _, b := range report.Buckets {
+		m := b.Metrics[9]
+		if m.Count == nil || m.Count.Numerator != 3 || m.Count.Denominator != 1 || m.Count.Quotient != 3 || m.Availability != "incomplete" || m.Rate != nil || m.Comparison != "unavailable" {
+			t.Fatalf("defect metric: %+v", m)
+		}
+		if b.Coverage.Eligible != 0 {
+			t.Fatal("legacy maturity changed")
+		}
+	}
+}
+
 func TestTrendMaturityIsolation(t *testing.T) {
 	now := time.Date(2026, 3, 15, 23, 0, 0, 0, time.UTC)
 	created := time.Date(2026, 3, 1, 23, 59, 0, 0, time.UTC)

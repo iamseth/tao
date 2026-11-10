@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
+
+	"github.com/iamseth/tao/internal/commandrunner"
 
 	"github.com/iamseth/tao/internal/insights"
 	"github.com/iamseth/tao/internal/plan"
@@ -70,6 +73,8 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 		report, err = insights.AggregateSourcesWithOptions(ctx, catalogInsightSources{
 			registry:   taodata.NewRegistry(""),
 			repository: a.repository,
+			trend:      trend,
+			runner:     a.CommandRunner,
 		}, options)
 		scope = view.InsightsScopeAllRepositories
 	} else {
@@ -80,8 +85,16 @@ func (a App) insights(ctx context.Context, repo insights.PlanLister, plansDir st
 			registered, lookupErr := registry.Current(ctx)
 			if lookupErr == nil {
 				routes = insightRoutes{plannerroute.NewStore(registry.PlannerRoutesDir(registered))}
+				if trend {
+					options.Defects = insights.NewGitDefectCollector(registered.ID, registered.Root, registry.NotesDir(registered), a.CommandRunner)
+				}
 			} else if errors.Is(lookupErr, context.Canceled) || errors.Is(lookupErr, context.DeadlineExceeded) {
 				return lookupErr
+			}
+		}
+		if trend && plansDir != "" {
+			if _, err := fmt.Fprintln(a.Err, "Defect evidence unavailable: explicit --plans-dir has no registered repository binding; invocation checkout is not used."); err != nil {
+				return err
 			}
 		}
 		options.Routes = routes
@@ -115,6 +128,8 @@ func (r insightRoutes) ListRoutes(ctx context.Context) ([]plannerroute.Record, [
 type catalogInsightSources struct {
 	registry   taodata.Registry
 	repository func(string) Repository
+	trend      bool
+	runner     commandrunner.Runner
 }
 
 func (s catalogInsightSources) ListInsightSources(ctx context.Context) ([]insights.RepositorySource, error) {
@@ -131,7 +146,16 @@ func (s catalogInsightSources) ListInsightSources(ctx context.Context) ([]insigh
 		if s.repository != nil {
 			plans = s.repository(store.PlansDir)
 		}
-		sources = append(sources, insights.RepositorySource{ID: store.ID, Name: store.Name, Plans: plans, Routes: insightRoutes{plannerroute.NewStore(store.PlannerRoutesDir)}})
+		source := insights.RepositorySource{ID: store.ID, Name: store.Name, Plans: plans, Routes: insightRoutes{plannerroute.NewStore(store.PlannerRoutesDir)}}
+		if s.trend {
+			// Damaged metadata must not hide independently readable plan history.
+			root, notesDir := "", ""
+			if registered, err := s.registry.ReadRepo(store.ID); err == nil {
+				root, notesDir = registered.Root, s.registry.NotesDir(registered)
+			}
+			source.Defects = insights.NewGitDefectCollector(store.ID, root, notesDir, s.runner)
+		}
+		sources = append(sources, source)
 	}
 	return sources, nil
 }

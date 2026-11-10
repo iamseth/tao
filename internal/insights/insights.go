@@ -41,10 +41,11 @@ type SourceLister interface {
 
 // RepositorySource identifies one repository and its data-home plan store.
 type RepositorySource struct {
-	ID     string
-	Name   string
-	Plans  PlanLister
-	Routes RouteLister
+	ID      string
+	Name    string
+	Plans   PlanLister
+	Routes  RouteLister
+	Defects DefectCollector
 }
 
 // Report contains advisory telemetry derived from plan history.
@@ -208,6 +209,7 @@ type PlanOutlier struct {
 }
 
 type accumulator struct {
+	defectReports     []DefectReport
 	trendObservations []planObservation
 	observations      []planObservation
 	buckets           map[string]*ReasonBucket
@@ -284,7 +286,8 @@ type Options struct {
 	Now time.Time
 	// Routes supplies optional advisory evidence for single-repository aggregation.
 	// Multi-repository aggregation uses each RepositorySource's Routes instead.
-	Routes RouteLister
+	Routes  RouteLister
+	Defects DefectCollector
 }
 
 func (o Options) now() time.Time {
@@ -300,6 +303,9 @@ func AggregateWithOptions(ctx context.Context, repository PlanLister, options Op
 	acc := newAccumulator()
 	now := options.now()
 	if err := aggregateSource(ctx, &report, &acc, sourceIdentity{}, repository, options.Routes, now); err != nil {
+		return Report{}, err
+	}
+	if err := collectTrendDefects(ctx, &acc, sourceIdentity{}, options.Defects, options.IncludeTrend, now); err != nil {
 		return Report{}, err
 	}
 	if err := scanRecentLogs(ctx, &report, acc.logs, now); err != nil {
@@ -357,6 +363,9 @@ func AggregateSourcesWithOptions(ctx context.Context, lister SourceLister, optio
 				result.Status = "scanned"
 				report.RepositoryCoverage.Scanned++
 			}
+		}
+		if err := collectTrendDefects(ctx, &acc, sourceIdentity{id: source.ID, name: source.Name}, source.Defects, options.IncludeTrend, now); err != nil {
+			return Report{}, err
 		}
 		report.RepositoryCoverage.Repositories = append(report.RepositoryCoverage.Repositories, result)
 	}
