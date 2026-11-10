@@ -2518,7 +2518,10 @@ func preparedSingleResolutionFixtureWithSetup(t *testing.T, setup func(realGitWo
 		DefaultBranch: fixture.defaultBranch, DefaultParent: defaultHead,
 		CreatedAt: time.Now().Add(-time.Minute).UTC(),
 	}
-	status := realGitOutput(t, fixture.repoRoot, "status", "--porcelain")
+	status, err := gitops.NewClient(fixture.repoRoot, nil).StatusPorcelain(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := SingleResolutionRequest{
 		Intent: intent, SourceBranch: fixture.planBranch, IntegrationRoot: fixture.repoRoot,
 		PlanTitle: "Resolve README interaction", SourceReview: defaultHead + ".." + sourceHead,

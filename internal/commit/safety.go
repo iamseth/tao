@@ -36,20 +36,14 @@ type StatusClassification struct {
 // ClassifyStatus parses porcelain status once for commit and cleanliness checks.
 func ClassifyStatus(status string, isStartingDirty func(string) bool) StatusClassification {
 	var classification StatusClassification
-	for line := range strings.SplitSeq(status, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		path, ambiguous := gitops.PorcelainPath(line)
-		if ambiguous {
-			if taoPaths, ok := taoMetadataRenamePaths(line); ok {
-				classification.TaoStagedPaths = append(classification.TaoStagedPaths, taoPaths...)
-				continue
-			}
-			classification.AmbiguousLines = append(classification.AmbiguousLines, line)
-			continue
-		}
-		path = NormalizePath(path)
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		classification.AmbiguousLines = []string{status}
+		return classification
+	}
+	for _, entry := range entries {
+		line := entry.Code + " " + entry.Path
+		path := NormalizePath(entry.Path)
 		if IsTaoMetadataPath(path) {
 			if gitops.PorcelainIndexStatus(line) {
 				classification.TaoStagedPaths = append(classification.TaoStagedPaths, path)
@@ -112,27 +106,6 @@ func NormalizePath(path string) string {
 // IsTaoMetadataPath reports whether path belongs to workspace-local Tao metadata.
 func IsTaoMetadataPath(path string) bool {
 	return gitops.IsTaoMetadataPath(path)
-}
-
-func taoMetadataRenamePaths(line string) ([]string, bool) {
-	if len(line) < 4 {
-		return nil, false
-	}
-	from, to, found := strings.Cut(strings.TrimSpace(line[3:]), " -> ")
-	if !found {
-		return nil, false
-	}
-	from = strings.TrimSpace(from)
-	to = strings.TrimSpace(to)
-	if from == "" || to == "" || strings.Contains(from, `"`) || strings.Contains(to, `"`) {
-		return nil, false
-	}
-	from = NormalizePath(from)
-	to = NormalizePath(to)
-	if !IsTaoMetadataPath(from) || !IsTaoMetadataPath(to) {
-		return nil, false
-	}
-	return []string{from, to}, true
 }
 
 // ExpectedPaths is an advisory exact-and-glob path set.

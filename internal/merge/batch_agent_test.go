@@ -1311,9 +1311,35 @@ func TestConflictMarkerPathsEnforcesAggregateByteLimit(t *testing.T) {
 	}
 }
 
-func TestParseConcretePorcelainChangesDecodesQuotedPaths(t *testing.T) {
+func TestFallbackStatusRefusesMalformedStreamsAndLaterConflicts(t *testing.T) {
+	for _, status := range []string{" M good\x00UU later\x00", " M good\x00 M truncated", "\x00", "XX bad\x00", "R  target\x00source\x00"} {
+		if !hasUnmergedStatus(status) {
+			t.Fatalf("unsafe continuation for %q", status)
+		}
+	}
+	for _, status := range []string{" M good\x00 M truncated", "\x00", "XX bad\x00", "R  target\x00source\x00"} {
+		if _, err := parseConcretePorcelainV1(status); err == nil {
+			t.Fatalf("accepted %q", status)
+		}
+		if paths := porcelainPaths(status); len(paths) != 0 {
+			t.Fatalf("partial paths %q", paths)
+		}
+	}
+}
+
+func TestBatchResolutionPromptEscapesStatus(t *testing.T) {
+	prompt, err := (BatchAgentResolver{}).renderPrompt(context.Background(), BatchState{}, BatchIntegration{}, BatchCandidate{}, "", "UU tab\tname\n.txt\x00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, `tab\tname\n.txt`) || strings.ContainsRune(prompt, '\x00') || strings.Contains(prompt, "UU tab\tname\n.txt") {
+		t.Fatalf("raw machine status in prompt: %q", prompt)
+	}
+}
+
+func TestParseConcretePorcelainChangesPreservesRawPaths(t *testing.T) {
 	t.Parallel()
-	status := " M \"quoted\\tname.txt\"\n D deleted.txt\n?? nested/file.txt\n"
+	status := " M quoted\tname.txt\x00 D deleted.txt\x00?? nested/file.txt\x00"
 	got, err := parseConcretePorcelainV1(status)
 	if err != nil {
 		t.Fatal(err)
@@ -1380,7 +1406,7 @@ func TestRecordPorcelainChangeSplitsStagingByBucket(t *testing.T) {
 
 func TestConcretePorcelainChangesRejectsCollapsedFallbackStatus(t *testing.T) {
 	t.Parallel()
-	_, err := concretePorcelainChanges(context.Background(), &fakeGitClient{status: "?? nested/\n"})
+	_, err := concretePorcelainChanges(context.Background(), &fakeGitClient{status: "?? nested/\x00"})
 	if err == nil || !strings.Contains(err.Error(), "collapsed untracked directory") {
 		t.Fatalf("collapsed fallback status did not fail closed: %v", err)
 	}

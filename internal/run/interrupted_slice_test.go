@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,20 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestInterruptedSliceNULFacts(t *testing.T) {
+	status := testenv.StatusFixture(" M  edge ", "?? line\nname", "UU later")
+	facts := interruptedSliceFacts(InterruptedSliceInput{PorcelainStatus: status})
+	if !facts.Dirty || !facts.Conflicted || facts.AmbiguousStatus || !slices.Equal(facts.ChangedPaths, []string{" edge ", "line\nname", "later"}) {
+		t.Fatalf("facts: %+v", facts)
+	}
+	for _, invalid := range []string{status + " M truncated", "\x00", "XX bad\x00", "R  target\x00source\x00"} {
+		facts := interruptedSliceFacts(InterruptedSliceInput{PorcelainStatus: invalid})
+		if !facts.Dirty || !facts.AmbiguousStatus || len(facts.ChangedPaths) != 0 {
+			t.Fatalf("invalid %q: %+v", invalid, facts)
+		}
+	}
+}
+
 func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -25,9 +40,9 @@ func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
 		mutate func(*InterruptedSliceInput)
 		want   InterruptedSliceDisposition
 	}{
-		{name: "tracked resume", mutate: statusMutation(" M tracked.go"), want: InterruptedSliceResume},
-		{name: "untracked resume", mutate: statusMutation("?? new.go"), want: InterruptedSliceResume},
-		{name: "staged resume", mutate: statusMutation("M  staged.go"), want: InterruptedSliceResume},
+		{name: "tracked resume", mutate: statusMutation(testenv.StatusFixture(" M tracked.go")), want: InterruptedSliceResume},
+		{name: "untracked resume", mutate: statusMutation(testenv.StatusFixture("?? new.go")), want: InterruptedSliceResume},
+		{name: "staged resume", mutate: statusMutation(testenv.StatusFixture("M  staged.go")), want: InterruptedSliceResume},
 		{name: "clean resume without telemetry", want: InterruptedSliceResume},
 		{name: "different slice", mutate: func(in *InterruptedSliceInput) { other := "002-b"; in.Detail.State.Plan.CurrentSlice = &other }, want: InterruptedSliceRefuse},
 		{name: "changed branch", mutate: func(in *InterruptedSliceInput) { in.Branch = "other" }, want: InterruptedSliceRefuse},
@@ -53,7 +68,7 @@ func TestInterruptedSliceClassifiesRecoveryBoundaries(t *testing.T) {
 			in.Detail.State.Workspace.Strategy = plan.WorkspaceStrategyCurrent
 			in.WorkspaceStrategy = plan.WorkspaceStrategyCurrent
 		}, want: InterruptedSliceManualCompletion},
-		{name: "conflict", mutate: statusMutation("UU conflict.go"), want: InterruptedSliceRefuse},
+		{name: "conflict", mutate: statusMutation(testenv.StatusFixture("UU conflict.go")), want: InterruptedSliceRefuse},
 		{name: "active operation", mutate: func(in *InterruptedSliceInput) { in.ActiveGitOperation = "rebase" }, want: InterruptedSliceRefuse},
 		{name: "ambiguous status", mutate: statusMutation("R  old.go -> new.go"), want: InterruptedSliceRefuse},
 		{name: "protected branch", mutate: func(in *InterruptedSliceInput) {
@@ -98,7 +113,7 @@ func TestInterruptedSliceClassifiesNewAndTornStarts(t *testing.T) {
 	if got := ClassifyInterruptedSlice(input); got.Disposition != InterruptedSliceCleanStartRepair {
 		t.Fatalf("clean torn start = %#v", got)
 	}
-	input.PorcelainStatus = " M unattributed.go"
+	input.PorcelainStatus = testenv.StatusFixture(" M unattributed.go")
 	if got := ClassifyInterruptedSlice(input); got.Disposition != InterruptedSliceRefuse {
 		t.Fatalf("dirty torn start = %#v", got)
 	}
@@ -126,7 +141,7 @@ func TestInterruptedSliceClassifiesPolicyNoneWithoutExecutionStart(t *testing.T)
 		}
 		input.CommitPolicy = CommitPolicyNone.String()
 		input.WorkspaceStrategy = plan.WorkspaceStrategyCurrent
-		input.PorcelainStatus = " M manual.go"
+		input.PorcelainStatus = testenv.StatusFixture(" M manual.go")
 		return input
 	}
 
@@ -139,7 +154,7 @@ func TestInterruptedSliceClassifiesPolicyNoneWithoutExecutionStart(t *testing.T)
 		mutate func(*InterruptedSliceInput)
 	}{
 		{name: "changed root", mutate: func(input *InterruptedSliceInput) { input.ExecutionRoot = "/other" }},
-		{name: "conflict", mutate: func(input *InterruptedSliceInput) { input.PorcelainStatus = "UU conflict.go" }},
+		{name: "conflict", mutate: func(input *InterruptedSliceInput) { input.PorcelainStatus = testenv.StatusFixture("UU conflict.go") }},
 		{name: "active operation", mutate: func(input *InterruptedSliceInput) { input.ActiveGitOperation = "rebase" }},
 		{name: "changed policy", mutate: func(input *InterruptedSliceInput) { input.CommitPolicy = CommitPolicySlice.String() }},
 		{name: "changed strategy", mutate: func(input *InterruptedSliceInput) { input.WorkspaceStrategy = plan.WorkspaceStrategyWorktree }},
@@ -263,7 +278,7 @@ func testInterruptedSliceBlockedRestart(t *testing.T, spelling string) {
 		mutate func(*InterruptedSliceInput)
 		want   string
 	}{
-		{name: "dirty", mutate: func(i *InterruptedSliceInput) { i.PorcelainStatus = " M partial.go\n" }, want: "clean"},
+		{name: "dirty", mutate: func(i *InterruptedSliceInput) { i.PorcelainStatus = testenv.StatusFixture(" M partial.go") }, want: "clean"},
 		{name: "current checkout", mutate: func(i *InterruptedSliceInput) { i.WorkspaceStrategy = plan.WorkspaceStrategyCurrent }, want: "execution mode differs"},
 		{name: "manual policy", mutate: func(i *InterruptedSliceInput) { i.CommitPolicy = CommitPolicyNone.String() }, want: "commit policy differs"},
 		{name: "non ancestor", mutate: func(i *InterruptedSliceInput) { i.BoundaryAncestor = false }, want: "not an ancestor"},
@@ -448,7 +463,7 @@ func TestServiceExecuteContinuesBlockedAutomaticSliceWithBoundary(t *testing.T) 
 
 	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		RepositoryAdmission: testRepositoryAdmission,
-		CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
+		CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base"),
 		EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),
 		WorkspacePreparer: func(context.Context, *plan.PlanDetail, WorkspaceResolverInput) (string, error) {
 			prepared++

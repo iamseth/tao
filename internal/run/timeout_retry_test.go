@@ -11,6 +11,7 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestTimeoutContinuationSuccessfulHandoffAndLateCompletion(t *testing.T) {
@@ -21,7 +22,7 @@ func TestTimeoutContinuationSuccessfulHandoffAndLateCompletion(t *testing.T) {
 			detail.State.Repo.BaseCommit = "base"
 			detail.Slices.Slices[0].ExpectedFiles = []string{"partial.go"}
 			calls := 0
-			status := "MM partial.go\n"
+			status := testenv.StatusFixture("MM partial.go")
 			var packets []string
 			var events []plan.Event
 			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return status }, "tao/plan-a", "base")
@@ -43,10 +44,10 @@ func TestTimeoutContinuationSuccessfulHandoffAndLateCompletion(t *testing.T) {
 					if calls == 1 && !late {
 						return &agent.SessionTimeoutError{Timeout: time.Minute}
 					}
-					if status != "MM partial.go\n" {
+					if status != testenv.StatusFixture("MM partial.go") {
 						t.Fatal("partial work not preserved")
 					}
-					status = ""
+					status = testenv.StatusFixture()
 					detail.State.Status = plan.StatusCompleted
 					detail.State.Plan.CurrentSlice = nil
 					detail.State.Plan.PendingSlices = nil
@@ -99,14 +100,14 @@ func TestTimeoutContinuationAdmission(t *testing.T) {
 		lookupError, cancel, allow bool
 	}{
 		{name: "empty", allow: true},
-		{name: "staged and unstaged", status: "MM partial.go\n", allow: true},
-		{name: "untracked", status: "?? partial.go\n", allow: true},
-		{name: "plan owned", status: " M earlier.go\n", owned: "earlier.go\x00", allow: true},
-		{name: "outside scope", status: " M outside.go\n"},
-		{name: "rename", status: "R  partial.go -> outside.go\n"},
-		{name: "malformed", status: "XX partial.go\n"},
-		{name: "ambiguous path", status: " M partial.go \n"},
-		{name: "conflict", status: "UU partial.go\n"},
+		{name: "staged and unstaged", status: testenv.StatusFixture("MM partial.go"), allow: true},
+		{name: "untracked", status: testenv.StatusFixture("?? partial.go"), allow: true},
+		{name: "plan owned", status: testenv.StatusFixture(" M earlier.go"), owned: "earlier.go\x00", allow: true},
+		{name: "outside scope", status: testenv.StatusFixture(" M outside.go")},
+		{name: "rename", status: "R  outside.go\x00partial.go\x00"},
+		{name: "malformed", status: "XX partial.go\x00"},
+		{name: "ambiguous path", status: " M partial.go \x00"},
+		{name: "conflict", status: testenv.StatusFixture("UU partial.go")},
 		{name: "lookup failure", lookupError: true},
 		{name: "malformed ownership", owned: "../outside\x00"},
 		{name: "truncated ownership", owned: "partial.go"},
@@ -195,7 +196,7 @@ func TestTimeoutContinuationInvocationAllowance(t *testing.T) {
 			calls := 0
 			timeout := &agent.SessionTimeoutError{Timeout: time.Minute}
 			var events []plan.Event
-			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "MM partial.go\n" }, "tao/plan-a", "base")
+			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture("MM partial.go") }, "tao/plan-a", "base")
 			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner: CommandRunner(func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {

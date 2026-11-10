@@ -630,6 +630,19 @@ func (r *mergeResolveRaceRepository) ResolvePlan(ctx context.Context, input stri
 	return detail, nil
 }
 
+func TestMergeDirtyStatusEscapesMachineBytes(t *testing.T) {
+	for _, status := range []string{"?? tab\tline\n.txt\x00", "?? truncated"} {
+		var out strings.Builder
+		err := renderMergeDirtyWorktree(&out, &plan.PlanDetail{}, "plan", &mergepkg.DirtyWorktreeError{Status: status})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.ContainsAny(out.String(), "\x00\t") || strings.Contains(out.String(), "tab\tline\n.txt") {
+			t.Fatalf("unsafe output %q", out.String())
+		}
+	}
+}
+
 func TestMergeCommandRendersTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -651,13 +664,13 @@ func TestMergeCommandRendersTypedFailures(t *testing.T) {
 		},
 		{
 			name: "dirty worktree",
-			err:  &mergepkg.DirtyWorktreeError{Status: " M internal/cli/merge.go\n?? cache.pyc\n"},
+			err:  &mergepkg.DirtyWorktreeError{Status: " M internal/cli/merge.go\x00?? cache.pyc\x00"},
 			is:   mergepkg.ErrDirtyWorktree,
 			want: []string{"Merge refused: worktree is dirty\n", "Status:", "M internal/cli/merge.go", "commit, stash, or discard"},
 		},
 		{
 			name: "untracked-only dirty worktree",
-			err:  &mergepkg.DirtyWorktreeError{Status: "?? tests/__pycache__/test_frontend.cpython-312.pyc"},
+			err:  &mergepkg.DirtyWorktreeError{Status: "?? tests/__pycache__/test_frontend.cpython-312.pyc\x00"},
 			is:   mergepkg.ErrDirtyWorktree,
 			want: []string{"Merge refused: worktree is dirty (untracked files only)", "Status:", "?? tests/__pycache__/test_frontend.cpython-312.pyc", "every dirty entry is untracked", "deleted or added to .gitignore in the repository root", "tao merge plan-a", "pass --force only if you intentionally bypass the dirty-worktree gate"},
 		},
@@ -1670,7 +1683,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 		// through a worktree-bound git client (git -C <worktree> status). Accept
 		// that probe and report a clean worktree.
 		if dir == repoRoot+"/.tao/workspaces/plan-a" {
-			if command != "status --porcelain --no-renames" {
+			if command != "status --porcelain --no-renames -z" {
 				t.Fatalf("unexpected plan-worktree git command %q", command)
 			}
 			return nil
@@ -1679,7 +1692,7 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 			t.Fatalf("unexpected git args %#v, want -C %q or the plan worktree", args, repoRoot)
 		}
 		switch command {
-		case "status --porcelain --no-renames", "status --porcelain=v1 -z --untracked-files=all":
+		case "status --porcelain --no-renames -z", "status --porcelain=v1 -z --untracked-files=all":
 			return nil
 		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
 			_, _ = io.WriteString(stdout, "origin/main\n")

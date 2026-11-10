@@ -1000,7 +1000,7 @@ func TestServiceReviewReportsStandalonePhasesInOrderAndStopsOnFailure(t *testing
 	t.Run("preparation failure", func(t *testing.T) {
 		var out bytes.Buffer
 		creatorCalled := false
-		git := &fakeReviewGit{status: " M uncommitted.go\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture(" M uncommitted.go")}
 		creator := reviewCreatorFunc(func(context.Context, ReviewRun) (plan.PlanReview, error) {
 			creatorCalled = true
 			return plan.PlanReview{}, nil
@@ -1359,7 +1359,7 @@ func (g *fakeReviewGit) MergeBase(_ context.Context, a, b string) (string, error
 func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 	t.Parallel()
 	t.Run("only starting-dirty remains", func(t *testing.T) {
-		git := &fakeReviewGit{status: " M README.md\n?? .env.local\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture(" M README.md", "?? .env.local")}
 		detail := reviewGateDetail("README.md", ".env.local")
 		if err := requireCleanReviewWorktree(context.Background(), git, detail, []string{"README.md", ".env.local"}); err != nil {
 			t.Fatalf("expected starting-dirty paths tolerated, got: %v", err)
@@ -1367,7 +1367,7 @@ func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 	})
 
 	t.Run("uncommitted plan work remains", func(t *testing.T) {
-		git := &fakeReviewGit{status: " M README.md\n M internal/run/run.go\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture(" M README.md", " M internal/run/run.go")}
 		detail := reviewGateDetail("README.md", "internal/run/run.go")
 		err := requireCleanReviewWorktree(context.Background(), git, detail, []string{"README.md"})
 		if err == nil {
@@ -1389,7 +1389,7 @@ func TestRequireCleanReviewWorktreeToleratesStartingDirtyPaths(t *testing.T) {
 func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testing.T) {
 	t.Parallel()
 	t.Run("scratch file outside expected_files blocked", func(t *testing.T) {
-		git := &fakeReviewGit{status: "?? debug.sh\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture("?? debug.sh")}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
 		if err == nil || !strings.Contains(err.Error(), "debug.sh") {
 			t.Fatalf("expected undeclared scratch file to fail the gate, got: %v", err)
@@ -1397,16 +1397,16 @@ func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testi
 	})
 
 	t.Run("tao metadata rename tolerated", func(t *testing.T) {
-		git := &fakeReviewGit{status: "R  .tao/plans/old.json -> .tao/plans/new.json\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture("D  .tao/plans/old.json", "A  .tao/plans/new.json")}
 		if err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil); err != nil {
 			t.Fatalf("expected .tao rename tolerated, got: %v", err)
 		}
 	})
 
 	t.Run("plan-work rename stays a hard stop", func(t *testing.T) {
-		git := &fakeReviewGit{status: "R  old.go -> new.go\n"}
+		git := &fakeReviewGit{status: "R  old.go\x00new.go\x00"}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
-		if err == nil || !strings.Contains(err.Error(), "old.go -> new.go") {
+		if err == nil || !strings.Contains(err.Error(), "old.go") {
 			t.Fatalf("expected non-tao rename to fail the gate, got: %v", err)
 		}
 	})
@@ -1419,14 +1419,14 @@ func TestRequireCleanReviewWorktreeMatchesStatusClassificationTolerance(t *testi
 func TestRequireCleanReviewWorktreeToleratesTaoMetadataPaths(t *testing.T) {
 	t.Parallel()
 	t.Run("only tao metadata remains", func(t *testing.T) {
-		git := &fakeReviewGit{status: "?? .tao/\n M .tao/state.json\nA  .tao/plans/plan-a/events.jsonl\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture("?? .tao/", " M .tao/state.json", "A  .tao/plans/plan-a/events.jsonl")}
 		if err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil); err != nil {
 			t.Fatalf("expected .tao metadata tolerated, got: %v", err)
 		}
 	})
 
 	t.Run("tao metadata plus plan work", func(t *testing.T) {
-		git := &fakeReviewGit{status: "?? .tao/logs/run.log\n M internal/run/run.go\n"}
+		git := &fakeReviewGit{status: testenv.StatusFixture("?? .tao/logs/run.log", " M internal/run/run.go")}
 		err := requireCleanReviewWorktree(context.Background(), git, reviewGateDetail("internal/run/run.go"), nil)
 		if err == nil {
 			t.Fatal("expected uncommitted plan work to fail the gate despite .tao dirt")
@@ -1452,7 +1452,7 @@ func TestPrepareReviewExecutionCapturesNoStartingDirtyPaths(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
 	repo := plan.NewFileRepository(t.TempDir())
-	git := &fakeReviewGit{status: " M README.md\nR  old.go -> new.go\n"}
+	git := &fakeReviewGit{status: " M README.md\x00R  old.go\x00new.go\x00"}
 	s := newTestService(repo, io.Discard, Options{
 		RunDependencies: RunDependencies{
 			reviewGitFactory:  fixedReviewGit(git),
@@ -1499,7 +1499,7 @@ func TestStandaloneReviewDoesNotUsePersistedStartingDirtyTolerance(t *testing.T)
 	if len(execution.StartingDirtyPaths) != 0 {
 		t.Fatalf("historical tolerance should remain metadata-only, got %#v", execution.StartingDirtyPaths)
 	}
-	_, err = createReviewWithAgentSession(context.Background(), &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}, agentOperationOptions{Agent: "pi", CommitPolicy: execution.Config.CommitPolicy, reviewGitFactory: fixedReviewGit(&fakeReviewGit{status: " M README.md\n"})}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repo))
+	_, err = createReviewWithAgentSession(context.Background(), &recordingAgentSessionExecutor{result: AgentSessionResult{Output: "Looks good."}}, agentOperationOptions{Agent: "pi", CommitPolicy: execution.Config.CommitPolicy, reviewGitFactory: fixedReviewGit(&fakeReviewGit{status: testenv.StatusFixture(" M README.md")})}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot}, fileReviewRecordFactory(repo))
 	if err == nil || !strings.Contains(err.Error(), "clean committed tree") {
 		t.Fatalf("expected historical plan-policy review to require cleanliness, got %v", err)
 	}

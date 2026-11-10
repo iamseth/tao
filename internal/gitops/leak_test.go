@@ -7,20 +7,41 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestDirtyFingerprintExactPathsAndInvalidStatus(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string]string{
+		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z"): " M file\x00 M file \x00 M  file\x00 M arrow -> file\x00",
+		key("-C", "/repo", "diff", "--name-only", "--no-renames", "-z", "HEAD"):                    "line\nfile\x00quote\"file\x00",
+	}, stderr: map[string]string{}, failures: map[string]error{}}
+	client := NewClient("/repo", runner.run)
+	got, err := client.DirtyFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{" file", "arrow -> file", "file", "file ", "line\nfile", "quote\"file"}
+	if !slices.Equal(got.Paths, want) {
+		t.Fatalf("paths %q want %q", got.Paths, want)
+	}
+	runner.outputs[key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z")] += " M truncated"
+	if _, err := client.DirtyFingerprint(context.Background()); err == nil {
+		t.Fatal("accepted truncated status")
+	}
+}
+
 func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{outputs: map[string]string{
-		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"): " M dirty.go\n?? new.txt\n",
-		key("-C", "/repo", "diff", "HEAD"):                                                   "diff --git a/dirty.go b/dirty.go\n-old\n+new\n",
-		key("-C", "/repo", "ls-files", "--stage", "-z"):                                      "100644 abcdef 0\tdirty.go\x00",
-		key("-C", "/repo", "diff", "--name-only", "HEAD"):                                    "dirty.go\n",
-		key("-C", "/repo", "ls-files", "--others", "--exclude-standard", "-z"):               "",
+		key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z"): " M dirty.go\x00?? new.txt\x00",
+		key("-C", "/repo", "diff", "HEAD"):                                      "diff --git a/dirty.go b/dirty.go\n-old\n+new\n",
+		key("-C", "/repo", "ls-files", "--stage", "-z"):                         "100644 abcdef 0\tdirty.go\x00",
+		key("-C", "/repo", "diff", "--name-only", "--no-renames", "-z", "HEAD"): "dirty.go\x00",
+		key("-C", "/repo", "ls-files", "--others", "--exclude-standard", "-z"):  "",
 	}, stderr: map[string]string{}, failures: map[string]error{}}
 
 	fingerprint, err := NewClient("/repo", runner.run).DirtyFingerprint(context.Background())
@@ -28,7 +49,7 @@ func TestDirtyFingerprintCombinesStatusDiffAndPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := sha256.New()
-	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames")]))
+	writeFingerprintField(h, "status", []byte(runner.outputs[key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z")]))
 	writeFingerprintField(h, "diff-head", []byte(runner.outputs[key("-C", "/repo", "diff", "HEAD")]))
 	writeFingerprintField(h, "index", []byte(runner.outputs[key("-C", "/repo", "ls-files", "--stage", "-z")]))
 	if fingerprint.Hash != hex.EncodeToString(h.Sum(nil)) {
@@ -116,8 +137,8 @@ func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 			t.Fatalf("unexpected command %q", name)
 		}
 		switch strings.Join(args, "\x00") {
-		case key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"):
-			_, _ = io.WriteString(stdout, " M dirty.go\n")
+		case key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z"):
+			_, _ = io.WriteString(stdout, " M dirty.go\x00")
 		case key("-C", "/repo", "diff", "HEAD"):
 			calls++
 			if calls == 1 {
@@ -127,8 +148,8 @@ func TestDirtyFingerprintChangesForTrackedContentOnlyEdit(t *testing.T) {
 			}
 		case key("-C", "/repo", "ls-files", "--stage", "-z"):
 			_, _ = io.WriteString(stdout, "100644 abcdef 0\tdirty.go\x00")
-		case key("-C", "/repo", "diff", "--name-only", "HEAD"):
-			_, _ = io.WriteString(stdout, "dirty.go\n")
+		case key("-C", "/repo", "diff", "--name-only", "--no-renames", "-z", "HEAD"):
+			_, _ = io.WriteString(stdout, "dirty.go\x00")
 		case key("-C", "/repo", "ls-files", "--others", "--exclude-standard", "-z"):
 		default:
 			t.Fatalf("unexpected git args %#v", args)
@@ -203,7 +224,7 @@ func TestDirtyFingerprintChangesWhenOnlyStagedBlobChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if beforeStatus != afterStatus || strings.TrimSpace(afterStatus) != "MM tracked.txt" {
+	if beforeStatus != afterStatus || afterStatus != "MM tracked.txt\x00" {
 		t.Fatalf("status changed: before %q after %q", beforeStatus, afterStatus)
 	}
 	if beforeDiff != afterDiff {
@@ -233,9 +254,9 @@ func TestDirtyFingerprintIncludesUntrackedBytesAndMode(t *testing.T) {
 	}
 	runner := func(_ context.Context, _ string, _ string, args []string, stdout io.Writer, _ io.Writer) error {
 		switch strings.Join(args, "\x00") {
-		case key("-C", root, "status", "--porcelain", "--untracked-files=all", "--no-renames"):
-			_, _ = io.WriteString(stdout, "?? scratch.txt\n")
-		case key("-C", root, "diff", "HEAD"), key("-C", root, "diff", "--name-only", "HEAD"):
+		case key("-C", root, "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z"):
+			_, _ = io.WriteString(stdout, "?? scratch.txt\x00")
+		case key("-C", root, "diff", "HEAD"), key("-C", root, "diff", "--name-only", "--no-renames", "-z", "HEAD"):
 		case key("-C", root, "ls-files", "--stage", "-z"):
 		case key("-C", root, "ls-files", "--others", "--exclude-standard", "-z"):
 			_, _ = io.WriteString(stdout, "scratch.txt\x00")
@@ -254,7 +275,7 @@ func TestDirtyFingerprintIncludesUntrackedBytesAndMode(t *testing.T) {
 		t.Fatalf("untracked = %q", got)
 	}
 	h := sha256.New()
-	writeFingerprintField(h, "status", []byte("?? scratch.txt\n"))
+	writeFingerprintField(h, "status", []byte("?? scratch.txt\x00"))
 	writeFingerprintField(h, "diff-head", nil)
 	writeFingerprintField(h, "index", nil)
 	if err := client.writeUntrackedFingerprint(h, "scratch.txt"); err != nil {

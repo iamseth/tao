@@ -105,7 +105,7 @@ func TestServiceExecuteRetriesTransportHandoffTwiceWithFreshResumeEvidence(t *te
 	agentCalls := 0
 	var out bytes.Buffer
 	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
-		CommandRunner: interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
+		CommandRunner: interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base"),
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
 			return nil
@@ -183,7 +183,7 @@ func TestServiceExecuteTransportRetryEventuallySucceedsOnThirdSession(t *testing
 	var events []plan.Event
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string {
 		if agentCalls < 3 {
-			return " M partial.go\n"
+			return testenv.StatusFixture(" M partial.go")
 		}
 		return ""
 	}, "tao/plan-a", "base")
@@ -233,7 +233,7 @@ func TestServiceExecuteTransportRetryAcceptsLateDurableCompletionWithoutRetryHan
 	var delays []time.Duration
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string {
 		if agentCalls == 0 {
-			return " M partial.go\n"
+			return testenv.StatusFixture(" M partial.go")
 		}
 		return ""
 	}, "tao/plan-a", "base")
@@ -273,7 +273,7 @@ func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testin
 		delayCalls := 0
 		service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 			RepositoryAdmission: testRepositoryAdmission,
-			CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
+			CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base"),
 			TransportRetryDelay: func(ctx context.Context, delay time.Duration) error {
 				delayCalls++
 				if delay != time.Second {
@@ -306,7 +306,7 @@ func TestServiceExecuteTransportRetryCancellationAndNonRetryableErrors(t *testin
 		delayCalls := 0
 		service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 			RepositoryAdmission: testRepositoryAdmission,
-			CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
+			CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base"),
 			TransportRetryDelay: func(context.Context, time.Duration) error { delayCalls++; return nil },
 			EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),
 			SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error {
@@ -335,19 +335,19 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 	}{
 		{name: "branch drift", liveBranch: "other", want: "live branch differs"},
 		{name: "HEAD drift", liveHead: "advanced", want: "live HEAD advanced"},
-		{name: "conflict", liveStatus: "UU conflict.go\n", want: "conflicted entries"},
-		{name: "ambiguous status", liveStatus: "R  old.go -> new.go\n", want: "ambiguous entry"},
-		{name: "active Git operation", mutate: func(_ *plan.PlanDetail, root string) { writeLinkedWorktreeSequencer(t, root) }, liveStatus: " M partial.go\n", want: "Git operation"},
+		{name: "conflict", liveStatus: testenv.StatusFixture("UU conflict.go"), want: "conflicted entries"},
+		{name: "ambiguous status", liveStatus: "R  new.go\x00old.go\x00", want: "ambiguous entry"},
+		{name: "active Git operation", mutate: func(_ *plan.PlanDetail, root string) { writeLinkedWorktreeSequencer(t, root) }, liveStatus: testenv.StatusFixture(" M partial.go"), want: "Git operation"},
 		{name: "blocked", mutate: func(detail *plan.PlanDetail, _ string) {
 			detail.State.Status = plan.StatusBlocked
 			detail.Slices.Slices[0].Status = plan.StatusBlocked
-		}, liveStatus: " M partial.go\n", want: "blocked"},
+		}, liveStatus: testenv.StatusFixture(" M partial.go"), want: "blocked"},
 		{name: "manual ownership", mutate: func(detail *plan.PlanDetail, _ string) {
 			detail.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = plan.WorkspaceStrategyCurrent
-		}, liveStatus: " M partial.go\n", want: "workspace strategy"},
+		}, liveStatus: testenv.StatusFixture(" M partial.go"), want: "workspace strategy"},
 		{name: "post-intent", mutate: func(detail *plan.PlanDetail, _ string) {
 			detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Policy: CommitPolicySlice.String()}
-		}, liveStatus: " M partial.go\n", want: "interrupted post-intent completion transaction"},
+		}, liveStatus: testenv.StatusFixture(" M partial.go"), want: "interrupted post-intent completion transaction"},
 	}
 
 	for _, tt := range tests {
@@ -357,7 +357,7 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 			reloaded := cloneRunRestartDetail(t, initial)
 			transportErr := retryableTransportTestError{error: errors.New("transport dropped")}
 			agentCalls := 0
-			baseRunner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+			baseRunner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 			runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 				if agentCalls > 0 {
 					switch runGitKey(args) {
@@ -371,7 +371,7 @@ func TestServiceExecuteTransportRetryStopsAtEveryUnsafeReloadedBoundary(t *testi
 							_, _ = io.WriteString(stdout, tt.liveHead+"\n")
 							return nil
 						}
-					case "status --porcelain --no-renames":
+					case "status --porcelain --no-renames -z":
 						if tt.liveStatus != "" {
 							_, _ = io.WriteString(stdout, tt.liveStatus)
 							return nil

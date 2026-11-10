@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestExecutionBoundaryActionsCharacterizeEveryDisposition(t *testing.T) {
@@ -202,7 +203,7 @@ func TestExecutionBoundaryPreservesLegacyInferenceAndPostIntentRefusals(t *testi
 		input.Detail.Slices.Slices[0].CommitIntent = &plan.SliceCommitIntent{Policy: CommitPolicySlice.String()}
 		input.Branch = "drifted"
 		input.Head = "advanced"
-		input.PorcelainStatus = "UU conflict.go"
+		input.PorcelainStatus = testenv.StatusFixture("UU conflict.go")
 		input.ActiveGitOperation = "rebase"
 
 		action := classifyExecutionBoundary(input)
@@ -216,7 +217,7 @@ func TestExecutionBoundaryPreservesLegacyInferenceAndPostIntentRefusals(t *testi
 		input.Detail.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = plan.WorkspaceStrategyCurrent
 		input.Detail.State.Workspace.Strategy = plan.WorkspaceStrategyCurrent
 		input.WorkspaceStrategy = plan.WorkspaceStrategyCurrent
-		input.PorcelainStatus = " M manual.go"
+		input.PorcelainStatus = testenv.StatusFixture(" M manual.go")
 
 		action := classifyExecutionBoundary(input)
 		if action.EffectiveDisposition != InterruptedSliceManualCompletion || action.RepairRequirement != ExecutionBoundaryRepairManualCompletion || action.AllowWorkspacePreparation || action.AllowAgentHandoff {
@@ -256,7 +257,7 @@ func TestExecutionBoundarySetupSkipsPreparationEffectsForTerminalActions(t *test
 				detail.State.Workspace.Strategy = plan.WorkspaceStrategyCurrent
 			},
 			runner: func(t *testing.T, root string, gitCalls *int) CommandRunner {
-				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M manual.go\n" }, "tao/plan-a", "base")
+				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M manual.go") }, "tao/plan-a", "base")
 				return (&scriptedGitRunner{CallCount: gitCalls, Fallback: base}).Run
 			},
 		},

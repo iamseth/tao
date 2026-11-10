@@ -239,11 +239,15 @@ func (r GuardedSingleConflictResolver) ResolveConflict(ctx context.Context, requ
 	}
 	originalMarkerSizes := markerSizesByPath(conflictFiles, initialMarkerSizes)
 
+	formattedStatus, formatErr := gitops.FormatPorcelainStatusZ(request.ConflictStatus)
+	if formatErr != nil {
+		return reject(result, request.Intent, fmt.Errorf("invalid conflict status %q: %w", request.ConflictStatus, formatErr))
+	}
 	prompt, err := prompts.RenderMergeResolve(prompts.MergeResolveData{
 		Operation: "single-plan squash conflict resolution", PlanID: request.Intent.PlanID,
 		SourceHead: request.Intent.SourceHead, IntegrationBase: request.Intent.DefaultParent,
 		VerifyCommand: request.VerifyCommand, PlanBrief: request.PlanTitle, SourceReview: request.SourceReview,
-		Diff: strings.Join(changedContext, "\n"), ConflictFiles: strings.Join(conflictFiles, "\n") + "\n" + request.ConflictStatus,
+		Diff: strings.Join(changedContext, "\n"), ConflictFiles: strings.Join(conflictFiles, "\n") + "\n" + formattedStatus,
 	})
 	if err != nil {
 		return reject(result, request.Intent, fmt.Errorf("render resolution prompt: %w", err))
@@ -631,7 +635,7 @@ func inspectRequestedRearmBoundary(ctx context.Context, git GitClient, intent pl
 	if sourceErr != nil || defaultErr != nil || headErr != nil || branchErr != nil || statusErr != nil {
 		return errors.Join(sourceErr, defaultErr, headErr, branchErr, statusErr)
 	}
-	if strings.TrimSpace(liveSource) != intent.SourceHead || strings.TrimSpace(liveDefault) != intent.DefaultParent || strings.TrimSpace(head) != intent.DefaultParent || strings.TrimSpace(branch) != intent.DefaultBranch || strings.TrimSpace(status) != "" {
+	if strings.TrimSpace(liveSource) != intent.SourceHead || strings.TrimSpace(liveDefault) != intent.DefaultParent || strings.TrimSpace(head) != intent.DefaultParent || strings.TrimSpace(branch) != intent.DefaultBranch || status != "" {
 		return ErrSingleResolutionDrift
 	}
 	return nil

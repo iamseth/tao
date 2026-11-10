@@ -329,10 +329,11 @@ func interruptedSliceFacts(input InterruptedSliceInput) InterruptedSliceFacts {
 	}
 	paths, ambiguous := gitops.PorcelainPaths(input.PorcelainStatus)
 	facts.ChangedPaths = paths
-	facts.Dirty = strings.TrimSpace(input.PorcelainStatus) != ""
+	facts.Dirty = input.PorcelainStatus != ""
 	facts.AmbiguousStatus = len(ambiguous) > 0
-	for line := range strings.SplitSeq(input.PorcelainStatus, "\n") {
-		if porcelainConflict(line) {
+	entries, _ := gitops.ParsePorcelainStatusZ(input.PorcelainStatus)
+	for _, entry := range entries {
+		if porcelainConflict(entry.Code) {
 			facts.Conflicted = true
 			break
 		}

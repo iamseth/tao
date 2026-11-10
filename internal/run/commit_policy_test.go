@@ -139,8 +139,8 @@ func TestRunReturnsDirtyWorktreeErrorBeforeCheckout(t *testing.T) {
 			_, _ = io.WriteString(stdout, "feature\n")
 		case "symbolic-ref --quiet --short refs/remotes/origin/HEAD":
 			_, _ = io.WriteString(stdout, "origin/main\n")
-		case "status --porcelain --no-renames":
-			_, _ = io.WriteString(stdout, " M internal/run/run.go\n")
+		case "status --porcelain --no-renames -z":
+			_, _ = io.WriteString(stdout, testenv.StatusFixture(" M internal/run/run.go"))
 		case "checkout main":
 			t.Fatal("checkout should not run with a dirty worktree")
 		}

@@ -274,7 +274,7 @@ func TestFinishAggregateReworkRejectsBeforeStaging(t *testing.T) {
 				fingerprint = strings.Repeat("0", 64)
 			}
 			state := BatchState{ID: "batch-1", Attempts: BatchAttempts{AggregateRework: 1}, Review: &BatchReview{Status: "applying", CommitMessage: editSettlementTestMessage(t, "batch-1"), ResolutionPaths: paths, ResolutionFingerprint: fingerprint}}
-			git := &fakeGitClient{root: root, status: " M file\n"}
+			git := &fakeGitClient{root: root, status: " M file\x00"}
 			_, err = (BatchAggregateReviewer{}).finishAggregateRework(context.Background(), git, state, root)
 			if err == nil {
 				t.Fatal("accepted invalid edits")
@@ -313,7 +313,7 @@ func TestFinishAggregateReworkStagesDotBeforePreparedCommit(t *testing.T) {
 	}
 	git := &fakeGitClient{
 		root:          root,
-		status:        "?? reworked.txt\n",
+		status:        "?? reworked.txt\x00",
 		stagedChanges: true,
 		revParse:      map[string]string{"HEAD": "committed-head"},
 	}

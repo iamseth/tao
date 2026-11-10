@@ -171,7 +171,7 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 		{name: "exact head", liveBranch: "feature", liveHead: "failed-head"},
 		{name: "advanced clean head", liveBranch: "feature", liveHead: "advanced-head"},
 		{name: "diverged head", liveBranch: "feature", liveHead: "diverged-head", diverged: true, wantErr: "or its descendant"},
-		{name: "dirty worktree", liveBranch: "feature", liveHead: "failed-head", status: " M repaired.go\n", wantErr: "clean worktree"},
+		{name: "dirty worktree", liveBranch: "feature", liveHead: "failed-head", status: testenv.StatusFixture(" M repaired.go"), wantErr: "clean worktree"},
 		{name: "different branch", liveBranch: "other", liveHead: "failed-head", wantErr: "does not match recorded branch"},
 		{name: "unsettled slice work", liveBranch: "feature", liveHead: "failed-head", unsettled: true, wantErr: "settled slice work"},
 	}
@@ -191,7 +191,7 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 					return nil
 				}
 				switch runGitKey(args) {
-				case "status --porcelain --no-renames":
+				case "status --porcelain --no-renames -z":
 					_, _ = io.WriteString(stdout, test.status)
 				case "branch --show-current":
 					_, _ = io.WriteString(stdout, test.liveBranch+"\n")

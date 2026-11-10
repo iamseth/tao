@@ -43,7 +43,7 @@ func TestPrepareMergeEditsDoesNotStage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "file"), []byte("fixed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	git := &fakeGitClient{root: root, status: " M file\n"}
+	git := &fakeGitClient{root: root, status: " M file\x00"}
 	edits, err := prepareMergeEdits(context.Background(), git)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestAggregateFingerprintStagesExactBuckets(t *testing.T) {
 	}
 	message := editSettlementTestMessage(t, "batch-1")
 	state := BatchState{ID: "batch-1", IntegrationHead: "parent", Attempts: BatchAttempts{AggregateRework: 1}, Review: &BatchReview{Status: "applying", CommitMessage: message, ResolutionPaths: paths, ResolutionFingerprint: fingerprint}}
-	git := &fakeGitClient{root: root, status: "D  deleted\n M tracked\n?? new\n", stagedChanges: true, revParse: map[string]string{"HEAD": "committed"}}
+	git := &fakeGitClient{root: root, status: "D  deleted\x00 M tracked\x00?? new\x00", stagedChanges: true, revParse: map[string]string{"HEAD": "committed"}}
 	_, err = (BatchAggregateReviewer{Store: &batchReviewTestStore{dir: t.TempDir()}}).finishAggregateRework(context.Background(), git, state, root)
 	if err != nil {
 		t.Fatal(err)

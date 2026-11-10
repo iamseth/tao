@@ -183,7 +183,7 @@ func TestInspectRecordedWorkspaceDoesNotAdvanceUnsafeOrUnprovenBoundary(t *testi
 		wantErr string
 	}{
 		{name: "unsafe branch", branch: "master", wantErr: "unsafe ready workspace branch"},
-		{name: "dirty workspace", branch: "tao/plan-a", status: " M unproven.go\n", wantErr: "contains unattributed changes"},
+		{name: "dirty workspace", branch: "tao/plan-a", status: testenv.StatusFixture(" M unproven.go"), wantErr: "contains unattributed changes"},
 		{name: "unproven clean head", branch: "tao/plan-a", unprove: true, wantErr: "differs from durable workspace metadata"},
 	}
 	for _, tt := range tests {

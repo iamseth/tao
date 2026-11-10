@@ -16,12 +16,12 @@ func TestStatusPorcelainPathParsing(t *testing.T) {
 		{name: "modified", line: " M internal/run/finalize.go", wantPath: "internal/run/finalize.go"},
 		{name: "added", line: "A  internal/gitops/status.go", wantPath: "internal/gitops/status.go"},
 		{name: "untracked", line: "?? docs/plan.md", wantPath: "docs/plan.md"},
-		{name: "quoted spaces", line: ` M "docs/05 - Operations/S3 Buckets.md"`, wantPath: "docs/05 - Operations/S3 Buckets.md"},
-		{name: "quoted escape", line: ` M "docs/tab\tname.md"`, wantPath: "docs/tab\tname.md"},
-		{name: "malformed quote ambiguous", line: ` M "docs/missing-end.md`, ambiguous: true},
+		{name: "quoted spaces", line: ` M "docs/05 - Operations/S3 Buckets.md"`, wantPath: `"docs/05 - Operations/S3 Buckets.md"`},
+		{name: "quoted escape", line: ` M "docs/tab\tname.md"`, wantPath: `"docs/tab\tname.md"`},
+		{name: "malformed quote ambiguous", line: ` M "docs/missing-end.md`, wantPath: `"docs/missing-end.md`},
 		{name: "rename ambiguous", line: "R  old.go -> new.go", ambiguous: true},
 		{name: "copy ambiguous", line: "C  old.go -> new.go", ambiguous: true},
-		{name: "arrow ambiguous", line: " M old.go -> new.go", ambiguous: true},
+		{name: "arrow ambiguous", line: " M old.go -> new.go", wantPath: "old.go -> new.go"},
 		{name: "empty path ambiguous", line: " M ", ambiguous: true},
 		{name: "malformed ambiguous", line: " M", ambiguous: true},
 	}
@@ -32,6 +32,22 @@ func TestStatusPorcelainPathParsing(t *testing.T) {
 				t.Fatalf("PorcelainPath(%q) = %q, %v; want %q, %v", test.line, got, ambiguous, test.wantPath, test.ambiguous)
 			}
 		})
+	}
+}
+
+func TestStatusExactNULPaths(t *testing.T) {
+	want := []string{" file.go", "file.go ", "old -> new", "tab\tline\n"}
+	status := ""
+	for _, p := range want {
+		status += " M " + p + "\x00"
+	}
+	paths, ambiguous := PorcelainPaths(status)
+	if !slices.Equal(paths, want) || len(ambiguous) != 0 {
+		t.Fatalf("paths=%q ambiguous=%q", paths, ambiguous)
+	}
+	paths, ambiguous = PorcelainPaths(status + " M truncated")
+	if len(paths) != 0 || len(ambiguous) == 0 {
+		t.Fatalf("partial authority: %q %q", paths, ambiguous)
 	}
 }
 
@@ -55,21 +71,21 @@ func TestStatusProtectedBranch(t *testing.T) {
 
 func TestStatusPorcelainPaths(t *testing.T) {
 	t.Parallel()
-	status := "\n M internal/run/run_setup.go\n\t\n?? docs/usage.md\nR  old.go -> new.go\nC  copied.go -> clone.go\n"
+	status := " M internal/run/run_setup.go\x00?? docs/usage.md\x00"
 	paths, ambiguous := PorcelainPaths(status)
 	if want := []string{"internal/run/run_setup.go", "docs/usage.md"}; !slices.Equal(paths, want) {
 		t.Fatalf("paths = %v, want %v", paths, want)
 	}
-	if want := []string{"R  old.go -> new.go", "C  copied.go -> clone.go"}; !slices.Equal(ambiguous, want) {
+	if want := []string(nil); !slices.Equal(ambiguous, want) {
 		t.Fatalf("ambiguous = %v, want %v", ambiguous, want)
 	}
 }
 
 func TestFingerprintPorcelainPathsPreserveRenameCopyAndQuotedPaths(t *testing.T) {
 	t.Parallel()
-	status := "R  old.go -> new.go\nC  source.go -> copied.go\n M \"path with spaces.go\"\nR  \"old name.go\" -> \"new name.go\"\r\n"
+	status := "D  old.go\x00A  new.go\x00 M \"path with spaces.go\"\x00 M old -> new.go \x00"
 	got := porcelainPaths(status)
-	want := []string{"new.go", "copied.go", "path with spaces.go", "new name.go"}
+	want := []string{"old.go", "new.go", `"path with spaces.go"`, "old -> new.go "}
 	if !slices.Equal(got, want) {
 		t.Fatalf("porcelainPaths() = %v, want %v", got, want)
 	}

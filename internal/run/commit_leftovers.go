@@ -10,12 +10,12 @@ import (
 )
 
 type commitLeftoverAmbiguousStatusError struct {
-	Lines []string
+	Lines []string // Escaped presentation records, also consumed directly by review diagnostics.
 }
 
 func (e *commitLeftoverAmbiguousStatusError) Error() string {
 	if len(e.Lines) == 1 {
-		return fmt.Sprintf("ambiguous git status entry %q", e.Lines[0])
+		return fmt.Sprintf("ambiguous git status entry %s", e.Lines[0])
 	}
 	return fmt.Sprintf("ambiguous git status entries: %s", strings.Join(e.Lines, ", "))
 }
@@ -29,7 +29,11 @@ func commitLeftovers(detail *plan.PlanDetail, status string, isStartingDirty fun
 	}
 	cls := commit.ClassifyStatus(status, isStartingDirty)
 	if len(cls.AmbiguousLines) > 0 {
-		return nil, &commitLeftoverAmbiguousStatusError{Lines: cls.AmbiguousLines}
+		escaped := make([]string, len(cls.AmbiguousLines))
+		for i, record := range cls.AmbiguousLines {
+			escaped[i] = fmt.Sprintf("%q", record)
+		}
+		return nil, &commitLeftoverAmbiguousStatusError{Lines: escaped}
 	}
 	seen := map[string]bool{}
 	var paths []string

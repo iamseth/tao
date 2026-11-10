@@ -232,7 +232,7 @@ func inspectSingleMergeIntent(ctx context.Context, git GitClient, detail *plan.P
 		SourceBranchExists: true, DefaultBranchExists: true,
 		DefaultAdvanced: advancedErr == nil && advanced,
 		DefaultRewound:  rewoundErr == nil && rewound,
-		Dirty:           statusErr != nil || strings.TrimSpace(status) != "",
+		Dirty:           statusErr != nil || status != "",
 		ActiveOperation: operation,
 		// Once requested evidence is loaded from disk, provider invocation is
 		// conservatively ambiguous; only invocation-local code can prove the
@@ -382,18 +382,21 @@ func collectConflictFiles(ctx context.Context, git GitClient) []string {
 		return append([]string(nil), changes.unmergedPaths...)
 	}
 
-	// Retain the line-oriented fallback for lightweight GitClient test doubles.
+	// The no-renames fallback also requires complete NUL framing.
 	status, err := git.StatusPorcelain(ctx)
 	if err != nil {
 		return nil
 	}
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return nil
+	}
 	seen := make(map[string]struct{})
-	for line := range strings.SplitSeq(status, "\n") {
-		if len(line) < 4 || !unmergedStatusCode(line[:2]) {
-			continue
-		}
-		if path := strings.TrimSpace(line[3:]); path != "" {
-			seen[path] = struct{}{}
+	for _, entry := range entries {
+		if unmergedStatusCode(entry.Code) {
+			if path, err := validatePorcelainPath(entry.Path); err == nil {
+				seen[path] = struct{}{}
+			}
 		}
 	}
 	files := make([]string, 0, len(seen))

@@ -1,56 +1,35 @@
 package gitops
 
-import (
-	"path/filepath"
-	"strconv"
-	"strings"
-)
-
 // ProtectedBranch is the single protected-branch predicate for branches Tao must not modify directly.
 func ProtectedBranch(branch string) bool {
 	return branch == "main" || branch == "master"
 }
 
-// PorcelainPaths returns parsed paths and ambiguous raw lines from git status --porcelain output.
+// PorcelainPaths parses the complete raw NUL stream. Invalid streams return no
+// candidate paths and retain the raw input for escaped refusal diagnostics.
 func PorcelainPaths(status string) (paths []string, ambiguous []string) {
-	for line := range strings.SplitSeq(status, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		path, isAmbiguous := PorcelainPath(line)
-		if isAmbiguous {
-			ambiguous = append(ambiguous, line)
-			continue
-		}
-		paths = append(paths, path)
+	entries, err := ParsePorcelainStatusZ(status)
+	if err != nil {
+		return nil, []string{status}
 	}
-	return paths, ambiguous
+	for _, entry := range entries {
+		paths = append(paths, entry.Path)
+	}
+	return paths, nil
 }
 
-// PorcelainPath returns the path from a git status --porcelain line.
-// Rename/copy entries and malformed entries are reported as ambiguous.
+// PorcelainPath parses one raw XY-space-path record without its NUL terminator.
+// It does not unquote paths or interpret arrows; rename/copy codes are refused.
 func PorcelainPath(line string) (string, bool) {
-	if len(line) < 4 {
+	entries, err := ParsePorcelainStatusZ(line + "\x00")
+	if err != nil || len(entries) != 1 {
 		return "", true
 	}
-	status := line[:2]
-	path := strings.TrimSpace(line[3:])
-	if strings.ContainsAny(status, "RC") || strings.Contains(path, " -> ") || path == "" {
-		return "", true
-	}
-	if strings.HasPrefix(path, `"`) {
-		decoded, err := strconv.Unquote(path)
-		if err != nil {
-			return "", true
-		}
-		path = decoded
-	} else if strings.Contains(path, `"`) {
-		return "", true
-	}
-	return filepath.ToSlash(path), false
+	return entries[0].Path, false
 }
 
-// PorcelainIndexStatus reports whether a porcelain line has an index status.
+// PorcelainIndexStatus reports index status for one raw record without its NUL.
 func PorcelainIndexStatus(line string) bool {
-	return len(line) >= 1 && line[0] != ' ' && line[0] != '?'
+	_, ambiguous := PorcelainPath(line)
+	return !ambiguous && line[0] != ' ' && line[0] != '?'
 }

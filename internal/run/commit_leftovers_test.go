@@ -2,6 +2,7 @@ package run
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestCommitLeftoversDetectsRunProducedFilesSortedDeduped(t *testing.T) {
@@ -16,7 +18,7 @@ func TestCommitLeftoversDetectsRunProducedFilesSortedDeduped(t *testing.T) {
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"b.go"}},
 	})
-	status := " M b.go\n?? a.go\n M b.go\n"
+	status := testenv.StatusFixture(" M b.go", "?? a.go", " M b.go")
 
 	got, err := commitLeftovers(detail, status, nil)
 	if err != nil {
@@ -34,7 +36,7 @@ func TestCommitLeftoversCleanTreeReturnsNone(t *testing.T) {
 		{ID: "001-a", ExpectedFiles: []string{"internal/run/commit_leftovers.go"}},
 	})
 
-	got, err := commitLeftovers(detail, "", nil)
+	got, err := commitLeftovers(detail, testenv.StatusFixture(), nil)
 	if err != nil {
 		t.Fatalf("commitLeftovers returned error: %v", err)
 	}
@@ -48,7 +50,7 @@ func TestCommitLeftoversExcludesTaoAndStartingDirtyPaths(t *testing.T) {
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"internal/run/commit_leftovers.go"}},
 	})
-	status := "?? .tao/state.json\n M ./.tao/workspaces/plan/file.go\n M README.md\n M internal/run/unrelated.go\n"
+	status := testenv.StatusFixture("?? .tao/state.json", " M ./.tao/workspaces/plan/file.go", " M README.md", " M internal/run/unrelated.go")
 
 	got, err := commitLeftovers(detail, status, commit.StartingDirtyPredicate([]string{"./README.md"}))
 	if err != nil {
@@ -65,7 +67,7 @@ func TestCommitLeftoversSurfacesAmbiguousStatusEntry(t *testing.T) {
 	detail := commitLeftoversPlanDetail([]string{"001-a"}, []plan.Slice{
 		{ID: "001-a", ExpectedFiles: []string{"new.go"}},
 	})
-	status := "R  old.go -> new.go\n"
+	status := "R  new.go\x00old.go\x00"
 
 	got, err := commitLeftovers(detail, status, nil)
 	if err == nil {
@@ -75,7 +77,7 @@ func TestCommitLeftoversSurfacesAmbiguousStatusEntry(t *testing.T) {
 	if !errors.As(err, &ambiguous) {
 		t.Fatalf("commitLeftovers() error = %T %v, want *commitLeftoverAmbiguousStatusError", err, err)
 	}
-	if !slices.Equal(ambiguous.Lines, []string{"R  old.go -> new.go"}) {
+	if !slices.Equal(ambiguous.Lines, []string{fmt.Sprintf("%q", status)}) {
 		t.Fatalf("ambiguous lines = %v, want rename line", ambiguous.Lines)
 	}
 }

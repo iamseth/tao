@@ -98,7 +98,7 @@ func TestResumeNoteAdmittedContinuation(t *testing.T) {
 				calls := 0
 				wantNote := mode == "continue" || mode == "transport"
 				err = newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
-					CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base"),
+					CommandRunner:       interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base"),
 					EventAppender:       eventAppenderFunc(func(string, plan.Event) error { return nil }),
 					PlanRecordFactory:   memoryPlanRecordFactory,
 					TransportRetryDelay: func(context.Context, time.Duration) error { return nil },

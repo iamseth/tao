@@ -19,15 +19,29 @@ func TestMetadataPathCompatibility(t *testing.T) {
 	}
 }
 
+func TestClassifyStatusExactIdentityAndWholeStreamRefusal(t *testing.T) {
+	status := " M file\x00 M file \x00??  file\x00A  .tao-old -> .tao/new\x00M  .tao/old -> .tao/new\x00"
+	got := ClassifyStatus(status, StartingDirtyPredicate([]string{"file "}))
+	if !slices.Equal(got.CommitCandidates, []string{"file", "file ", " file", ".tao-old -> .tao/new"}) || !slices.Equal(got.StartingDirtyPaths, []string{"file "}) || !slices.Equal(got.TaoStagedPaths, []string{".tao/old -> .tao/new"}) {
+		t.Fatalf("classification: %+v", got)
+	}
+	for _, tail := range []string{" M truncated", "\x00", "XX invalid\x00", "R  target\x00source\x00", "C  target\x00source\x00"} {
+		got := ClassifyStatus(status+tail, nil)
+		if len(got.CommitCandidates) != 0 || len(got.TaoStagedPaths) != 0 || len(got.AmbiguousLines) == 0 {
+			t.Fatalf("partial authority for %q: %+v", tail, got)
+		}
+	}
+}
+
 func TestClassifyStatusPreservesAutomaticSliceSafety(t *testing.T) {
 	status := strings.Join([]string{
 		" M internal/run/run.go",
 		"M  .tao/state.json",
 		"?? .tao/local.json",
-		"R  .tao/old.json -> .tao/new.json",
-		"R  old.go -> new.go",
+		"D  .tao/old.json",
+		"A  .tao/new.json",
 		"?? .env.example",
-	}, "\n")
+	}, "\x00") + "\x00"
 	classification := ClassifyStatus(status, StartingDirtyPredicate([]string{"./internal/run/run.go"}))
 
 	if want := []string{"internal/run/run.go", ".env.example"}; !slices.Equal(classification.CommitCandidates, want) {
@@ -36,7 +50,7 @@ func TestClassifyStatusPreservesAutomaticSliceSafety(t *testing.T) {
 	if want := []string{".tao/state.json", ".tao/old.json", ".tao/new.json"}; !slices.Equal(classification.TaoStagedPaths, want) {
 		t.Fatalf("TaoStagedPaths = %q, want %q", classification.TaoStagedPaths, want)
 	}
-	if want := []string{"R  old.go -> new.go"}; !slices.Equal(classification.AmbiguousLines, want) {
+	if want := []string(nil); !slices.Equal(classification.AmbiguousLines, want) {
 		t.Fatalf("AmbiguousLines = %q, want %q", classification.AmbiguousLines, want)
 	}
 	if want := []string{"internal/run/run.go"}; !slices.Equal(classification.StartingDirtyPaths, want) {
@@ -144,7 +158,7 @@ func TestClassifyStatusSplitsStagingBuckets(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			classification := ClassifyStatus(test.status, nil)
+			classification := ClassifyStatus(strings.ReplaceAll(test.status, "\n", "\x00")+"\x00", nil)
 			if !slices.Equal(classification.CommitCandidates, test.candidates) {
 				t.Errorf("CommitCandidates = %q, want %q", classification.CommitCandidates, test.candidates)
 			}

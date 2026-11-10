@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/gitops"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
@@ -883,7 +884,11 @@ func renderMergeDirtyWorktree(out io.Writer, detail *plan.PlanDetail, planID str
 		return err
 	}
 	if ok {
-		if err := renderIndentedBlock(out, "Status:", dirty.Status); err != nil {
+		status, formatErr := gitops.FormatPorcelainStatusZ(dirty.Status)
+		if formatErr != nil {
+			status = fmt.Sprintf("invalid porcelain status %q: %v", dirty.Status, formatErr)
+		}
+		if err := renderIndentedBlock(out, "Status:", status); err != nil {
 			return err
 		}
 	}

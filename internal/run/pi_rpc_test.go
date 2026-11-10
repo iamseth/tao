@@ -218,7 +218,7 @@ func TestServiceExecuteRecoversStructuredPiTransportFailureThroughFreshRPCProces
 	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail, detail, detail, completed}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: piTransportGitRunner(t, detail, root, func() string {
 			if len(processes) < 2 {
-				return " M partial.go\n"
+				return testenv.StatusFixture(" M partial.go")
 			}
 			return ""
 		}),
@@ -294,7 +294,7 @@ func TestServiceExecuteStructuredPiTransportFailuresStopAfterThirdSession(t *tes
 	var delays []time.Duration
 	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 		RepositoryAdmission: testRepositoryAdmission,
-		CommandRunner:       piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" }),
+		CommandRunner:       piTransportGitRunner(t, detail, root, func() string { return testenv.StatusFixture(" M partial.go") }),
 		ProcessStarter:      starter,
 		TransportRetryDelay: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
@@ -399,7 +399,7 @@ func TestServiceExecuteDoesNotRetryUnstructuredPiWebSocketErrorOrTimeout(t *test
 				return fileRepo.AppendEvent(planDir, event)
 			})
 			delayCalls := 0
-			gitRunner := piTransportGitRunner(t, detail, root, func() string { return " M partial.go\n" })
+			gitRunner := piTransportGitRunner(t, detail, root, func() string { return testenv.StatusFixture(" M partial.go") })
 			service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
@@ -501,7 +501,7 @@ func piTransportGitRunner(t *testing.T, detail *plan.PlanDetail, root string, st
 		}
 		if actualCWD == detail.State.Repo.Root && name == "git" {
 			switch runGitKey(args) {
-			case "status --porcelain --no-renames", "status --porcelain --untracked-files=all --no-renames", "diff HEAD", "diff --name-only HEAD":
+			case "status --porcelain --no-renames -z", "status --porcelain --untracked-files=all --no-renames -z", "diff HEAD", "diff --name-only --no-renames -z HEAD":
 				return nil
 			case "rev-parse HEAD":
 				_, err := io.WriteString(stdout, "control-head\n")

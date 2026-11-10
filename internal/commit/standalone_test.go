@@ -53,9 +53,9 @@ func TestFinalizeStandaloneProposalRefusesDriftBeforeStaging(t *testing.T) {
 		mutate func(*standaloneGitStub)
 	}{
 		{name: "head", mutate: func(git *standaloneGitStub) { git.head = "head-b" }},
-		{name: "status", mutate: func(git *standaloneGitStub) { git.status = "M  source.go\n" }},
+		{name: "status", mutate: func(git *standaloneGitStub) { git.status = "M  source.go\x00" }},
 		{name: "allowed paths", mutate: func(git *standaloneGitStub) {
-			git.status += " M other.go\n"
+			git.status += " M other.go\x00"
 			git.diffs["other.go"] = "+other\n"
 		}},
 		{name: "allowed diff", mutate: func(git *standaloneGitStub) { git.diffs["source.go"] = "+after\n" }},
@@ -64,7 +64,7 @@ func TestFinalizeStandaloneProposalRefusesDriftBeforeStaging(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			git := &standaloneGitStub{contextGitStub: contextGitStub{
-				head: "head-a", status: " M source.go\n", diffs: map[string]string{"source.go": "+before\n"},
+				head: "head-a", status: " M source.go\x00", diffs: map[string]string{"source.go": "+before\n"},
 			}}
 			preflight, err := BuildStandaloneContext(context.Background(), git, root)
 			if err != nil {
@@ -323,7 +323,7 @@ func TestStandalonePushRefusesPostCommitDrift(t *testing.T) {
 	for _, scenario := range []string{"branch", "head", "upstream", "endpoint"} {
 		t.Run(scenario, func(t *testing.T) {
 			git := &standalonePublisherStub{
-				standaloneGitStub: standaloneGitStub{contextGitStub: contextGitStub{head: strings.Repeat("a", 40), status: " M source.go\n", diffs: map[string]string{"source.go": "+change\n"}}},
+				standaloneGitStub: standaloneGitStub{contextGitStub: contextGitStub{head: strings.Repeat("a", 40), status: " M source.go\x00", diffs: map[string]string{"source.go": "+change\n"}}},
 				branch:            "main", destination: gitops.TrackingDestination{Remote: "origin", Ref: "refs/heads/main", PushURL: "original"},
 				afterCommit: func(g *standalonePublisherStub) {
 					switch scenario {
@@ -397,12 +397,12 @@ func TestFinalizeStandaloneStagesByPorcelainBucket(t *testing.T) {
 		wantAdd     [][]string
 		wantTracked [][]string
 	}{
-		{name: "git rm deletion needs no staging", status: "D  gone.go\n", diffs: map[string]string{"gone.go": "-gone\n"}},
-		{name: "tracked change uses forced tracked staging", status: " M edited.go\n", diffs: map[string]string{"edited.go": "+edit\n"}, wantTracked: [][]string{{"edited.go"}}},
-		{name: "untracked path uses plain add", status: "?? fresh.go\n", diffs: map[string]string{}, wantAdd: [][]string{{"fresh.go"}}},
+		{name: "git rm deletion needs no staging", status: "D  gone.go\x00", diffs: map[string]string{"gone.go": "-gone\n"}},
+		{name: "tracked change uses forced tracked staging", status: " M edited.go\x00", diffs: map[string]string{"edited.go": "+edit\n"}, wantTracked: [][]string{{"edited.go"}}},
+		{name: "untracked path uses plain add", status: "?? fresh.go\x00", diffs: map[string]string{}, wantAdd: [][]string{{"fresh.go"}}},
 		{
 			name:        "mixed buckets stage in two calls",
-			status:      "D  gone.go\n D removed.go\n?? fresh.go\n",
+			status:      "D  gone.go\x00 D removed.go\x00?? fresh.go\x00",
 			diffs:       map[string]string{"gone.go": "-gone\n", "removed.go": "-removed\n"},
 			wantAdd:     [][]string{{"fresh.go"}},
 			wantTracked: [][]string{{"removed.go"}},
@@ -443,7 +443,7 @@ func TestStandaloneContextStagingBucketsStayOutOfJSONAndFingerprint(t *testing.T
 	root := t.TempDir()
 	writeStandaloneFile(t, root, "fresh.go", "package fresh\n")
 	git := &standaloneGitStub{contextGitStub: contextGitStub{
-		head: "head-a", status: "D  gone.go\n M edited.go\n?? fresh.go\n",
+		head: "head-a", status: "D  gone.go\x00 M edited.go\x00?? fresh.go\x00",
 		diffs: map[string]string{"gone.go": "-gone\n", "edited.go": "+edit\n"},
 	}}
 	got, err := BuildStandaloneContext(context.Background(), git, root)

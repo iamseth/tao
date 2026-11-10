@@ -245,7 +245,7 @@ type scriptedGitRunner struct {
 	Origin    string   // response for "symbolic-ref --quiet --short refs/remotes/origin/HEAD" (default "origin/main")
 	Statuses  []string // successive responses for porcelain status, plain or explicit-all
 	Diffs     []string // successive responses for "diff HEAD"
-	DiffNames []string // successive responses for "diff --name-only HEAD"
+	DiffNames []string // successive NUL responses for "diff --name-only --no-renames -z HEAD"
 
 	Outputs   map[string]string        // fixed responses for additional git keys
 	Responses map[string]func() string // live responses tied to test state
@@ -270,7 +270,9 @@ type scriptedGitRunner struct {
 }
 
 // newScriptedGitRunner returns a runner that serves statuses in order and
-// defaults to branch="feature" and origin="origin/main".
+// defaults to branch="feature" and origin="origin/main". Ordinary non-empty
+// status fixtures are framed by testenv.StatusFixture at the call site; runners
+// pass bytes through unchanged so malformed and format-contract tests stay explicit.
 func newScriptedGitRunner(statuses ...string) *scriptedGitRunner {
 	return &scriptedGitRunner{Branch: "feature", Head: "head123", Origin: "origin/main", Statuses: statuses}
 }
@@ -337,7 +339,7 @@ func (r *scriptedGitRunner) Run(ctx context.Context, cwd, name string, args []st
 		if r.Origin != "" {
 			_, _ = io.WriteString(stdout, r.Origin+"\n")
 		}
-	case "status --porcelain --no-renames", "status --porcelain --untracked-files=all --no-renames":
+	case "status --porcelain --no-renames -z", "status --porcelain --untracked-files=all --no-renames -z":
 		if r.statusIdx < len(r.Statuses) {
 			_, _ = io.WriteString(stdout, r.Statuses[r.statusIdx])
 			r.statusIdx++
@@ -347,7 +349,7 @@ func (r *scriptedGitRunner) Run(ctx context.Context, cwd, name string, args []st
 			_, _ = io.WriteString(stdout, r.Diffs[r.diffIdx])
 			r.diffIdx++
 		}
-	case "diff --name-only HEAD":
+	case "diff --name-only --no-renames -z HEAD":
 		if r.nameIdx < len(r.DiffNames) {
 			_, _ = io.WriteString(stdout, r.DiffNames[r.nameIdx])
 			r.nameIdx++
@@ -457,7 +459,7 @@ func interruptedServiceGitRunner(t *testing.T, root string, calls *[]string, sta
 				t.Fatalf("HEAD cwd = %q, want immutable root %q", actualCWD, root)
 			}
 			_, _ = io.WriteString(stdout, head+"\n")
-		case "status --porcelain --no-renames", "status --porcelain --untracked-files=all --no-renames":
+		case "status --porcelain --no-renames -z", "status --porcelain --untracked-files=all --no-renames -z":
 			if actualCWD != root {
 				t.Fatalf("status cwd = %q, want immutable root %q", actualCWD, root)
 			}

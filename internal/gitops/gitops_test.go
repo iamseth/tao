@@ -68,7 +68,7 @@ func TestStatusPorcelainAllUntrackedStagedMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status != "A  nested/new.txt\nD  old.txt\n" || strings.Contains(status, " -> ") {
+	if status != "A  nested/new.txt\x00D  old.txt\x00" || strings.Contains(status, " -> ") {
 		t.Fatalf("status = %q", status)
 	}
 }
@@ -89,14 +89,14 @@ func TestStatusHelpersStagedMove(t *testing.T) {
 		}
 		return defaultRunner(ctx, cwd, name, args, stdout, stderr)
 	})
-	const want = "A  new.txt\nD  old.txt\n"
+	const want = "A  new.txt\x00D  old.txt\x00"
 	status, err := client.StatusPorcelain(context.Background())
 	if err != nil || status != want {
 		t.Fatalf("StatusPorcelain = %q, %v", status, err)
 	}
 	observed.Reset()
 	worktree, err := client.WorktreeStatus(context.Background(), root)
-	if err != nil || !worktree.Dirty || observed.String() != want {
+	if err != nil || !worktree.Dirty || observed.String() != "A  new.txt\nD  old.txt\n" {
 		t.Fatalf("WorktreeStatus = %+v, %v; porcelain = %q", worktree, err, observed.String())
 	}
 }
@@ -515,16 +515,16 @@ func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
-			key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"): "?? nested/a.go\n",
-			key("-C", "/repo", "diff", "HEAD", "--", "a.go"):                                     "diff-a\n",
-			key("-C", "/repo", "log", "--oneline", "-12"):                                        "abc feat(a): change\n",
+			key("-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z"): "?? nested/a.go\x00",
+			key("-C", "/repo", "diff", "HEAD", "--", "a.go"):                                           "diff-a\n",
+			key("-C", "/repo", "log", "--oneline", "-12"):                                              "abc feat(a): change\n",
 		},
 		stderr:   map[string]string{},
 		failures: map[string]error{},
 	}
 	client := NewClient("/repo", runner.run)
 	ctx := context.Background()
-	if status, err := client.StatusPorcelainAllUntracked(ctx); err != nil || status != "?? nested/a.go\n" {
+	if status, err := client.StatusPorcelainAllUntracked(ctx); err != nil || status != "?? nested/a.go\x00" {
 		t.Fatalf("StatusPorcelainAllUntracked() = %q, %v", status, err)
 	}
 	if diff, err := client.WorkingDiff(ctx, "a.go"); err != nil || diff != "diff-a\n" {
@@ -534,7 +534,7 @@ func TestStandaloneCommitPrimitivesConstructScopedCommands(t *testing.T) {
 		t.Fatalf("RecentLog() = %q, %v", log, err)
 	}
 	want := []call{
-		{cwd: "", name: "git", args: []string{"-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames"}},
+		{cwd: "", name: "git", args: []string{"-C", "/repo", "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z"}},
 		{cwd: "", name: "git", args: []string{"-C", "/repo", "diff", "HEAD", "--", "a.go"}},
 		{cwd: "", name: "git", args: []string{"-C", "/repo", "log", "--oneline", "-12"}},
 	}
@@ -625,10 +625,10 @@ func TestOutputTrimmingAndRawOutput(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs: map[string]string{
-			key("-C", "/repo", "branch", "--show-current"):              " feature \n",
-			key("-C", "/repo", "status", "--porcelain", "--no-renames"): " M a.go\n?? b.go\n",
-			key("-C", "/repo", "diff", "main...HEAD"):                   "diff --git a/a.go b/a.go\n+line\n",
-			key("-C", "/repo", "diff", "--stat", "main...HEAD"):         " a.go | 1 +\n",
+			key("-C", "/repo", "branch", "--show-current"):                    " feature \n",
+			key("-C", "/repo", "status", "--porcelain", "--no-renames", "-z"): " M a.go\x00?? b.go\x00",
+			key("-C", "/repo", "diff", "main...HEAD"):                         "diff --git a/a.go b/a.go\n+line\n",
+			key("-C", "/repo", "diff", "--stat", "main...HEAD"):               " a.go | 1 +\n",
 		},
 		stderr:   map[string]string{},
 		failures: map[string]error{},
@@ -647,7 +647,7 @@ func TestOutputTrimmingAndRawOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status != " M a.go\n?? b.go\n" {
+	if status != " M a.go\x00?? b.go\x00" {
 		t.Fatalf("expected raw status, got %q", status)
 	}
 	diff, err := client.Diff(ctx, "main...HEAD")
@@ -670,8 +670,8 @@ func TestErrorFormattingIncludesGitCommandAndStderr(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{
 		outputs:  map[string]string{},
-		stderr:   map[string]string{key("-C", "/repo", "status", "--porcelain", "--no-renames"): "fatal: not a git repository\n"},
-		failures: map[string]error{key("-C", "/repo", "status", "--porcelain", "--no-renames"): errors.New("exit status 128")},
+		stderr:   map[string]string{key("-C", "/repo", "status", "--porcelain", "--no-renames", "-z"): "fatal: not a git repository\n"},
+		failures: map[string]error{key("-C", "/repo", "status", "--porcelain", "--no-renames", "-z"): errors.New("exit status 128")},
 	}
 	client := NewClient("/repo", runner.run)
 
@@ -679,7 +679,7 @@ func TestErrorFormattingIncludesGitCommandAndStderr(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got, want := err.Error(), "git status --porcelain --no-renames: exit status 128: fatal: not a git repository"; got != want {
+	if got, want := err.Error(), "git status --porcelain --no-renames -z: exit status 128: fatal: not a git repository"; got != want {
 		t.Fatalf("error mismatch\nwant %q\n got %q", want, got)
 	}
 }

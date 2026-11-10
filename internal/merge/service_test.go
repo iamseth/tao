@@ -31,14 +31,14 @@ func TestDirtyWorktreeErrorUntracked(t *testing.T) {
 		only   bool
 		paths  []string
 	}{
-		{"untracked only", "?? z.pyc\n?? a.pyc\n", true, []string{"a.pyc", "z.pyc"}},
-		{"mixed", " M tracked.go\n?? cache.pyc\n", false, []string{"cache.pyc"}},
-		{"staged", "A  tracked.go\n", false, nil},
-		{"rename", "R  old -> new\n?? cache.pyc\n", false, []string{"cache.pyc"}},
-		{"quoted spaces", "?? \"cache with spaces.pyc\"\n", true, []string{"cache with spaces.pyc"}},
-		{"quoted unicode", "?? \"caf\\303\\251.pyc\"\n", true, []string{"café.pyc"}},
-		{"malformed", "??\n", false, nil},
-		{"ambiguous untracked", "?? old -> new\n", false, nil},
+		{"untracked only", "?? z.pyc\x00?? a.pyc\x00", true, []string{"a.pyc", "z.pyc"}},
+		{"mixed", " M tracked.go\x00?? cache.pyc\x00", false, []string{"cache.pyc"}},
+		{"staged", "A  tracked.go\x00", false, nil},
+		{"rename", "R  new\x00old\x00?? cache.pyc\x00", false, nil},
+		{"spaces", "?? cache with spaces.pyc\x00", true, []string{"cache with spaces.pyc"}},
+		{"unicode", "?? café.pyc\x00", true, []string{"café.pyc"}},
+		{"malformed", "??\x00", false, nil},
+		{"literal arrow", "?? old -> new\x00", true, []string{"old -> new"}},
 		{"empty", "", false, nil},
 	}
 	for _, tt := range tests {
@@ -527,7 +527,7 @@ func TestCheckPreMergeGateRefusesReviewBaseMismatch(t *testing.T) {
 
 func TestCheckPreMergeGateRefusesDirtyWorktree(t *testing.T) {
 	t.Parallel()
-	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123", status: " M internal/merge/service.go\n"}
+	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123", status: " M internal/merge/service.go\x00"}
 	detail := mergeReadyDetail("base123")
 
 	err := (newTestService(Service{Git: git})).CheckPreMergeGate(context.Background(), detail, Options{})
@@ -538,7 +538,7 @@ func TestCheckPreMergeGateRefusesDirtyWorktree(t *testing.T) {
 		t.Fatalf("expected ErrDirtyWorktree, got %v", err)
 	}
 	var dirty *DirtyWorktreeError
-	if !errors.As(err, &dirty) || dirty.Status != " M internal/merge/service.go\n" {
+	if !errors.As(err, &dirty) || dirty.Status != " M internal/merge/service.go\x00" {
 		t.Fatalf("expected DirtyWorktreeError with status, got %#v", err)
 	}
 	wantCalls := []string{"status"}
@@ -555,7 +555,7 @@ func TestCheckPreMergeGateRefusesDirtyPlanWorktree(t *testing.T) {
 	worktreePath := t.TempDir()
 	reg := newFakeGitRegistry()
 	reg.seed(repoRoot, &fakeGitClient{defaultBranch: "main", mergeBase: "base123"})
-	reg.seed(worktreePath, &fakeGitClient{status: " M feature.go\n"})
+	reg.seed(worktreePath, &fakeGitClient{status: " M feature.go\x00"})
 	detail := mergeReadyDetail("base123")
 	detail.State.Repo.Root = repoRoot
 	detail.State.Workspace.Strategy = plan.WorkspaceStrategyWorktree
@@ -573,7 +573,7 @@ func TestCheckPreMergeGateRefusesDirtyPlanWorktree(t *testing.T) {
 		t.Fatalf("expected ErrDirtyWorktree, got %v", err)
 	}
 	var dirty *DirtyWorktreeError
-	if !errors.As(err, &dirty) || dirty.Status != " M feature.go\n" {
+	if !errors.As(err, &dirty) || dirty.Status != " M feature.go\x00" {
 		t.Fatalf("expected plan worktree DirtyWorktreeError with status, got %#v", err)
 	}
 	if wantCalls := []string{"status"}; !reflect.DeepEqual(reg.client(repoRoot).calls, wantCalls) {
@@ -729,7 +729,7 @@ func TestCheckPreMergeGateForceBypassesReviewAndScopeGate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			git := &fakeGitClient{defaultErr: errors.New("default unavailable"), mergeBase: "merge-base-sha", status: " M dirty.go\n"}
+			git := &fakeGitClient{defaultErr: errors.New("default unavailable"), mergeBase: "merge-base-sha", status: " M dirty.go\x00"}
 			if err := (newTestService(Service{Git: git})).CheckPreMergeGate(context.Background(), tt.detail, Options{Force: true}); err != nil {
 				t.Fatal(err)
 			}
@@ -798,7 +798,7 @@ func TestIntegrateRebaseConflictAbortsAndRestoresDefault(t *testing.T) {
 	git := &fakeGitClient{
 		defaultBranch: "main",
 		revParse:      map[string]string{"main": "pre123"},
-		status:        "UU internal/merge/integrate.go\n",
+		status:        "UU internal/merge/integrate.go\x00",
 		changedFiles:  []string{"internal/merge/service.go", "internal/merge/integrate.go"},
 		rebaseErr:     errors.New("conflict"),
 	}
@@ -1961,7 +1961,7 @@ func TestMergeForceEvidence(t *testing.T) {
 		want                 string
 	}{
 		{name: "approval", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review = nil }, want: "merge_force"},
-		{name: "dirty", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.status = " M a.go" }, want: "merge_force"},
+		{name: "dirty", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.status = " M a.go\x00" }, want: "merge_force"},
 		{name: "review base", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Base = "old" }, want: "merge_force"},
 		{name: "review head", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "old" }, want: "merge_force"},
 		{name: "invalid exact proposal", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.CommitMessage.Subject = "" }, want: "merge_force"},
@@ -1969,9 +1969,9 @@ func TestMergeForceEvidence(t *testing.T) {
 		{name: "legacy head ordinary generation", change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review.Head = "" }},
 		{name: "status inspection fails", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusErr = errors.New("inspection") }, want: "unknown"},
 		{name: "base inspection fails", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.mergeBaseErrors = []error{nil, errors.New("inspection")} }, want: "unknown"},
-		{name: "cleanliness changes", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusSequence = []string{"", " M a.go"} }, want: "unknown"},
+		{name: "cleanliness changes", change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusSequence = []string{"", " M a.go\x00"} }, want: "unknown"},
 		{name: "external approval", external: true, change: func(d *plan.PlanDetail, _ *fakeGitClient) { d.State.Plan.Review = nil }, want: "merge_force"},
-		{name: "external dirty", external: true, change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.status = " M a.go" }, want: "merge_force"},
+		{name: "external dirty", external: true, change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.status = " M a.go\x00" }, want: "merge_force"},
 		{name: "external inspection fails", external: true, change: func(_ *plan.PlanDetail, g *fakeGitClient) { g.statusErr = errors.New("inspection") }, want: "unknown"},
 		{name: "record only proven", external: true, recordOnly: true},
 		{name: "record only unproven", recordOnly: true, want: "merge_force"},
@@ -2641,7 +2641,7 @@ func TestTryRecordExternalMergeRefusesDirtyPlanWorktree(t *testing.T) {
 		revParse: map[string]string{"main": "merged-default-sha"},
 	}
 	reg.seed(repoRoot, root)
-	reg.seed(worktreePath, &fakeGitClient{status: " M feature.go\n"})
+	reg.seed(worktreePath, &fakeGitClient{status: " M feature.go\x00"})
 
 	detail := mergeReadyDetail("base123")
 	detail.State.Repo.Root = repoRoot

@@ -26,6 +26,9 @@ func (c Client) DirtyFingerprint(ctx context.Context) (DirtyFingerprint, error) 
 	if err != nil {
 		return DirtyFingerprint{}, err
 	}
+	if _, err := ParsePorcelainStatusZ(status); err != nil {
+		return DirtyFingerprint{}, fmt.Errorf("fingerprint status %q: %w", status, err)
+	}
 	diff, err := c.rawOutput(ctx, "diff", "HEAD")
 	if err != nil {
 		return DirtyFingerprint{}, err
@@ -34,7 +37,7 @@ func (c Client) DirtyFingerprint(ctx context.Context) (DirtyFingerprint, error) 
 	if err != nil {
 		return DirtyFingerprint{}, err
 	}
-	diffNames, err := c.ChangedFiles(ctx, "HEAD")
+	diffNames, err := c.ChangedFilesExact(ctx, "HEAD")
 	if err != nil {
 		return DirtyFingerprint{}, err
 	}
@@ -106,22 +109,7 @@ func writeFingerprintField(h hash.Hash, label string, value []byte) {
 }
 
 func porcelainPaths(status string) []string {
-	var paths []string
-	for line := range strings.SplitSeq(status, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if len(line) < 4 {
-			continue
-		}
-		path := line[3:]
-		if strings.Contains(path, " -> ") {
-			parts := strings.Split(path, " -> ")
-			path = parts[len(parts)-1]
-		}
-		path = strings.Trim(path, `"`)
-		if path != "" {
-			paths = append(paths, path)
-		}
-	}
+	paths, _ := PorcelainPaths(status)
 	return paths
 }
 
@@ -129,7 +117,6 @@ func uniqueSortedPaths(paths []string) []string {
 	seen := make(map[string]bool, len(paths))
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
-		path = strings.TrimSpace(path)
 		if path == "" || seen[path] {
 			continue
 		}

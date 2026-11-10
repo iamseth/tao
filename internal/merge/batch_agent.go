@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	commitpkg "github.com/iamseth/tao/internal/commit"
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/textbound"
 	"github.com/iamseth/tao/prompts"
@@ -673,8 +674,12 @@ func resolutionFingerprint(status, output string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(status+"\x00"+output)))
 }
 func hasUnmergedStatus(status string) bool {
-	for line := range strings.SplitSeq(status, "\n") {
-		if len(line) >= 2 && unmergedStatusCode(line[:2]) {
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return true
+	}
+	for _, entry := range entries {
+		if unmergedStatusCode(entry.Code) {
 			return true
 		}
 	}
@@ -682,19 +687,7 @@ func hasUnmergedStatus(status string) bool {
 }
 
 func porcelainPaths(status string) []string {
-	var paths []string
-	for line := range strings.SplitSeq(status, "\n") {
-		if len(line) < 4 {
-			continue
-		}
-		p := strings.TrimSpace(line[3:])
-		if _, to, ok := strings.Cut(p, " -> "); ok {
-			p = to
-		}
-		if p != "" {
-			paths = append(paths, p)
-		}
-	}
+	paths, _ := gitops.PorcelainPaths(status)
 	sort.Strings(paths)
 	return paths
 }
@@ -749,22 +742,19 @@ func concretePorcelainChanges(ctx context.Context, git GitClient) (porcelainChan
 
 func parseConcretePorcelainV1(status string) (porcelainChanges, error) {
 	var changes porcelainChanges
-	for line := range strings.SplitSeq(status, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" {
-			continue
-		}
-		if len(line) < 4 || line[2] != ' ' || !validPorcelainStatus(line[:2]) || porcelainRenameOrCopy(line[:2]) {
-			return porcelainChanges{}, fmt.Errorf("ambiguous git status entry %q", line)
-		}
-		path, err := decodePorcelainPath(line[3:])
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return changes, fmt.Errorf("invalid git status %q: %w", status, err)
+	}
+	for _, entry := range entries {
+		path, err := decodePorcelainPath(entry.Path)
 		if err != nil {
-			return porcelainChanges{}, fmt.Errorf("decode git status path %q: %w", line[3:], err)
+			return porcelainChanges{}, err
 		}
-		if line[:2] == "??" && strings.HasSuffix(path, "/") {
+		if entry.Code == "??" && strings.HasSuffix(path, "/") {
 			return porcelainChanges{}, fmt.Errorf("git status collapsed untracked directory %q", path)
 		}
-		recordPorcelainChange(&changes, line[:2], path, "")
+		recordPorcelainChange(&changes, entry.Code, path, "")
 	}
 	changes.normalize()
 	return changes, nil
@@ -824,17 +814,8 @@ func porcelainRenameOrCopy(code string) bool {
 	return strings.ContainsAny(code, "RC")
 }
 
+// decodePorcelainPath validates a raw NUL-record path without unquoting it.
 func decodePorcelainPath(raw string) (string, error) {
-	if strings.HasPrefix(raw, "\"") {
-		decoded, err := strconv.Unquote(raw)
-		if err != nil {
-			return "", err
-		}
-		return validatePorcelainPath(decoded)
-	}
-	if strings.Contains(raw, "\"") {
-		return "", errors.New("malformed quoted path")
-	}
 	return validatePorcelainPath(raw)
 }
 

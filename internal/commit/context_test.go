@@ -53,7 +53,7 @@ func TestBuildStandaloneContextFiltersBeforeExposureAndBindsCompleteDiff(t *test
 	}
 	git := &contextGitStub{
 		head:   "head-a",
-		status: " M internal/commit/context.go\n M .env.example\n M config.go\n M package-lock.json\n M coverage/report.txt\n?? .tao/state.json\n",
+		status: " M internal/commit/context.go\x00 M .env.example\x00 M config.go\x00 M package-lock.json\x00 M coverage/report.txt\x00?? .tao/state.json\x00",
 		diffs: map[string]string{
 			"internal/commit/context.go": "diff --git a/internal/commit/context.go b/internal/commit/context.go\n+safe line\n",
 			".env.example":               "diff --git a/.env.example b/.env.example\n+TOKEN=replace-me\n",
@@ -131,7 +131,7 @@ func TestBuildStandaloneContextStagedMove(t *testing.T) {
 func TestBuildStandaloneContextFingerprintsRawUntrackedBytes(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "invalid.txt")
-	git := &contextGitStub{head: "head", status: "?? invalid.txt\n"}
+	git := &contextGitStub{head: "head", status: "?? invalid.txt\x00"}
 
 	if err := os.WriteFile(path, []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestWriteIdentityLengthFramesFieldBoundaries(t *testing.T) {
 func TestBuildStandaloneContextBoundsDisplayedDiffButFingerprintsTail(t *testing.T) {
 	root := t.TempDir()
 	longDiff := "diff --git a/large.txt b/large.txt\n+" + strings.Repeat("a", contextDiffLimit+100)
-	git := &contextGitStub{head: "head", status: " M large.txt\n", diffs: map[string]string{"large.txt": longDiff}}
+	git := &contextGitStub{head: "head", status: " M large.txt\x00", diffs: map[string]string{"large.txt": longDiff}}
 	got, err := BuildStandaloneContext(context.Background(), git, root)
 	if err != nil {
 		t.Fatal(err)

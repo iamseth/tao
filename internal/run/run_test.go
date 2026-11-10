@@ -348,7 +348,7 @@ func TestRunDoesNotFinalizeWhenMaxSlicesStopsBeforeCompletion(t *testing.T) {
 
 func TestAutomaticSliceRequiresCleanBoundaryWhileNoneIsExempt(t *testing.T) {
 	t.Parallel()
-	runner := (&scriptedGitRunner{Outputs: map[string]string{"status --porcelain --no-renames": " M README.md\n"}}).Run
+	runner := (&scriptedGitRunner{Outputs: map[string]string{"status --porcelain --no-renames -z": testenv.StatusFixture(" M README.md")}}).Run
 	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeCurrent}}, RunDependencies{CommandRunner: runner})
 	if err := requireCleanAutomaticSliceStart(context.Background(), execution, "."); err == nil || !strings.Contains(err.Error(), "commit or stash") || !strings.Contains(err.Error(), "commit policy none") {
 		t.Fatalf("expected actionable dirty-start refusal, got %v", err)
@@ -417,7 +417,7 @@ func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
 		{name: "stable despite unrelated ref movement", branch: "feature", head: "head123"},
 		{name: "branch switch", branch: "other", head: "head123", wantErr: "changed execution branch"},
 		{name: "execution branch advancement", branch: "feature", head: "other-head", wantErr: "advanced unexpectedly"},
-		{name: "leftovers", branch: "feature", head: "head123", status: " M leftover.go\n", wantErr: "leftover worktree changes"},
+		{name: "leftovers", branch: "feature", head: "head123", status: testenv.StatusFixture(" M leftover.go"), wantErr: "leftover worktree changes"},
 		{name: "missing outcome", branch: "feature", head: "head123", mutate: func(detail *plan.PlanDetail) { detail.Slices.Slices[0].Completion = nil }, wantErr: "without a committed or no_changes"},
 	}
 	for _, tt := range tests {
@@ -428,9 +428,9 @@ func TestAutomaticSliceCompletionBoundaryGuardsTransaction(t *testing.T) {
 				tt.mutate(detail)
 			}
 			runner := (&scriptedGitRunner{Outputs: map[string]string{
-				"branch --show-current":           tt.branch,
-				"rev-parse HEAD":                  tt.head,
-				"status --porcelain --no-renames": tt.status,
+				"branch --show-current":              tt.branch,
+				"rev-parse HEAD":                     tt.head,
+				"status --porcelain --no-renames -z": tt.status,
 			}}).Run
 			execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice}}, RunDependencies{CommandRunner: runner})
 			err := (SelectedSliceRunner{execution: execution}).validateAutomaticSliceBoundary(context.Background(), detail, "001-a", ".")
@@ -870,7 +870,7 @@ func TestServiceExecuteRefusesDirtyReadyWorkspaceBeforePreparation(t *testing.T)
 	dependencyCalls := 0
 	agentCalls := 0
 	runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string {
-		return " M unattributed.go\n"
+		return testenv.StatusFixture(" M unattributed.go")
 	}, "tao/plan-a", "base")
 	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
@@ -947,7 +947,7 @@ func TestServiceExecuteRefusesDirtyUnrecordedManagedWorkspaceBeforePreparation(t
 	preparerCalls := 0
 	agentCalls := 0
 	runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string {
-		return " M interrupted.go\n"
+		return testenv.StatusFixture(" M interrupted.go")
 	}, "tao/plan-a", "base")
 	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
@@ -1001,7 +1001,7 @@ func TestServiceExecuteRefusesDirtyRecordedWorkspaceBeforeMutation(t *testing.T)
 			dependencyCalls := 0
 			agentCalls := 0
 			runner := interruptedServiceGitRunner(t, workspaceRoot, &[]string{}, func() string {
-				return " M interrupted.go\n"
+				return testenv.StatusFixture(" M interrupted.go")
 			}, "tao/plan-a", "base")
 			err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				RepositoryAdmission: testRepositoryAdmission,
@@ -1263,7 +1263,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceBeforeWorkspaceMutation(t
 		if agentCalled {
 			return ""
 		}
-		return "M  staged.go\n?? new.go\n"
+		return testenv.StatusFixture("M  staged.go", "?? new.go")
 	}, "tao/plan-a", "base")
 	executor := sliceExecutorFunc(func(_ context.Context, run SliceRun) error {
 		agentCalled = true
@@ -1322,7 +1322,7 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 			name: "branch drift",
 			runner: func(t *testing.T, root string) CommandRunner {
 				calls := 0
-				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 				return (&scriptedGitRunner{
 					Responses: map[string]func() string{"branch --show-current": func() string {
 						calls++
@@ -1339,7 +1339,7 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 			name: "HEAD drift",
 			runner: func(t *testing.T, root string) CommandRunner {
 				calls := 0
-				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+				base := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 				return (&scriptedGitRunner{
 					Responses: map[string]func() string{"rev-parse HEAD": func() string {
 						calls++
@@ -1359,9 +1359,9 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 				return interruptedServiceGitRunner(t, root, &[]string{}, func() string {
 					calls++
 					if calls > 1 {
-						return " M other.go\n"
+						return testenv.StatusFixture(" M other.go")
 					}
-					return " M partial.go\n"
+					return testenv.StatusFixture(" M partial.go")
 				}, "tao/plan-a", "base")
 			},
 		},
@@ -1374,7 +1374,7 @@ func TestServiceExecuteResumeRevalidatesExactBoundaryBeforeAgentHandoff(t *testi
 					if calls > 1 {
 						writeLinkedWorktreeSequencer(t, root)
 					}
-					return " M partial.go\n"
+					return testenv.StatusFixture(" M partial.go")
 				}, "tao/plan-a", "base")
 			},
 		},
@@ -1423,7 +1423,7 @@ func TestServiceExecuteRefusesInterruptedAutomaticSliceWithActiveSequencer(t *te
 	detail := interruptedServiceRunDetail(t, root)
 	preparerCalls := 0
 	agentCalls := 0
-	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 
 	err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
@@ -1485,7 +1485,7 @@ func TestServiceExecuteResumesInterruptedAutomaticSliceThenRunsNextSlice(t *test
 	var runs []SliceRun
 	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string {
 		if len(runs) == 0 {
-			return " M partial.go\n"
+			return testenv.StatusFixture(" M partial.go")
 		}
 		return ""
 	}, "tao/plan-a", "")
@@ -1536,7 +1536,7 @@ func TestServiceExecuteResumesAgainAfterASecondProviderInterruption(t *testing.T
 	root := t.TempDir()
 	detail := interruptedServiceRunDetail(t, root)
 	var calls []string
-	runner := interruptedServiceGitRunner(t, root, &calls, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+	runner := interruptedServiceGitRunner(t, root, &calls, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 	agentCalls := 0
 	var events []plan.Event
 	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
@@ -1590,7 +1590,7 @@ func TestInterruptedResumeFailureEventWarningPreservesProviderError(t *testing.T
 	detail := interruptedServiceRunDetail(t, root)
 	providerErr := errors.New("provider connection lost")
 	var out bytes.Buffer
-	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+	runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 	service := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, &out, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 		CommandRunner: runner,
 		EventAppender: eventAppenderFunc(func(_ string, event plan.Event) error {
@@ -1662,7 +1662,7 @@ func TestServiceExecuteRepairsOnlyCleanTornAutomaticStart(t *testing.T) {
 	dirty := interruptedServiceRunDetail(t, root)
 	dirty.Slices.Slices[0].ExecutionStart = nil
 	agentCalls = 0
-	dirtyRunner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M unattributed.go\n" }, "tao/plan-a", "base")
+	dirtyRunner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M unattributed.go") }, "tao/plan-a", "base")
 	err = newTestService(&memoryRunRepository{details: []*plan.PlanDetail{dirty}}, io.Discard, Options{RunDependencies: RunDependencies{RepositoryAdmission: testRepositoryAdmission, CommandRunner: dirtyRunner, SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil })}}).Execute(context.Background(), Request{Input: "plan-a", ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}})
 	if err == nil || !strings.Contains(err.Error(), "dirty worktree has no immutable execution boundary") || !strings.Contains(err.Error(), "changed_paths=unattributed.go") || !strings.Contains(err.Error(), "leave the automatic slice uncommitted") || agentCalls != 0 {
 		t.Fatalf("dirty torn start error=%v agent=%d", err, agentCalls)
@@ -1884,7 +1884,7 @@ func TestServiceExecuteRefusesInterruptedBoundaryDriftAndManualOwnership(t *test
 			}
 			agentCalls := 0
 			prepared := 0
-			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M work.go\n" }, tt.branch, tt.head)
+			runner := interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M work.go") }, tt.branch, tt.head)
 			err := newTestService(&memoryRunRepository{details: []*plan.PlanDetail{detail}}, io.Discard, Options{RunDependencies: RunDependencies{
 				RepositoryAdmission: testRepositoryAdmission,
 				CommandRunner:       runner, SliceExecutor: sliceExecutorFunc(func(context.Context, SliceRun) error { agentCalls++; return nil }),
@@ -1993,7 +1993,7 @@ func TestServiceExecuteDoesNotRebaseCurrentMode(t *testing.T) {
 		switch key {
 		case "branch --show-current":
 			_, _ = io.WriteString(stdout, "feature\n")
-		case "status --porcelain --no-renames":
+		case "status --porcelain --no-renames -z":
 		default:
 			t.Fatalf("unexpected git command %q", key)
 		}
@@ -2255,8 +2255,8 @@ func TestServiceExecuteRefusesUnchangedPlanOwnedBlocker(t *testing.T) {
 	detail.State.Status = plan.StatusBlocked
 	detail.Slices.Slices[0].Status = plan.StatusBlocked
 	detail.Slices.Slices[0].BlockerNote = "lint failed"
-	runner := newScriptedGitRunner(" M partial.go\n")
-	runner.Fallback = interruptedServiceGitRunner(t, root, &[]string{}, func() string { return " M partial.go\n" }, "tao/plan-a", "base")
+	runner := newScriptedGitRunner(testenv.StatusFixture(" M partial.go"))
+	runner.Fallback = interruptedServiceGitRunner(t, root, &[]string{}, func() string { return testenv.StatusFixture(" M partial.go") }, "tao/plan-a", "base")
 	runner.Outputs = map[string]string{"status --porcelain=v1 -z --untracked-files=all": " M partial.go\x00", "diff HEAD": "partial change"}
 	execution := testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner.Run})
 	head, parts, err := gitClient(execution, root).WorktreeFingerprintParts(context.Background())
@@ -2965,7 +2965,7 @@ func TestExecutionRootResolverPreparesWorktreeStrategyMetadata(t *testing.T) {
 				t.Fatalf("expected status cwd %q, got %q", workspacePath, actualCWD)
 			}
 			_, _ = io.WriteString(stdout, "head123\n")
-		case "status --porcelain --no-renames":
+		case "status --porcelain --no-renames", "status --porcelain --no-renames -z":
 			if actualCWD != workspacePath {
 				t.Fatalf("expected status cwd %q, got %q", workspacePath, actualCWD)
 			}

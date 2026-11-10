@@ -242,17 +242,17 @@ func (c Client) DefaultBranch(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("detect default branch: %w", originErr)
 }
 
-// StatusPorcelain returns raw porcelain status output, reporting staged moves
+// StatusPorcelain returns raw NUL-delimited porcelain status, reporting staged moves
 // as a deletion plus an addition.
 func (c Client) StatusPorcelain(ctx context.Context) (string, error) {
-	return c.rawOutput(ctx, "status", "--porcelain", "--no-renames")
+	return c.rawOutput(ctx, "status", "--porcelain", "--no-renames", "-z")
 }
 
-// StatusPorcelainAllUntracked returns porcelain status with each untracked file
+// StatusPorcelainAllUntracked returns raw NUL-delimited status with each untracked file
 // listed separately instead of collapsing an untracked directory. Staged moves
 // are reported as a deletion plus an addition.
 func (c Client) StatusPorcelainAllUntracked(ctx context.Context) (string, error) {
-	return c.rawOutput(ctx, "status", "--porcelain", "--untracked-files=all", "--no-renames")
+	return c.rawOutput(ctx, "status", "--porcelain", "--untracked-files=all", "--no-renames", "-z")
 }
 
 // StatusPorcelainIgnoredV1Z returns unquoted, NUL-delimited status including

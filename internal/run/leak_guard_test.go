@@ -10,13 +10,14 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestAgentSessionLeakGuardFailsForNewUntrackedControlFile(t *testing.T) {
 	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
-		Statuses:  []string{"", "?? leaked.txt\n"},
+		Statuses:  []string{testenv.StatusFixture(), testenv.StatusFixture("?? leaked.txt")},
 		Diffs:     []string{"", ""},
 		DiffNames: []string{"", ""},
 	}
@@ -36,9 +37,9 @@ func TestAgentSessionLeakGuardFailsForAlreadyDirtyContentOnlyEdit(t *testing.T) 
 	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
-		Statuses:  []string{" M dirty.go\n", " M dirty.go\n"},
+		Statuses:  []string{testenv.StatusFixture(" M dirty.go"), testenv.StatusFixture(" M dirty.go")},
 		Diffs:     []string{"diff --git a/dirty.go b/dirty.go\n-old\n+first\n", "diff --git a/dirty.go b/dirty.go\n-old\n+second\n"},
-		DiffNames: []string{"dirty.go\n", "dirty.go\n"},
+		DiffNames: []string{"dirty.go\x00", "dirty.go\x00"},
 	}
 	runner := newLeakGuardTestRunner(planDir, git.Run)
 
@@ -71,9 +72,9 @@ func TestAgentSessionLeakGuardAllowsPreExistingUnchangedDirt(t *testing.T) {
 	t.Parallel()
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
-		Statuses:  []string{" M dirty.go\n?? existing.txt\n", " M dirty.go\n?? existing.txt\n"},
+		Statuses:  []string{testenv.StatusFixture(" M dirty.go", "?? existing.txt"), testenv.StatusFixture(" M dirty.go", "?? existing.txt")},
 		Diffs:     []string{"diff --git a/dirty.go b/dirty.go\n-old\n+new\n", "diff --git a/dirty.go b/dirty.go\n-old\n+new\n"},
-		DiffNames: []string{"dirty.go\n", "dirty.go\n"},
+		DiffNames: []string{"dirty.go\x00", "dirty.go\x00"},
 	}
 	runner := newLeakGuardTestRunner(planDir, git.Run)
 
@@ -87,7 +88,7 @@ func TestAgentSessionLeakGuardCoversPullRequestBodySession(t *testing.T) {
 	action := "drafting pull request body for plan plan-a"
 	planDir := writeLeakGuardState(t)
 	git := &scriptedGitRunner{
-		Statuses:  []string{"", "?? " + strings.ReplaceAll(action, " ", "-") + ".txt\n"},
+		Statuses:  []string{testenv.StatusFixture(), testenv.StatusFixture("?? " + strings.ReplaceAll(action, " ", "-") + ".txt")},
 		Diffs:     []string{"", ""},
 		DiffNames: []string{"", ""},
 	}

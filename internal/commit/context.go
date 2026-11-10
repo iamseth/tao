@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/iamseth/tao/internal/gitops"
 )
 
 const (
@@ -270,11 +272,13 @@ func pathSet(paths []string) map[string]bool {
 
 func untrackedPaths(status string) map[string]bool {
 	paths := make(map[string]bool)
-	for line := range strings.SplitSeq(status, "\n") {
-		if strings.HasPrefix(line, "?? ") {
-			if path, ambiguous := porcelainStandalonePath(line); !ambiguous {
-				paths[path] = true
-			}
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return paths
+	}
+	for _, entry := range entries {
+		if entry.Code == "??" {
+			paths[NormalizePath(entry.Path)] = true
 		}
 	}
 	return paths
@@ -285,10 +289,13 @@ func standaloneStagedPaths(status string, taoStaged []string) map[string]bool {
 	for _, path := range taoStaged {
 		staged[NormalizePath(path)] = true
 	}
-	for line := range strings.SplitSeq(status, "\n") {
-		path, ambiguous := porcelainStandalonePath(line)
-		if !ambiguous && len(line) > 0 && line[0] != ' ' && line[0] != '?' {
-			staged[path] = true
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return staged
+	}
+	for _, entry := range entries {
+		if entry.Code[0] != ' ' && entry.Code[0] != '?' {
+			staged[NormalizePath(entry.Path)] = true
 		}
 	}
 	return staged
@@ -296,9 +303,13 @@ func standaloneStagedPaths(status string, taoStaged []string) map[string]bool {
 
 func taoMetadataPaths(status string, staged []string) []string {
 	paths := append([]string(nil), staged...)
-	for line := range strings.SplitSeq(status, "\n") {
-		path, ambiguous := porcelainStandalonePath(line)
-		if !ambiguous && IsTaoMetadataPath(path) {
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return UniquePaths(paths)
+	}
+	for _, entry := range entries {
+		path := NormalizePath(entry.Path)
+		if IsTaoMetadataPath(path) {
 			paths = append(paths, path)
 		}
 	}
@@ -306,19 +317,22 @@ func taoMetadataPaths(status string, staged []string) []string {
 }
 
 func porcelainStandalonePath(line string) (string, bool) {
-	if len(line) < 4 || strings.HasPrefix(line[3:], `"`) || strings.Contains(line[3:], " -> ") {
+	path, ambiguous := gitops.PorcelainPath(line)
+	if ambiguous {
 		return "", true
 	}
-	path := NormalizePath(strings.TrimSpace(line[3:]))
+	path = NormalizePath(path)
 	return path, path == "." || path == ""
 }
 
 func standaloneAmbiguousStatusLines(status string) []string {
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return []string{status}
+	}
 	var ambiguous []string
-	for line := range strings.SplitSeq(status, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
+	for _, entry := range entries {
+		line := entry.Code + " " + entry.Path
 		if _, unsafe := porcelainStandalonePath(line); unsafe {
 			ambiguous = append(ambiguous, line)
 		}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
 )
 
@@ -78,11 +79,12 @@ func (r SelectedSliceRunner) preflightTimeoutResume(ctx context.Context, detail 
 }
 
 func timeoutStatusUnambiguous(status string) bool {
-	for line := range strings.SplitSeq(status, "\n") {
-		if line == "" {
-			continue
-		}
-		if len(line) < 4 || line[2] != ' ' || !strings.ContainsRune(" MADT?", rune(line[0])) || !strings.ContainsRune(" MADT?", rune(line[1])) || line[3:] != strings.TrimSpace(line[3:]) {
+	entries, err := gitops.ParsePorcelainStatusZ(status)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !strings.ContainsRune(" MADT?", rune(entry.Code[0])) || !strings.ContainsRune(" MADT?", rune(entry.Code[1])) || entry.Path != strings.TrimSpace(entry.Path) {
 			return false
 		}
 	}

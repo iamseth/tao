@@ -301,7 +301,7 @@ func (s Service) inspectSingleMergeRestartBoundary(ctx context.Context, git GitC
 		live.OwnershipUnsafe = true
 	}
 	status, statusErr := git.StatusPorcelain(ctx)
-	live.Dirty = statusErr != nil || strings.TrimSpace(status) != ""
+	live.Dirty = statusErr != nil || status != ""
 	if resolution := intent.Resolution; resolution != nil && resolution.Phase == plan.SingleMergeResolutionPhaseResolved && statusErr == nil {
 		changes, changesErr := concretePorcelainChanges(ctx, git)
 		if changesErr == nil && slices.Equal(changes.changedPaths, resolution.ChangedPaths) {
@@ -781,7 +781,7 @@ func classifySingleResolutionState(ctx context.Context, git GitClient, intent pl
 		if err != nil {
 			return fmt.Errorf("classify exact resolved commit worktree: %w", err)
 		}
-		if strings.TrimSpace(status) != "" {
+		if status != "" {
 			return &DirtyWorktreeError{Status: status}
 		}
 		return nil
@@ -796,7 +796,7 @@ func classifySingleResolutionState(ctx context.Context, git GitClient, intent pl
 	if err != nil {
 		return fmt.Errorf("classify committed resolution worktree: %w", err)
 	}
-	if strings.TrimSpace(status) != "" {
+	if status != "" {
 		return &DirtyWorktreeError{Status: status}
 	}
 	return nil
@@ -818,7 +818,7 @@ func rollbackSingleResolutionCommit(ctx context.Context, git GitClient, intent p
 	sourceErr, defaultErr := refErrs[0], refErrs[1]
 	status, statusErr := git.StatusPorcelain(ctx)
 	branch, branchErr := git.CurrentBranch(ctx)
-	if sourceErr != nil || defaultErr != nil || statusErr != nil || branchErr != nil || strings.TrimSpace(liveSource) != intent.SourceHead || (strings.TrimSpace(liveDefault) != intent.Resolution.IntegrationHead && strings.TrimSpace(liveDefault) != intent.DefaultParent) || strings.TrimSpace(status) != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
+	if sourceErr != nil || defaultErr != nil || statusErr != nil || branchErr != nil || strings.TrimSpace(liveSource) != intent.SourceHead || (strings.TrimSpace(liveDefault) != intent.Resolution.IntegrationHead && strings.TrimSpace(liveDefault) != intent.DefaultParent) || status != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
 		return false, errors.Join(cause, fmt.Errorf("automatic rollback refused because Git no longer matches the exact resolved transaction: %w", errors.Join(sourceErr, defaultErr, statusErr, branchErr)))
 	}
 	if strings.TrimSpace(liveDefault) == intent.DefaultParent {
@@ -869,7 +869,7 @@ func inspectSingleResolutionRollbackBoundary(ctx context.Context, git GitClient,
 	if sourceErr != nil || defaultErr != nil || headErr != nil || statusErr != nil || branchErr != nil {
 		return fmt.Errorf("inspect restored refs and worktree: %w", errors.Join(sourceErr, defaultErr, headErr, statusErr, branchErr))
 	}
-	if strings.TrimSpace(liveSource) != intent.SourceHead || strings.TrimSpace(liveDefault) != intent.DefaultParent || strings.TrimSpace(head) != intent.DefaultParent || strings.TrimSpace(status) != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
+	if strings.TrimSpace(liveSource) != intent.SourceHead || strings.TrimSpace(liveDefault) != intent.DefaultParent || strings.TrimSpace(head) != intent.DefaultParent || status != "" || strings.TrimSpace(branch) != intent.DefaultBranch {
 		return ErrSingleResolutionDrift
 	}
 	return nil
@@ -1567,7 +1567,11 @@ type DirtyWorktreeError struct {
 }
 
 func (e *DirtyWorktreeError) Error() string {
-	status := strings.TrimSpace(e.Status)
+	status, err := gitops.FormatPorcelainStatusZ(e.Status)
+	if err != nil {
+		return fmt.Sprintf("%s: invalid porcelain status %q: %v", ErrDirtyWorktree.Error(), e.Status, err)
+	}
+	status = strings.TrimSpace(status)
 	if status == "" {
 		return ErrDirtyWorktree.Error()
 	}
@@ -1579,11 +1583,12 @@ func (e *DirtyWorktreeError) Unwrap() error { return ErrDirtyWorktree }
 
 // UntrackedOnly reports whether every status entry is unambiguously untracked.
 func (e *DirtyWorktreeError) UntrackedOnly() bool {
-	if e.Status == "" {
+	entries, err := gitops.ParsePorcelainStatusZ(e.Status)
+	if err != nil || len(entries) == 0 {
 		return false
 	}
-	for line := range strings.SplitSeq(strings.TrimSuffix(e.Status, "\n"), "\n") {
-		if _, ambiguous := gitops.PorcelainPath(line); ambiguous || line[:2] != "??" {
+	for _, entry := range entries {
+		if entry.Code != "??" {
 			return false
 		}
 	}
@@ -1593,10 +1598,13 @@ func (e *DirtyWorktreeError) UntrackedOnly() bool {
 // UntrackedPaths returns sorted, unambiguously parsed untracked paths.
 func (e *DirtyWorktreeError) UntrackedPaths() []string {
 	var paths []string
-	for line := range strings.SplitSeq(e.Status, "\n") {
-		path, ambiguous := gitops.PorcelainPath(line)
-		if !ambiguous && line[:2] == "??" {
-			paths = append(paths, path)
+	entries, err := gitops.ParsePorcelainStatusZ(e.Status)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Code == "??" {
+			paths = append(paths, entry.Path)
 		}
 	}
 	slices.Sort(paths)
@@ -1888,7 +1896,7 @@ func requireCleanWorktree(ctx context.Context, git GitClient) error {
 	if err != nil {
 		return fmt.Errorf("check worktree status: %w", err)
 	}
-	if strings.TrimSpace(status) != "" {
+	if status != "" {
 		return &DirtyWorktreeError{Status: status}
 	}
 	return nil
