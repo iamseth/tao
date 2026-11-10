@@ -385,13 +385,13 @@ func TestFilterMenuLoopSavesAndPreservesSelections(t *testing.T) {
 
 func TestFilterMenuLoopIsModalAndOverlaysDashboard(t *testing.T) {
 	ctx := context.Background()
-	for _, page := range []PageID{PagePlans, PageNotes, PageSettings, PageDebug} {
+	for _, page := range []PageID{PagePlans, PageNotes, PageSettings, PageDebug, PageTrends} {
 		t.Run(string(page), func(t *testing.T) {
 			var output bytes.Buffer
 			app := App{Output: &output}
 			state := loopState{page: page, size: term.Size{Width: 120, Height: 40}}
 			app.handleKey(ctx, &state, term.KeyEvent{Key: term.KeyRune, Rune: 'f'})
-			if page == PageSettings || page == PageDebug {
+			if page == PageSettings || page == PageDebug || page == PageTrends {
 				if state.filterMenu != nil {
 					t.Fatal("filter menu opened outside lists")
 				}
@@ -921,7 +921,7 @@ func TestTopLevelTabNavigationPreservesPlanSelectionAcrossRefresh(t *testing.T) 
 	if state.activePage() != PagePlans || !ok || state.selected != 0 || row.PlanID != "target" {
 		t.Fatalf("Tab page=%q selection=%d row=%+v ok=%t, want preserved target", state.activePage(), state.selected, row, ok)
 	}
-	for _, want := range []PageID{PageHistory, PageNotes, PagePlans} {
+	for _, want := range []PageID{PageTrends, PageHistory, PageNotes, PagePlans} {
 		state.handleKey(term.KeyEvent{Key: term.KeyArrowRight})
 		if state.activePage() != want {
 			t.Fatalf("right navigation page=%q, want %q", state.activePage(), want)

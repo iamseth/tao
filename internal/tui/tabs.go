@@ -4,6 +4,7 @@ package tui
 type PageID string
 
 const (
+	PageTrends   PageID = "trends"
 	PagePlans    PageID = "plans"
 	PageHistory  PageID = "history"
 	PageNotes    PageID = "notes"
@@ -21,11 +22,12 @@ var dashboardTabs = []Tab{
 	{ID: PageHistory, Label: "History"},
 	{ID: PageNotes, Label: "Backlog"},
 	{ID: PagePlans, Label: "WIP"},
+	{ID: PageTrends, Label: "Trends"},
 }
 
 func normalizePage(page PageID) PageID {
 	switch page {
-	case PageNotes, PagePlans, PageHistory, PageSettings, PageDebug:
+	case PageNotes, PagePlans, PageHistory, PageSettings, PageDebug, PageTrends:
 		return page
 	}
 	return PagePlans

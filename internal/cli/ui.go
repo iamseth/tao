@@ -161,6 +161,7 @@ func (a App) ui(ctx context.Context, args []string) error {
 		Ticker:               a.newMonitorTicker(interval),
 		Collector:            collector,
 		Notes:                noteCollector,
+		Trends:               newUITrendsCollector(a),
 		NoteCreator:          noteCreator,
 		NoteRepositories:     noteRepositories,
 		NoteEditor:           noteEditor,

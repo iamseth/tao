@@ -45,6 +45,7 @@ type Scenario struct {
 	Snapshot    monitor.Snapshot
 	Notes       note.Snapshot
 	Debug       tui.DebugSnapshot
+	Trends      tui.TrendsSnapshot
 	Settings    tui.SettingsSnapshot
 	Plans       []PlanFixture
 }
@@ -123,7 +124,8 @@ func mixedScenario() Scenario {
 	}
 
 	return Scenario{
-		Name: ScenarioMixed, Description: "plans, notes, and diagnostics across lifecycle, liveness, warning, and approval states",
+		Trends: trendsFixture(false),
+		Name:   ScenarioMixed, Description: "plans, notes, and diagnostics across lifecycle, liveness, warning, and approval states",
 		Now: now, Snapshot: monitor.Snapshot{CollectedAt: now, Rows: rows}, Notes: notes, Debug: debugFixture(now), Settings: settingsFixture(now),
 		Plans: planFixturesForRows(mixedPlanFixture(now), rows),
 	}
@@ -175,7 +177,8 @@ func mixedPlanFixture(now time.Time) PlanFixture {
 
 func emptyScenario() Scenario {
 	return Scenario{
-		Name: ScenarioEmpty, Description: "no plans, notes, warnings, details, or logs",
+		Trends: tui.TrendsSnapshot{RepositoryName: "preview", AsOf: fixtureNow, MaturityDays: 14, MinimumSamples: 5},
+		Name:   ScenarioEmpty, Description: "no plans, notes, warnings, details, or logs",
 		Now: fixtureNow, Snapshot: monitor.Snapshot{CollectedAt: fixtureNow}, Notes: note.Snapshot{}, Debug: debugWithoutAnomaliesFixture(fixtureNow), Settings: settingsWithoutOverridesFixture(fixtureNow),
 	}
 }
@@ -217,7 +220,8 @@ func stressScenario() Scenario {
 		})
 	}
 	return Scenario{
-		Name: ScenarioStress, Description: "long plan and note tables with unicode and viewport pressure", Now: now,
+		Trends: trendsFixture(true),
+		Name:   ScenarioStress, Description: "long plan and note tables with unicode and viewport pressure", Now: now,
 		Snapshot: monitor.Snapshot{CollectedAt: now, Rows: rows}, Notes: note.Snapshot{Notes: notes}, Debug: debugFixture(now), Settings: settingsFixture(now),
 		Plans: planFixturesForRows(stressPlanFixture(now), rows),
 	}

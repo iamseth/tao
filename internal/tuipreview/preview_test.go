@@ -170,11 +170,12 @@ func TestRenderEveryViewIsDeterministicAndBounded(t *testing.T) {
 		selection int
 		header    string
 	}{
-		{view: ViewPlans, header: "tao │ History  Backlog ▸WIP"},
-		{view: ViewHistory, header: "tao │▸History  Backlog  WIP"},
-		{view: ViewNotes, selection: 1, header: "tao │ History ▸Backlog  WIP"},
-		{view: ViewSettings, selection: 1, header: "tao │ History  Backlog  WIP"},
-		{view: ViewDebug, header: "tao │ History  Backlog  WIP"},
+		{view: ViewPlans, header: "tao │ History  Backlog ▸WIP  Trends"},
+		{view: ViewHistory, header: "tao │▸History  Backlog  WIP  Trends"},
+		{view: ViewTrends, header: "tao │ History  Backlog  WIP ▸Trends"},
+		{view: ViewNotes, selection: 1, header: "tao │ History ▸Backlog  WIP  Trends"},
+		{view: ViewSettings, selection: 1, header: "tao │ History  Backlog  WIP  Trends"},
+		{view: ViewDebug, header: "tao │ History  Backlog  WIP  Trends"},
 		{view: ViewPlanDetail, selection: 1, header: "Tao UI | live | alpha"},
 		{view: ViewPlanChanges, selection: 1, header: "Overview  Slices  Activity  [Changes]"},
 		{view: ViewNoteDetail, selection: 1, header: "Tao UI | NOTE DETAIL"},
@@ -441,6 +442,7 @@ func TestStressViewsAreCellBoundedAcrossWidths(t *testing.T) {
 		ViewNotes:    {"PREVIEW", "TAGS", "CREATED", "UPDATED"},
 		ViewSettings: {"REPOSITORY DEFAULTS", "PR"},
 		ViewDebug:    {"UI", "DOCTOR"},
+		ViewTrends:   {"Trends · monthly", "n=20"},
 	}
 	for _, width := range []int{199, 120, 100, 80, 70} {
 		for _, view := range Views() {

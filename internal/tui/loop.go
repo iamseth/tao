@@ -87,6 +87,7 @@ type App struct {
 	Terminal             Terminal
 	Ticker               Ticker
 	Collector            SnapshotCollector
+	Trends               TrendsCollector
 	Notes                NoteSnapshotCollector
 	NoteEditor           NoteEditor
 	NotePlanningLauncher NotePlanningLauncher
@@ -119,6 +120,7 @@ type confirmPrompt struct {
 }
 
 type loopState struct {
+	trends           trendsState
 	snapshot         monitor.Snapshot
 	noteSnapshot     note.Snapshot
 	debugSnapshot    DebugSnapshot
@@ -259,6 +261,11 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		select {
 		case <-ctx.Done():
 			return nil
+		case update := <-state.trends.updates:
+			state.acceptTrends(update)
+			if err := a.writeFrame(state); err != nil {
+				return err
+			}
 		case result := <-input:
 			if result.err != nil {
 				return fmt.Errorf("read terminal input: %w", result.err)
@@ -322,8 +329,12 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 					continue
 				}
 			}
+			previousPage := state.activePage()
 			if a.handleKey(loopCtx, &state, result.key) {
 				return nil
+			}
+			if previousPage != state.activePage() {
+				a.refreshTrends(loopCtx, &state)
 			}
 			if err := a.writeFrame(state); err != nil {
 				return err
@@ -378,6 +389,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				return err
 			}
 		case tick := <-a.Ticker.C():
+			a.refreshTrends(loopCtx, &state)
 			snapshot, err := a.Collector.Collect(ctx)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -430,6 +442,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				return fmt.Errorf("read terminal size: %w", err)
 			}
 			state.size = size
+			state.clampTrendsOffset()
 			if state.detail != nil {
 				state.detail.clampOffsets(size)
 			}
@@ -674,6 +687,7 @@ func (a App) writeFrame(state loopState) error {
 		}))
 	default:
 		rendered := Render(Model{
+			Trends:           state.trendsModel(),
 			Snapshot:         state.snapshot,
 			NoteSnapshot:     state.noteSnapshot,
 			DebugSnapshot:    state.debugSnapshot,
@@ -940,6 +954,9 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 	}
 	if key.Key != term.KeyEsc {
 		state.interruptEscape()
+	}
+	if state.activePage() == PageTrends && state.handleTrendsKey(key) {
+		return false
 	}
 	if key.Key == term.KeyPageUp || key.Key == term.KeyPageDown {
 		direction := 1
@@ -1527,6 +1544,9 @@ func (s *loopState) handleListJumpKey(key term.KeyEvent) bool {
 func (s *loopState) movePage(direction int) {
 	step := detailPageStep(s.size, 8)
 	switch s.activePage() {
+	case PageTrends:
+		s.trends.model.ScrollOffset += direction * step
+		s.clampTrendsOffset()
 	case PageDebug:
 		s.debugOffset = max(0, min(s.debugPageMaxOffset(), s.debugOffset+direction*step))
 	case PageSettings:

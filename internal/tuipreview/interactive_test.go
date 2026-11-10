@@ -3,6 +3,7 @@ package tuipreview
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/term"
+	"github.com/iamseth/tao/internal/tui"
 )
 
 type previewTestTerminal struct{}
@@ -38,7 +40,7 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	if app.Actions != nil {
 		t.Fatal("interactive fixture app has production actions")
 	}
-	if app.Terminal == nil || app.Ticker != ticker || app.Collector == nil || app.Notes == nil || app.Debug == nil || app.Settings == nil || app.Details == nil || app.Changes == nil {
+	if app.Terminal == nil || app.Ticker != ticker || app.Collector == nil || app.Notes == nil || app.Debug == nil || app.Trends == nil || app.Settings == nil || app.Details == nil || app.Changes == nil {
 		t.Fatalf("interactive fixture app is incompletely wired: %+v", app)
 	}
 	if got := app.Now(); !got.Equal(scenario.Now) {
@@ -51,6 +53,103 @@ func TestNewInteractiveAppUsesOnlyFixtureBoundaries(t *testing.T) {
 	detail, err := app.Details.ResolvePlan(context.Background(), scenario.Plans[0].PlanDir)
 	if err != nil || detail.State.Plan.ID != scenario.Plans[0].Detail.State.Plan.ID {
 		t.Fatalf("fixture detail = %#v, error = %v", detail, err)
+	}
+}
+
+func TestInteractiveTrendsCohortsAndReadOnlyKeys(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	var output bytes.Buffer
+	app := NewInteractiveApp(scenario, strings.NewReader("\tcramxp\rc cq"), &output, previewTestTerminal{}, &previewTestTicker{})
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"monthly · overall", "monthly · pi", "monthly · claude"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing cohort %q: %s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "PLAN DETAIL") || strings.Contains(output.String(), "Confirm") {
+		t.Fatal("Trends opened a detail or mutation dialog")
+	}
+}
+
+type failingPreviewTrends struct {
+	snapshot tui.TrendsSnapshot
+	calls    int
+}
+
+func (c *failingPreviewTrends) Collect(ctx context.Context) (tui.TrendsSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return tui.TrendsSnapshot{}, err
+	}
+	c.calls++
+	if c.calls > 1 {
+		return tui.TrendsSnapshot{}, errors.New("synthetic failure")
+	}
+	return cloneTrends(c.snapshot), nil
+}
+
+type trendFrameObserver struct {
+	bytes.Buffer
+	good, failed chan struct{}
+}
+
+func (w *trendFrameObserver) Write(p []byte) (int, error) {
+	text := string(p)
+	if strings.Contains(text, "n=20") {
+		select {
+		case w.good <- struct{}{}:
+		default:
+		}
+	}
+	if strings.Contains(text, "synthetic failure") {
+		select {
+		case w.failed <- struct{}{}:
+		default:
+		}
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestInteractiveTrendsRetainsEvidenceOnLoaderError(t *testing.T) {
+	scenario, _ := Lookup(ScenarioMixed)
+	input, keys := io.Pipe()
+	defer func() { _ = input.Close(); _ = keys.Close() }()
+	output := &trendFrameObserver{good: make(chan struct{}, 1), failed: make(chan struct{}, 1)}
+	ticker := &previewTestTicker{updates: make(chan time.Time)}
+	app := NewInteractiveApp(scenario, input, output, previewTestTerminal{}, ticker)
+	app.Trends = &failingPreviewTrends{snapshot: scenario.Trends}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	if _, err := keys.Write([]byte("\t")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-output.good:
+	case <-ctx.Done():
+		t.Fatal("no fixture evidence")
+	}
+	select {
+	case ticker.updates <- scenario.Now:
+	case <-ctx.Done():
+		t.Fatal("refresh blocked")
+	}
+	select {
+	case <-output.failed:
+	case <-ctx.Done():
+		t.Fatal("no stale error")
+	}
+	if _, err := keys.Write([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	last := output.String()[strings.LastIndex(output.String(), "Stale / collection failed:"):]
+	if !strings.Contains(last, "n=20") {
+		t.Fatal("stale frame lost evidence")
 	}
 }
 

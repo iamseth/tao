@@ -33,6 +33,7 @@ func NewInteractiveApp(scenario Scenario, input io.Reader, output io.Writer, ter
 		Collector: scenario.NewSnapshotCollector(),
 		Notes:     scenario.NewNoteSnapshotCollector(),
 		Debug:     scenario.NewDebugSnapshotCollector(),
+		Trends:    NewTrendsCollector(scenario.Trends),
 		Settings:  scenario.NewSettingsService(),
 		Details:   scenario.NewDetailRepository(),
 		Changes:   scenario.NewChangesLoader(),

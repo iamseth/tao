@@ -14,7 +14,7 @@ import (
 )
 
 func TestDashboardViewportBounds(t *testing.T) {
-	for _, page := range []PageID{PageHistory, PageNotes, PagePlans} {
+	for _, page := range []PageID{PageHistory, PageNotes, PagePlans, PageTrends} {
 		for _, width := range []int{1, 20, 59, 60, 100} {
 			for _, height := range []int{1, 3, 8, 24} {
 				for _, profile := range []theme.Profile{theme.ProfileNone, theme.ProfileTrueColor} {
@@ -82,7 +82,7 @@ func TestDashboardNavigationRetainsListsWithoutActions(t *testing.T) {
 			t.Fatal("global quit failed")
 		}
 	}
-	if normalizePage("") != PagePlans || len(dashboardTabs) != 3 {
+	if normalizePage("") != PagePlans || !reflect.DeepEqual(dashboardTabs, []Tab{{ID: PageHistory, Label: "History"}, {ID: PageNotes, Label: "Backlog"}, {ID: PagePlans, Label: "WIP"}, {ID: PageTrends, Label: "Trends"}}) {
 		t.Fatal("dashboard contract changed")
 	}
 	for _, page := range []PageID{PageSettings, PageDebug} {

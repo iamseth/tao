@@ -508,7 +508,7 @@ func columnNames(columns []column) []string {
 }
 
 func TestRenderOmitsEmptySectionsAndHistoryShowsDonePlans(t *testing.T) {
-	const wantEmpty = clearScreenSequence + `tao │ History  Backlog ▸WIP  all repos  agent -  ●
+	const wantEmpty = clearScreenSequence + `tao │ History  Backlog ▸WIP  Trends  all repos  agent -  ●
 
   No plans.
 0 plans

@@ -21,6 +21,7 @@ const (
 
 // Model contains the render-neutral state for one UI frame.
 type Model struct {
+	Trends           *TrendsModel
 	Snapshot         monitor.Snapshot
 	NoteSnapshot     note.Snapshot
 	DebugSnapshot    DebugSnapshot
@@ -144,10 +145,30 @@ func Render(model Model) string {
 		}
 	}
 	lines := renderFrame(model, page)
+	if page == PageTrends {
+		strip, _ := renderTabStrip(model.Palette(), page)
+		lines = []string{strip + "  current repository"}
+	}
 	frameLineCount := len(lines)
 	selectedLine := -1
 	var viewportMetadata tableViewportMetadata
 	switch {
+	case page == PageTrends:
+		trends := TrendsModel{Snapshot: TrendsSnapshot{Unavailable: "trends collector unavailable"}}
+		if model.Trends != nil {
+			trends = *model.Trends
+		}
+		trends.Width, trends.Height = model.Width, model.Height-frameLineCount
+		if model.Width <= 0 {
+			trends.Width = 80
+		}
+		if model.Height <= 0 {
+			trends.Height = 1000
+		}
+		trends.Theme, trends.Profile = model.Theme, model.Profile
+		if body := RenderTrends(trends); body != "" {
+			lines = append(lines, strings.Split(body, "\n")...)
+		}
 	case page == PageSettings && model.SettingsOffset > 0 && model.settingsEditor == nil:
 		// A manual scroll shows the page as a plain window so non-selectable
 		// global values and paths remain reachable at any terminal height.
@@ -187,7 +208,7 @@ func Render(model Model) string {
 		lines = append(lines, body...)
 	}
 	footerStart := len(lines)
-	if strings.TrimSpace(model.FilterMessage) != "" {
+	if page != PageTrends && strings.TrimSpace(model.FilterMessage) != "" {
 		lines = append(lines, "", singleLineDetail(model.FilterMessage))
 	}
 	if isPlanPage(page) && strings.TrimSpace(model.ActionMessage) != "" {

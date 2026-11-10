@@ -230,7 +230,7 @@ Use `tao ui` for one terminal view of plans and open notes across registered
 repositories, or to launch plan actions without copying IDs. It requires a
 terminal; use `tao monitor --once` for redirected or pasteable output.
 
-Tabs cycle **History → Backlog → WIP**, opening on **WIP**. Press `c` on WIP
+Tabs cycle **History → Backlog → WIP → Trends**, opening on **WIP**. Press `c` on WIP
 or History to open the selected plan's
 **Changes** detail tab, showing a live read-only delta against its review base.
 Use `w` to switch worktree/branch scope and `u` to force a refresh; missing
@@ -240,6 +240,18 @@ selected stuck plan; live or merging plans are refused.
 **WIP** is a single table of unfinished plans ordered by urgency then planning
 priority by default. Blocked, failed, and awaiting-review/merge plans stay in WIP.
 **Backlog** is a single table of notes ordered by tier then recency by default.
+**Trends** is a read-only monthly view of the current repository, independent of
+list filters. Press `c` to cycle overall/Pi/Claude cohorts; scroll to see more
+metrics. Values include metric-specific sample counts (`n`), not a shared plan
+denominator. Missing, incomplete and partial evidence remain explicit; calendar
+gaps are not zeroes, and unavailable medians display a dash rather than an
+estimate. Sparse or inconclusive comparisons are not improvements. Arrows show
+only projected comparisons, not causal runtime rankings; medians have no inferred
+better/worse comparison. The unfinished month is provisional and dimmed, with
+comparisons withheld; age-immature outcomes are separately labelled. Collection
+failures retain last-good evidence with a stale warning. This page cannot launch
+plan actions. Weekly/rolling windows and contributing-plan drill-down are deferred.
+
 **History** is a single table of completed and abandoned plans, newest activity first by default,
 without a ten-plan limit; use search and paging to revisit older work. Completed
 plans have no default lookback limit; `--completed-window 24h` restricts them to

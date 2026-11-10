@@ -27,6 +27,7 @@ type View string
 const (
 	ViewPlans       View = "plans"
 	ViewHistory     View = "history"
+	ViewTrends      View = "trends"
 	ViewNotes       View = "notes"
 	ViewSettings    View = "settings"
 	ViewDebug       View = "debug"
@@ -58,7 +59,7 @@ var ErrUnknownPlan = errors.New("unknown preview plan directory")
 // Views returns the production renderers available for one-shot previews in a
 // stable display order.
 func Views() []View {
-	return []View{ViewPlans, ViewHistory, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewPlanChanges, ViewNoteDetail, ViewSliceDetail}
+	return []View{ViewPlans, ViewHistory, ViewTrends, ViewNotes, ViewSettings, ViewDebug, ViewPlanDetail, ViewPlanChanges, ViewNoteDetail, ViewSliceDetail}
 }
 
 // LookupView resolves a one-shot view by name.
@@ -382,6 +383,16 @@ func Render(scenario Scenario, options RenderOptions) (string, error) {
 
 	var frame string
 	switch options.View {
+	case ViewTrends:
+		cohorts := []string{"overall", "pi", "claude"}
+		if err := validateSelection(options.Selection, len(cohorts), "cohort"); err != nil {
+			return "", err
+		}
+		frame = tui.Render(tui.Model{
+			Page: tui.PageTrends, Width: options.Width, Height: options.Height, Now: scenario.Now,
+			Profile: profile, Theme: options.Theme, ShowShortcuts: options.ShowShortcuts,
+			Trends: &tui.TrendsModel{Snapshot: scenario.Trends, Cohort: cohorts[options.Selection]},
+		})
 	case ViewPlans, ViewHistory:
 		page := tui.PagePlans
 		if options.View == ViewHistory {

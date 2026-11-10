@@ -124,12 +124,13 @@ func TestHistoryNavigationRefreshAndDetails(t *testing.T) {
 	if s.activePage() != PagePlans {
 		t.Fatal("startup must be WIP")
 	}
-	for _, want := range []PageID{PageHistory, PageNotes, PagePlans} {
+	for _, want := range []PageID{PageTrends, PageHistory, PageNotes, PagePlans} {
 		app.handleKey(ctx, &s, term.KeyEvent{Key: term.KeyTab})
 		if s.activePage() != want {
 			t.Fatalf("tab = %s, want %s", s.activePage(), want)
 		}
 	}
+	app.handleKey(ctx, &s, term.KeyEvent{Key: term.KeyTab})
 	app.handleKey(ctx, &s, term.KeyEvent{Key: term.KeyTab})
 	app.handleKey(ctx, &s, term.KeyEvent{Key: term.KeyRune, Rune: 'G'})
 	if row, ok := s.selectedRow(); !ok || row.PlanID != "old" {
@@ -143,9 +144,9 @@ func TestHistoryNavigationRefreshAndDetails(t *testing.T) {
 	if s.detail != nil || s.activePage() != PageHistory {
 		t.Fatal("detail did not return to History")
 	}
-	s.switchPage(-1) // WIP, leaving History selection saved.
+	s.switchPage(-2) // WIP, leaving History selection saved.
 	s.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{old, active, done}})
-	s.switchPage(1)
+	s.switchPage(2)
 	if row, ok := s.selectedRow(); !ok || row.PlanID != "old" || s.selected != 0 {
 		t.Fatalf("inactive History selection lost: %+v index %d", row, s.selected)
 	}
@@ -155,11 +156,11 @@ func TestHistoryNavigationRefreshAndDetails(t *testing.T) {
 	if row, ok := s.selectedRow(); !ok || row.PlanID != "old" {
 		t.Fatal("refresh moved History selection")
 	}
-	s.switchPage(-1)
+	s.switchPage(-2)
 	if len(s.visibleRows()) != 0 || s.selected != 0 {
 		t.Fatal("terminal plan remained in WIP")
 	}
-	s.switchPage(1)
+	s.switchPage(2)
 	app.handleKey(ctx, &s, term.KeyEvent{Key: term.KeyRune, Rune: 'c'})
 	defer s.closeDetail()
 	if s.detail == nil || s.detail.activeTab != detailTabChanges {

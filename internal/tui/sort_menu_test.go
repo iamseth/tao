@@ -74,7 +74,7 @@ func (s *recordingSortStore) Save(_ context.Context, sorts PageSorts) error {
 
 func TestSortMenuLoop(t *testing.T) {
 	ctx := context.Background()
-	for _, page := range []PageID{PagePlans, PageHistory, PageNotes, PageSettings, PageDebug} {
+	for _, page := range []PageID{PagePlans, PageHistory, PageNotes, PageSettings, PageDebug, PageTrends} {
 		t.Run(string(page), func(t *testing.T) {
 			var out bytes.Buffer
 			app := App{Output: &out}

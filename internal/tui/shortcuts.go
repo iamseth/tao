@@ -13,6 +13,16 @@ type shortcut struct {
 }
 
 func shortcutsForPage(page PageID) []shortcut {
+	if normalizePage(page) == PageTrends {
+		return []shortcut{
+			{key: "c", action: "Cycle overall / Pi / Claude"},
+			{key: "↑ / ↓ / j / k / PgUp / PgDn", action: "Scroll monthly trends"},
+			{key: "g / G", action: "Jump to top / bottom"},
+			{key: "Tab / Shift+Tab / ← / →", action: "Switch tabs"},
+			{key: "q / Esc Esc", action: "Quit"},
+			{key: "? / Esc", action: "Close shortcuts"},
+		}
+	}
 	if normalizePage(page) == PageSettings {
 		return []shortcut{
 			{key: "↑ / ↓ / j / k", action: "Select repository (scroll when none)"},
