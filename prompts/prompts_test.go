@@ -1295,6 +1295,33 @@ func TestSlicePromptsRequireContractConsumerOwnership(t *testing.T) {
 	}
 }
 
+func TestSlicePromptsRequireTrackedFileOperationGuidance(t *testing.T) {
+	for name, prompt := range map[string]string{"slice": SlicePromptTemplate, "note slice": NoteSlicePromptTemplate} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				"Identify planned tracked-file moves, renames, or deletions by concrete paths",
+				"not keyword-only inference",
+				"Identifier-only renames are not automatically file operations",
+				"Carry plain filesystem `mv`/`rm` instructions into each affected slice's `tasks`",
+				"never `git mv`/`git rm`",
+				"Tao owns automatic index mutation and completion",
+				"list both old and new paths in `expected_files`",
+				"for deletions, list the removed paths",
+				"Recommend relevant existing real-Git completion tests, especially for staging or completion changes",
+				"do not require integration tests for every ordinary move",
+				"A completion check means an isolated repository test",
+				"never `tao slice-complete` against a live plan as a verification command",
+				"Planning stays read-only and does not run completion probes",
+				"advisory guidance using existing slice fields",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("missing tracked-file operation guidance %q", want)
+				}
+			}
+		})
+	}
+}
+
 func TestSlicePromptRequiresBehavioralSubprocessDoubleDiscovery(t *testing.T) {
 	for _, want := range []string{
 		"When adding, removing, or reordering a Git or subprocess invocation",
