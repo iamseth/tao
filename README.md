@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/iamseth/tao/actions/workflows/ci.yml/badge.svg)](https://github.com/iamseth/tao/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.26.2-00ADD8.svg)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.27.2-00ADD8.svg)](go.mod)
 [![Latest release](https://img.shields.io/github/v/release/iamseth/tao?display_name=tag&sort=semver)](https://github.com/iamseth/tao/releases)
 <div align="center">
   <picture>
@@ -51,7 +51,7 @@ For workflow guidance, see the [usage guide](docs/usage-guide.md). For the artif
 - On Linux, `bubblewrap` (`bwrap`) is required for the OS-confined resolver and
   reviewer sessions used by automatic squash-conflict resolution. `tao doctor`
   reports whether Tao can find it at a supported system path.
-- Go 1.26.2 and `make` only if you install from source.
+- Go 1.27.2 and `make` only if you install from source.
 
 ### Install Tao
 

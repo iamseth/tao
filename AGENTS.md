@@ -10,7 +10,7 @@
 
 ## Shape
 - [docs/agent-input-trust.md](docs/agent-input-trust.md) is the maintainer audit of agent-written inputs and their mitigations.
-- This is a Go module (`github.com/iamseth/tao`) targeting Go `1.26.2` in `go.mod`.
+- This is a Go module (`github.com/iamseth/tao`) targeting Go `1.27.2` in `go.mod`.
 - CLI entrypoint is `cmd/tao/main.go`; command parsing lives in `internal/cli`.
 - Shared monitor row label projection and status roles live in `internal/monitor/rowlabel`; TTY/color detection lives in `internal/term`, and the shared palette and themes live in `internal/theme`.
 - Cross-process plan run locks live in `internal/plan`; the run header view model and renderer live in `internal/runheader`.

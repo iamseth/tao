@@ -271,7 +271,7 @@ func snapshotGitSessionBoundary(ctx context.Context, root string) (snapshot gitS
 		if relErr != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return snapshot, fmt.Errorf("nested Git control %q escapes the integration worktree", path)
 		}
-		info, statErr := os.Lstat(path)
+		info, statErr := os.Lstat(path) // #nosec G703 -- path comes from the non-symlink-following metadata walk and is checked relative to the integration root above; Lstat inspects the entry itself.
 		if statErr != nil {
 			return snapshot, fmt.Errorf("inspect nested Git control %s: %w", path, statErr)
 		}
@@ -401,6 +401,7 @@ func nestedGitControlScopes(ctx context.Context, root string, excludedRoots []st
 func nestedGitControlRoots(ctx context.Context, root string, excludedRoots []string) ([]string, error) {
 	topLevel := filepath.Clean(filepath.Join(root, ".git"))
 	roots := make([]string, 0)
+	// #nosec G703 -- root is the Tao-selected integration worktree (or its saved boundary root), not a provider-supplied path; WalkDir does not follow symlinks.
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err

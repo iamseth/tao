@@ -173,6 +173,31 @@ func TestVerificationCacheDispatchIdentity(t *testing.T) {
 			t.Fatalf("unsafe or unchanged key: %q", changed)
 		}
 	}
+	old := identity("go1.26.2", "2.12.2", "go1.26.2")
+	target := identity("go1.27.2", "2.14.0", "go1.27.2")
+	if old == target || target != identity("go1.27.2", "2.14.0", "go1.27.2") {
+		t.Fatalf("upgrade identity is unchanged or unstable: old=%q target=%q", old, target)
+	}
+	oldCache, err := prepareVerificationCacheNamespace(root, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldEntry := filepath.Join(oldCache, "entry")
+	if err := os.WriteFile(oldEntry, []byte("old cached content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		targetCache, err := prepareVerificationCacheNamespace(root, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if targetCache == oldCache || filepath.Base(targetCache) != target {
+			t.Fatalf("unexpected target cache: %q", targetCache)
+		}
+	}
+	if data, err := os.ReadFile(oldEntry); err != nil || string(data) != "old cached content" { //nolint:gosec // G304: entry in a test-owned temporary cache.
+		t.Fatalf("old cache changed: %q %v", data, err)
+	}
 	legacy := filepath.Join(root, ".tao", "cache", "golangci-lint", "legacy")
 	if _, err := prepareVerificationCache(root); err != nil {
 		t.Fatal(err)
