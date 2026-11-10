@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/monitor"
-	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term"
@@ -270,71 +269,10 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 			if result.err != nil {
 				return fmt.Errorf("read terminal input: %w", result.err)
 			}
-			// List menus consume input before foreground launchers can act on it.
-			if state.sortMenu != nil || state.filterMenu != nil {
-				if a.handleKey(loopCtx, &state, result.key) {
-					return nil
-				}
-				if err := a.writeFrame(state); err != nil {
-					return err
-				}
-				close(result.resume)
-				continue
-			}
-			if handled, quit, err := a.handleNoteCreation(loopCtx, &state, result.key); err != nil {
+			if quit, err := a.dispatchInput(loopCtx, &state, result.key); err != nil {
 				return err
 			} else if quit {
 				return nil
-			} else if handled {
-				if err := a.writeFrame(state); err != nil {
-					return err
-				}
-				close(result.resume)
-				continue
-			}
-			if handled, err := a.planSelectedNote(loopCtx, &state, result.key); err != nil {
-				return err
-			} else if handled {
-				if ctx.Err() != nil {
-					return nil
-				}
-				if err := a.writeFrame(state); err != nil {
-					return err
-				}
-				close(result.resume)
-				continue
-			}
-			if handled, err := a.fixSelectedPlan(loopCtx, &state, result.key); err != nil {
-				return err
-			} else if handled {
-				if ctx.Err() != nil {
-					return nil
-				}
-				if err := a.writeFrame(state); err != nil {
-					return err
-				}
-				close(result.resume)
-				continue
-			}
-			if result.key.Key == term.KeyCtrlG {
-				handled, err := a.editSelectedNote(loopCtx, &state)
-				if err != nil {
-					return err
-				}
-				if handled {
-					if err := a.writeFrame(state); err != nil {
-						return err
-					}
-					close(result.resume)
-					continue
-				}
-			}
-			previousPage := state.activePage()
-			if a.handleKey(loopCtx, &state, result.key) {
-				return nil
-			}
-			if previousPage != state.activePage() {
-				a.refreshTrends(loopCtx, &state)
 			}
 			if err := a.writeFrame(state); err != nil {
 				return err
@@ -759,83 +697,8 @@ func readInput(ctx context.Context, input io.Reader, results chan<- inputResult)
 }
 
 func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent) bool {
-	if state.sortMenu != nil {
-		action, changed := state.sortMenu.handleKey(key, state.size)
-		if changed {
-			state.applySort(state.sortMenu.page, state.sortMenu.sort)
-			if a.SortStore != nil {
-				if err := a.SortStore.Save(ctx, state.sorts); err != nil {
-					state.filterMessage = "Save sorts: " + err.Error()
-				} else {
-					state.filterMessage = ""
-				}
-			}
-		}
-		if action == sortMenuClosed {
-			state.sortMenu = nil
-		}
-		state.interruptEscape()
-		return action == sortMenuQuit
-	}
-	if state.filterMenu != nil {
-		action, change := state.filterMenu.handleKey(key, state.size)
-		if action == filterMenuClosed || change.EnabledChanged || change.Cleared {
-			state.applyPageFilter(state.filterMenu.filter)
-			if a.FilterStore != nil {
-				if err := a.FilterStore.Save(ctx, state.filter); err != nil {
-					state.filterMessage = "Save filters: " + err.Error()
-				} else {
-					state.filterMessage = ""
-				}
-			}
-		}
-		if action == filterMenuClosed {
-			state.filterMenu = nil
-		}
-		state.interruptEscape()
-		return action == filterMenuQuit
-	}
-	if key.Key == term.KeyCtrlC {
-		return true
-	}
-	if state.showShortcuts {
-		switch {
-		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
-			state.showShortcuts = false
-			state.interruptEscape()
-			return false
-		case key.Key == term.KeyRune && key.Rune == '?':
-			state.showShortcuts = false
-			state.interruptEscape()
-			return false
-		case quitKey(key):
-			return true
-		default:
-			return false
-		}
-	}
-	if state.confirm != nil {
-		return state.handleKey(key)
-	}
-	if state.settingsEditor != nil {
-		a.handleSettingsEditor(ctx, state, key)
-		return false
-	}
-	if state.detail == nil && state.noteDetail == nil && !state.searchActive && key.Key == term.KeyRune && key.Rune == 'S' {
-		state.page = PageSettings
-		state.selected = 0
-		state.settingsSnapshot = a.collectSettings(ctx)
-		return false
-	}
-	if state.activePage() == PageSettings && key.Key == term.KeyRune && key.Rune == 'e' {
-		if repo, ok := state.selectedRepositorySetting(); ok {
-			state.settingsEditor = &settingsEditorState{repositoryID: repo.ID}
-		}
-		return false
-	}
-	if state.searchActive {
-		state.handleSearchKey(key)
-		return false
+	if handled, quit := a.handleModalKey(ctx, state, key); handled {
+		return quit
 	}
 	if quitKey(key) {
 		return true
@@ -849,222 +712,15 @@ func (a App) handleKey(ctx context.Context, state *loopState, key term.KeyEvent)
 		return false
 	}
 	if state.noteDetail != nil {
-		state.interruptEscape()
-		item := *state.noteDetail
-		switch {
-		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
-			state.noteDetail = nil
-			state.noteDetailOffset = 0
-		case key.Key == term.KeyArrowLeft:
-			state.moveAdjacentNoteDetail(-1)
-		case key.Key == term.KeyArrowRight:
-			state.moveAdjacentNoteDetail(1)
-		case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
-			state.moveNoteDetail(-1)
-		case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
-			state.moveNoteDetail(1)
-		case key.Key == term.KeyPageUp:
-			state.moveNoteDetail(-state.noteDetailPageStep())
-		case key.Key == term.KeyPageDown:
-			state.moveNoteDetail(state.noteDetailPageStep())
-		case key.Key == term.KeyRune && key.Rune == 'g':
-			state.noteDetailOffset = 0
-		case key.Key == term.KeyRune && key.Rune == 'G':
-			state.noteDetailOffset = state.noteDetailMaxOffset()
-		case key.Key == term.KeyRune && key.Rune == 'c':
-			a.copyNoteID(ctx, state, item)
-		case key.Key == term.KeyRune && key.Rune == 'd':
-			a.requestNoteDelete(ctx, state, item, true)
-		case key.Key == term.KeyRune && key.Rune == 'D':
-			a.requestNoteDelete(ctx, state, item, false)
-		case key.Key == term.KeyRune && key.Rune >= '0' && key.Rune <= '3':
-			a.setSelectedNoteTier(ctx, state, item, int(key.Rune-'0'))
-		}
-		return false
+		return a.handleNoteDetailKey(ctx, state, key)
 	}
 	if state.detail != nil {
-		state.interruptEscape()
-		switch {
-		case (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) && state.detail.sliceOpen:
-			state.detail.sliceOpen = false
-			state.detail.sliceOffset = 0
-		case !state.detail.sliceOpen && state.detail.activeTab == detailTabChanges && a.handleChangesKey(state, key):
-		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace:
-			state.closeDetail()
-		case !state.detail.sliceOpen && a.Actions != nil && key.Key == term.KeyRune && (key.Rune == 'r' || key.Rune == 'R'):
-			a.Actions.RunPlan(ctx, state.detail.row)
-		case !state.detail.sliceOpen && key.Key == term.KeyTab:
-			state.detail.moveTab(1, state.size)
-			a.syncDetailChanges(state)
-		case !state.detail.sliceOpen && key.Key == term.KeyShiftTab:
-			state.detail.moveTab(-1, state.size)
-			a.syncDetailChanges(state)
-		case state.detail.sliceOpen && key.Key == term.KeyArrowRight:
-			state.detail.moveSlice(1)
-		case state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
-			state.detail.moveSlice(-1)
-		case !state.detail.sliceOpen && key.Key == term.KeyArrowRight:
-			a.movePlanDetail(ctx, state, 1)
-		case !state.detail.sliceOpen && key.Key == term.KeyArrowLeft:
-			a.movePlanDetail(ctx, state, -1)
-		case !state.detail.sliceOpen && state.detail.activeTab == detailTabSlices && key.Key == term.KeyEnter:
-			if _, ok := findDetailSlice(state.detail.plan, state.detail.selectedSliceID); ok {
-				state.detail.sliceOpen = true
-				state.detail.sliceOffset = 0
-			}
-		case !state.detail.sliceOpen && state.detail.activeTab == detailTabOverview && key.Key == term.KeyRune && (key.Rune == 'e' || key.Rune == 'E'):
-			state.detail.scopeExpanded = !state.detail.scopeExpanded
-			state.detail.clampOffsets(state.size)
-		case state.detail.sliceOpen && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
-			state.detail.moveSliceDetail(-1, state.size)
-		case state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
-			state.detail.moveSliceDetail(1, state.size)
-		case state.detail.sliceOpen && key.Key == term.KeyPageUp:
-			state.detail.moveSliceDetail(-detailPageStep(state.size, 6), state.size)
-		case state.detail.sliceOpen && key.Key == term.KeyPageDown:
-			state.detail.moveSliceDetail(detailPageStep(state.size, 6), state.size)
-		case state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'g':
-			state.detail.sliceOffset = 0
-		case state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'G':
-			state.detail.sliceOffset = state.detail.sliceMaxOffset(state.size)
-		case !state.detail.sliceOpen && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
-			state.detail.moveVertical(-1, state.size)
-		case !state.detail.sliceOpen && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
-			state.detail.moveVertical(1, state.size)
-		case !state.detail.sliceOpen && key.Key == term.KeyPageUp:
-			state.detail.moveVertical(-state.detail.pageStep(state.size), state.size)
-		case !state.detail.sliceOpen && key.Key == term.KeyPageDown:
-			state.detail.moveVertical(state.detail.pageStep(state.size), state.size)
-		case !state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'g':
-			state.detail.jumpVertical(false, state.size)
-		case !state.detail.sliceOpen && key.Key == term.KeyRune && key.Rune == 'G':
-			state.detail.jumpVertical(true, state.size)
+		if state.detail.sliceOpen {
+			return a.handleSliceDetailKey(state, key)
 		}
-		return false
+		return a.handlePlanDetailKey(ctx, state, key)
 	}
-	if normalizedSearchQuery(state.searchQuery) != "" && (key.Key == term.KeyEsc || key.Key == term.KeyBackspace) {
-		state.clearSearch()
-		return false
-	}
-	if (isPlanPage(state.activePage()) || state.activePage() == PageNotes) && key.Key == term.KeyRune && key.Rune == '/' {
-		state.setSearchQuery("")
-		state.searchActive = true
-		state.interruptEscape()
-		return false
-	}
-	if key.Key != term.KeyEsc {
-		state.interruptEscape()
-	}
-	if state.activePage() == PageTrends && state.handleTrendsKey(key) {
-		return false
-	}
-	if key.Key == term.KeyPageUp || key.Key == term.KeyPageDown {
-		direction := 1
-		if key.Key == term.KeyPageUp {
-			direction = -1
-		}
-		state.movePage(direction)
-		return false
-	}
-	if state.activePage() == PageSettings && key.Key == term.KeyRune && (key.Rune == 'p' || key.Rune == 'P') {
-		repository, ok := state.selectedRepositorySetting()
-		if !ok || a.Settings == nil {
-			return false
-		}
-		next := nextPullRequestSetting(repository.PullRequest)
-		currentLabel := pullRequestSetting(repository.PullRequest, state.settingsSnapshot.InheritedPullRequest)
-		nextLabel := pullRequestSetting(next, state.settingsSnapshot.InheritedPullRequest)
-		state.beginConfirm(fmt.Sprintf("Set %s pull_request from %s to %s?", rowlabel.DisplayValue(repository.Name), currentLabel, nextLabel), func(accepted bool) {
-			if !accepted {
-				return
-			}
-			if err := a.Settings.SetPullRequestDefault(ctx, repository.ID, next); err != nil {
-				state.settingsMessage = "settings update failed: " + err.Error()
-				return
-			}
-			state.settingsSnapshot = a.collectSettings(ctx)
-			state.restoreSettingsSelection(repository.ID)
-			state.settingsMessage = "Updated " + rowlabel.DisplayValue(repository.Name) + " pull_request to " + nextLabel + "."
-		})
-		return false
-	}
-	row, selected := state.selectedRow()
-	if state.activePage() == PageNotes && key.Key == term.KeyRune {
-		if item, ok := state.selectedNote(); ok {
-			switch {
-			case key.Rune == 'c':
-				a.copyNoteID(ctx, state, item)
-				return false
-			case key.Rune == 'd':
-				a.requestNoteDelete(ctx, state, item, true)
-				return false
-			case key.Rune == 'D':
-				a.requestNoteDelete(ctx, state, item, false)
-				return false
-			case key.Rune >= '0' && key.Rune <= '3':
-				a.setSelectedNoteTier(ctx, state, item, int(key.Rune-'0'))
-				return false
-			}
-		}
-	}
-	if state.activePage() == PageNotes && key.Key == term.KeyEnter {
-		if item, ok := state.selectedNote(); ok {
-			state.noteDetail = &item
-			state.noteDetailOffset = 0
-		}
-		return false
-	}
-	if isPlanPage(state.activePage()) && key.Key == term.KeyEnter && selected && row.PlanDir != "" {
-		a.openDetail(ctx, state, row)
-		return false
-	}
-	if isPlanPage(state.activePage()) && key.Key == term.KeyRune && key.Rune == 'c' {
-		if selected && row.PlanDir != "" {
-			a.openDetailTab(ctx, state, row, detailTabChanges)
-		}
-		return false
-	}
-	if state.activePage() == PagePlans && a.Actions != nil && key.Key == term.KeyRune {
-		if key.Rune == 'M' {
-			if repository, ok := state.mergeRepositoryRow(); ok {
-				if message, prompt := a.Actions.MergeAllPrompt(repository); prompt {
-					state.beginConfirm(message, func(accepted bool) {
-						if accepted {
-							a.Actions.MergeAll(ctx, repository)
-						}
-					})
-				}
-			}
-			return false
-		}
-		if !selected {
-			return state.handleKey(key)
-		}
-		switch key.Rune {
-		case 'r', 'R':
-			a.Actions.RunPlan(ctx, row)
-			return false
-		case 'a', 'A':
-			if message, ok := a.Actions.ApprovalPrompt(row); ok {
-				state.beginConfirm(message, func(accepted bool) {
-					if accepted {
-						a.Actions.ApproveSlice(ctx, row)
-					}
-				})
-			}
-			return false
-		case 'm':
-			if message, ok := a.Actions.MergePlanPrompt(row); ok {
-				state.beginConfirm(message, func(accepted bool) {
-					if accepted {
-						a.Actions.MergePlan(ctx, row)
-					}
-				})
-			}
-			return false
-		}
-	}
-	return state.handleKey(key)
+	return a.handleListKey(ctx, state, key)
 }
 
 func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) {
@@ -1371,101 +1027,13 @@ func (s *loopState) handleKey(key term.KeyEvent) bool {
 		return true
 	}
 	if s.confirm != nil {
-		switch {
-		case key.Key == term.KeyRune && (key.Rune == 'y' || key.Rune == 'Y'):
-			s.resolveConfirm(true)
-		case key.Key == term.KeyRune && (key.Rune == 'n' || key.Rune == 'N'):
-			s.resolveConfirm(false)
-		case key.Key == term.KeyEsc || key.Key == term.KeyBackspace || quitKey(key):
-			s.resolveConfirm(false)
-		}
+		s.handleConfirmKey(key)
 		return false
 	}
 	if quitKey(key) {
 		return true
 	}
-	if key.Key != term.KeyEsc {
-		s.interruptEscape()
-	}
-	if s.activePage() == PageDebug {
-		handled := true
-		switch key.Key {
-		case term.KeyArrowUp:
-			s.debugOffset = max(s.debugOffset-1, 0)
-		case term.KeyArrowDown:
-			s.debugOffset = min(s.debugOffset+1, s.debugPageMaxOffset())
-		case term.KeyRune:
-			switch key.Rune {
-			case 'k':
-				s.debugOffset = max(s.debugOffset-1, 0)
-			case 'j':
-				s.debugOffset = min(s.debugOffset+1, s.debugPageMaxOffset())
-			case 'g':
-				s.debugOffset = 0
-			case 'G':
-				s.debugOffset = s.debugPageMaxOffset()
-			default:
-				handled = false
-			}
-		default:
-			handled = false
-		}
-		if handled {
-			return false
-		}
-	}
-	if s.activePage() == PageSettings && s.settingsEditor == nil {
-		// Global values and paths are not selectable; scroll them like the Debug
-		// page. Repository selection keeps the arrow keys while repositories exist.
-		handled := true
-		switch {
-		case key.Key == term.KeyRune && key.Rune == 'g':
-			s.settingsOffset = 0
-		case key.Key == term.KeyRune && key.Rune == 'G':
-			s.settingsOffset = s.settingsPageMaxOffset()
-		case s.pageRowCount() == 0 && (key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k')):
-			s.settingsOffset = max(s.settingsOffset-1, 0)
-		case s.pageRowCount() == 0 && (key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j')):
-			s.settingsOffset = min(s.settingsOffset+1, s.settingsPageMaxOffset())
-		default:
-			handled = false
-		}
-		if handled {
-			return false
-		}
-	}
-
-	switch {
-	case key.Key == term.KeyEsc:
-		now := s.currentTime()
-		if !s.lastRootEscape.IsZero() {
-			elapsed := now.Sub(s.lastRootEscape)
-			if elapsed >= 0 && elapsed <= time.Second {
-				return true
-			}
-		}
-		s.lastRootEscape = now
-	case key.Key == term.KeyTab || key.Key == term.KeyArrowRight:
-		s.switchPage(1)
-	case key.Key == term.KeyShiftTab || key.Key == term.KeyArrowLeft:
-		s.switchPage(-1)
-	case key.Key == term.KeyArrowUp || (key.Key == term.KeyRune && key.Rune == 'k'):
-		if s.selected > 0 {
-			s.selected--
-			s.settingsOffset = 0
-		}
-	case key.Key == term.KeyArrowDown || (key.Key == term.KeyRune && key.Rune == 'j'):
-		if s.selected+1 < s.pageRowCount() {
-			s.selected++
-			s.settingsOffset = 0
-		}
-	case (isPlanPage(s.activePage()) || s.activePage() == PageNotes) && key.Key == term.KeyRune && key.Rune == 's':
-		s.sortMenu = newSortMenu(s.activePage(), s.sorts.For(s.activePage()))
-	case (isPlanPage(s.activePage()) || s.activePage() == PageNotes) && key.Key == term.KeyRune && (key.Rune == 'f' || key.Rune == 'F'):
-		s.filterMenu = newPageFilterMenu(s.filter, s.snapshot, s.noteSnapshot, s.activePage())
-		s.listTopPending = false
-	}
-	return false
+	return s.handlePageKey(key)
 }
 
 func quitKey(key term.KeyEvent) bool {

@@ -140,10 +140,11 @@ func (edit noteEditorFunc) Edit(ctx context.Context, item note.CatalogNote) (boo
 }
 
 type fakeNoteActions struct {
-	deleted []note.CatalogNote
-	tiers   []int
-	err     error
-	changed bool
+	deleted   []note.CatalogNote
+	tiers     []int
+	tierNotes []note.CatalogNote
+	err       error
+	changed   bool
 }
 
 type fakeClipboard struct {
@@ -161,8 +162,9 @@ func (actions *fakeNoteActions) Delete(_ context.Context, item note.CatalogNote)
 	return actions.err
 }
 
-func (actions *fakeNoteActions) SetTier(_ context.Context, _ note.CatalogNote, tier int) (bool, error) {
+func (actions *fakeNoteActions) SetTier(_ context.Context, item note.CatalogNote, tier int) (bool, error) {
 	actions.tiers = append(actions.tiers, tier)
+	actions.tierNotes = append(actions.tierNotes, item)
 	return actions.changed, actions.err
 }
 
@@ -1936,6 +1938,59 @@ func TestNotePlanningParksInputAndDiscoversSnapshotsOnExistingTick(t *testing.T)
 		}
 	case <-ctx.Done():
 		t.Fatal("dashboard did not quit")
+	}
+}
+
+type dispatchFrameWriter struct {
+	frames int
+	failAt int
+	err    error
+}
+
+func (w *dispatchFrameWriter) Write(p []byte) (int, error) {
+	if strings.HasPrefix(string(p), "\x1b[1;1H") {
+		w.frames++
+		if w.frames == w.failAt {
+			return 0, w.err
+		}
+	}
+	return len(p), nil
+}
+
+func TestRunDispatchRedrawFailure(t *testing.T) {
+	for _, keys := range []string{"j", "s", "\x1b[Zn"} {
+		t.Run(fmt.Sprintf("%q", keys), func(t *testing.T) {
+			terminal := &fakeTerminal{size: term.Size{Width: 100, Height: 24}}
+			failure := errors.New("redraw failed")
+			output := &dispatchFrameWriter{failAt: len([]rune(keys)) + 1, err: failure}
+			// Backtab is one decoded input, followed by foreground note creation.
+			if strings.HasPrefix(keys, "\x1b[Z") {
+				output.failAt = 3
+			}
+			err := (App{Input: strings.NewReader(keys + "q"), Output: output, Terminal: terminal,
+				Ticker: &fakeTicker{channel: make(chan time.Time)}, Collector: &fakeCollector{snapshots: []monitor.Snapshot{{}}},
+			}).Run(context.Background())
+			if !errors.Is(err, failure) {
+				t.Fatalf("error=%v", err)
+			}
+			if output.frames != output.failAt || terminal.restoreCalls != 1 {
+				t.Fatalf("frames=%d restores=%d", output.frames, terminal.restoreCalls)
+			}
+		})
+	}
+}
+
+func TestRunDispatchPageChangeRefreshesTrends(t *testing.T) {
+	var output bytes.Buffer
+	err := (App{Input: strings.NewReader("\tq"), Output: &output,
+		Terminal: &fakeTerminal{size: term.Size{Width: 100, Height: 24}},
+		Ticker:   &fakeTicker{channel: make(chan time.Time)}, Collector: &fakeCollector{snapshots: []monitor.Snapshot{{}}},
+	}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "trends collector unavailable") {
+		t.Fatal("page change did not refresh trends")
 	}
 }
 
