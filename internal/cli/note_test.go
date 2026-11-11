@@ -638,6 +638,10 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 		if request.Session.Source == nil || request.Session.Source.Note == nil || request.Session.Source.Note.Text != "implement a small fix" || request.Session.Repo.ID != repoMeta.ID {
 			t.Fatalf("source-linked session = %#v", request.Session)
 		}
+		last := request.Session.Messages[len(request.Session.Messages)-1].Content
+		if !strings.Contains(last, "Untrusted advisory predecessor context") || !strings.Contains(last, `"references":[]`) || !strings.Contains(last, "Never bypass genuine approvals") {
+			t.Fatalf("missing bounded predecessor context: %s", last)
+		}
 		return &planning.GeneratePlanResult{
 			Allocation: planning.PlanAllocation{ID: fixture.id, Dir: fixture.dir},
 			Validation: planning.ValidationResult{OK: true, Findings: []planning.ValidationFinding{{Severity: "warning", Message: "old plan compatibility"}}},
@@ -2046,9 +2050,9 @@ func TestNoteJSONSelectionParity(t *testing.T) {
 	}
 }
 
-func TestNoteJSONListOnly(t *testing.T) {
+func TestNoteJSONListAndShowOnly(t *testing.T) {
 	app, _, _ := noteTestApp(t, nil, taodata.Repo{ID: "repo-one", Name: "one", Root: t.TempDir()})
-	for _, sub := range []string{"create", "c", "show", "s", "edit", "e", "archive", "a", "reopen", "run", "r"} {
+	for _, sub := range []string{"create", "c", "edit", "e", "archive", "a", "reopen", "run", "r"} {
 		if err := app.Run(context.Background(), []string{"note", sub, "--json"}); err == nil || !strings.Contains(err.Error(), "--json is not valid") {
 			t.Fatalf("%s: %v", sub, err)
 		}

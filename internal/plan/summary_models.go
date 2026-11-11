@@ -42,6 +42,8 @@ type FinalizationRecovery struct {
 
 // PlanSummary is the compact representation used by list views.
 type PlanSummary struct {
+	// PlanMerged projects current merge evidence for advisory consumers only.
+	PlanMerged                       bool `json:"-"`
 	ID                               string
 	Title                            string
 	ChangeType                       ChangeType

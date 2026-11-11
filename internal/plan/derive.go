@@ -668,6 +668,7 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 	status := PlanLifecycleStatus(detail)
 	planningSummary := SummarizePlanningSessionMetrics(detail.PlanningSession.Stats, state.CreatedAt)
 	summary := PlanSummary{
+		PlanMerged:                       PlanIsMerged(detail.Events),
 		ID:                               state.Plan.ID,
 		Title:                            state.Plan.Title,
 		ChangeType:                       state.Plan.ChangeType,

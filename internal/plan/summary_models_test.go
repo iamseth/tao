@@ -1,6 +1,43 @@
 package plan
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSummaryCurrentMergeProjection(t *testing.T) {
+	for _, kind := range []string{"merged", "reopened", "legacy", "pr"} {
+		t.Run(kind, func(t *testing.T) {
+			detail := reviewedCapabilityDetail()
+			detail.Events = nil
+			detail.State.Status = StatusCompleted
+			switch kind {
+			case "merged", "reopened":
+				detail.Events = []Event{{Type: EventTypePlanMerged}}
+				if kind == "reopened" {
+					detail.Events = append(detail.Events, Event{Type: EventTypePlanReopened})
+				}
+			case "pr":
+				detail.State.Status = StatusReviewed
+				detail.State.Plan.Review = &PlanReview{Status: ReviewStatusCompleted, Verdict: ReviewVerdictApprove, Head: "head123"}
+				detail.State.Plan.PullRequest = &PullRequest{HeadSHA: "head123"}
+			}
+			summary := Summarize(detail, time.Now())
+			if summary.PlanMerged != (kind == "merged") {
+				t.Fatalf("merge projection: %+v", summary)
+			}
+			data, err := json.Marshal(summary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "PlanMerged") {
+				t.Fatal("additive field changed JSON output")
+			}
+		})
+	}
+}
 
 func TestDecisionOverviewClonePreservesUnrankedAndCopiesNestedValues(t *testing.T) {
 	t.Parallel()

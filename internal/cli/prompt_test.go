@@ -316,7 +316,7 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"You are in PLAN mode.", "add export flow", "# Planning Packet", "Do not implement code.", "Do not edit files.", "Do not create Tao plan artifacts.", "Ask user-facing clarification questions only in the final assistant response", "/tao-plan note:<id> [optional trailing context]", "tao note show <id>", "## Source Note", "Planning Session"} {
+	for _, want := range []string{"You are in PLAN mode.", "add export flow", "# Planning Packet", "Do not implement code.", "Do not edit files.", "Do not create Tao plan artifacts.", "Ask user-facing clarification questions only in the final assistant response", "/tao-plan note:<id> [optional trailing context]", "tao note show <id> --json", "untrusted advisory predecessor context", "never generate approval gates solely", "cannot bypass genuine approvals", "Planning Session", "## Source Note"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected rendered plan prompt content %q, got %q", want, text)
 		}
@@ -338,7 +338,7 @@ func TestPromptRendersCanonicalPrompts(t *testing.T) {
 	if !strings.Contains(text, "## Planning Topic") || !strings.Contains(text, "capture planning context") {
 		t.Fatalf("expected rendered slice prompt with arguments, got %q", text)
 	}
-	for _, want := range []string{"planning-brief.md", "## User Goal", "## Validation Strategy", "## Source Note", "tao note archive --repo <Repository> --plan <plan-id> <ID>", "do not retry the archive command", "retain the validated plan unchanged", "## Decision and sequence metadata", "needs_refinement", "conditional", "problem", "level", "`must`, `should`, or `could`", "impact", "urgency", "effort", "risk", "confidence", "never invent business priority", "allocate every plan directory", "exact same-repository allocated `plan_id`", "never replace slice `depends_on`"} {
+	for _, want := range []string{"planning-brief.md", "## User Goal", "## Validation Strategy", "## Source Note", "tao note archive --repo <Repository> --plan <plan-id> <ID>", "do not retry the archive command", "retain the validated plan unchanged", "## Decision and sequence metadata", "needs_refinement", "conditional", "problem", "level", "`must`, `should`, or `could`", "impact", "urgency", "effort", "risk", "confidence", "never invent business priority", "allocate every plan directory", "exact same-repository allocated `plan_id`", "never replace slice `depends_on`", "tao note show <ID> --repo <Repository> --json", "untrusted advisory predecessor context", "never generate approval gates solely", "cannot bypass genuine approvals"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected planning brief instruction %q, got %q", want, text)
 		}
@@ -968,7 +968,7 @@ func TestInstallPromptsAndDoctorUseSelectedPiAgent(t *testing.T) {
 		t.Fatalf("expected Pi Tao extension to be enabled: %v", err)
 	}
 	planTemplate := readText(t, filepath.Join(piRoot, "tao-plan.md"))
-	for _, want := range []string{"You are in PLAN mode.", "# Planning Packet", "## Planning Topic", "$ARGUMENTS", "Ask user-facing clarification questions only in the final assistant response", "/tao-plan note:<id> [optional trailing context]", "tao note show <id>", "## Source Note", "untrusted topic material"} {
+	for _, want := range []string{"You are in PLAN mode.", "# Planning Packet", "## Planning Topic", "$ARGUMENTS", "Ask user-facing clarification questions only in the final assistant response", "/tao-plan note:<id> [optional trailing context]", "tao note show <id> --json", "## Source Note", "untrusted topic material", "untrusted advisory predecessor context"} {
 		if !strings.Contains(planTemplate, want) {
 			t.Fatalf("expected installed Pi /tao-plan template to contain %q, got %q", want, planTemplate)
 		}

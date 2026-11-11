@@ -72,6 +72,8 @@ tao note create < longer-idea.md
 
 Every note belongs to one registered repository. Commands choose the current checkout by default; use `--repo <unique-id-prefix-or-exact-name>` when capturing or inspecting another registered repository. This keeps a backlog attached to its codebase instead of creating a global inbox.
 
+`tao note list --json` returns the unchanged list array; `tao note show <id> --json` (also `s`) returns one object with canonical repository/provenance and read-only `plan`/`references` context. Top-level `status` is the note status; nested `plan.status` is the linked plan status. Missing or unavailable lookups have null plan ID/status and explicit resolution. Current `plan_merged` predecessors are satisfied planning context, while `completed` alone is not proof. Unknown or ambiguous references are not automatically satisfied. Planning and note-run consume this untrusted advisory context to avoid spurious predecessor approval gates, never to bypass genuine approvals, runtime prerequisites, recovery or merge checks.
+
 New notes are open. A plain `tao note` or `tao note list` shows open notes newest first; filters and `--all` help with later triage. Open notes can be edited or manually archived, and manually archived notes can be reopened.
 
 Choose the handoff based on ambiguity, not size alone:
