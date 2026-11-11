@@ -66,6 +66,52 @@ func TestParkCommandsRoundTripAndContention(t *testing.T) {
 	}
 }
 
+func TestParkCommandsResolvePaths(t *testing.T) {
+	for _, name := range []string{"relative", "absolute outside plans directory", "absolute outside with duplicate ID"} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newRunPlanFixture(t, plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusBlocked)
+			root, input := fixture.root, fixture.dir
+			if name == "relative" {
+				t.Chdir(fixture.root)
+				input = "./" + fixture.id
+			} else {
+				root = t.TempDir()
+				if name == "absolute outside with duplicate ID" {
+					writeRunPlan(t, root, fixture.id, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+				}
+			}
+			repo := plan.NewFileRepository(root)
+			app := newTestApp(App{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+			ctx := context.Background()
+			for _, parked := range []bool{true, false} {
+				args := []string{input}
+				if parked {
+					args = append(args, "--reason", "owner decision")
+				}
+				if err := app.setParking(ctx, repo, args, parked); err != nil {
+					t.Fatal(err)
+				}
+				detail, err := repo.ResolvePlan(ctx, fixture.dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (detail.State.Plan.Parking != nil) != parked || detail.State.Status != plan.StatusBlocked {
+					t.Fatalf("parked=%v state=%+v", parked, detail.State)
+				}
+				if name == "absolute outside with duplicate ID" {
+					other, err := repo.ResolvePlan(ctx, fixture.id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if other.State.Plan.Parking != nil {
+						t.Fatal("parked the unrelated plan with the same ID")
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestParkReloadsUnderRunLock(t *testing.T) {
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 	inner := plan.NewFileRepository(fixture.root)

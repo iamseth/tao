@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -66,19 +67,27 @@ func (a App) setParking(ctx context.Context, repo plan.PlanRecordResolver, args 
 		return errors.New("resolved plan record is nil")
 	}
 	detail := initial.Detail()
-	lock, err := plan.AcquireRunLock(detail.Dir, detail.State.Plan.ID, now)
+	dir, err := filepath.Abs(detail.Dir)
+	if err != nil {
+		return fmt.Errorf("resolve plan directory: %w", err)
+	}
+	lock, err := plan.AcquireRunLock(dir, detail.State.Plan.ID, now)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = lock.Release() }()
-	record, err := repo.ResolvePlanRecord(ctx, detail.State.Plan.ID)
+	record, err := repo.ResolvePlanRecord(ctx, dir)
 	if err != nil {
 		return fmt.Errorf("reload plan while holding run lock: %w", err)
 	}
 	if record == nil || record.Detail() == nil {
 		return errors.New("reload plan while holding run lock: resolved plan record is nil")
 	}
-	if record.Detail().Dir != detail.Dir || record.Detail().State.Plan.ID != detail.State.Plan.ID {
+	reloadedDir, err := filepath.Abs(record.Detail().Dir)
+	if err != nil {
+		return fmt.Errorf("resolve reloaded plan directory: %w", err)
+	}
+	if reloadedDir != dir || record.Detail().State.Plan.ID != detail.State.Plan.ID {
 		return errors.New("plan identity changed while acquiring run lock")
 	}
 	if parked {
