@@ -125,6 +125,18 @@ case "$rc" in
 esac
 ```
 
+For supplemental planning context, use `tao note run <id> --hints-file FILE`.
+The optional file is read once, with shared limits of 64 KiB (65,536 bytes) and
+16,384 Unicode runes after trimming whitespace; oversized input is rejected,
+never truncated. Empty or whitespace-only content is a no-op. An explicitly
+empty path, unreadable file, or exceeded limit is refused before planning or
+execution, including on linked-plan resumes. Valid hints affect only fresh
+planning: they never regenerate or alter an existing linked plan. Hints are
+labelled untrusted work-description context, cannot override trusted rules, and
+are never approval, recovery, merge, or lifecycle authority. The stored note
+body and source snapshot remain unchanged. Existing local diagnostic prompt
+capture may contain hints; no separate hints record is persisted.
+
 ### Planner routing for `tao note run`
 
 Leave routing off for ordinary use. Enable **shadow** first when you want to

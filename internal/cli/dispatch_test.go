@@ -24,6 +24,7 @@ func TestNoteRunUsageIsCommandLocal(t *testing.T) {
 				{"one", "--commit-policy=bad"}, {"one", "--execution-mode=bad"},
 				{"one", "--planner-routing=bad"}, {"one", "--planner-arm=bad"},
 				{"one", "--no-review=bad"}, {"one", "--continue"},
+				{"one", "--hints-file"}, {"one", "--hints-file="}, {"one", "--hints-file", ""},
 			} {
 				app := newTestApp(App{Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
 				args := append([]string{command, subcommand}, rest...)

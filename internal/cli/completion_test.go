@@ -264,6 +264,7 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 			command: "note",
 			want: []string{
 				zshSingleQuote(zshFlagSpec(t, "note", "", "agent", ":agent:(pi claude)")),
+				zshSingleQuote(zshFlagSpec(t, "note", "", "hints-file", ":path:_files")),
 				zshSingleQuote(zshFlagSpec(t, "note", "", "session-timeout", ":duration:")),
 			},
 		},
@@ -738,6 +739,14 @@ _test_tao() { print -r -- example; }
 		got := runCompletion(t, "_test_tao note show --repo my-repo ''", 6)
 		if got != "compadd:-a plan_ids" {
 			t.Fatalf("completion output = %q, want dynamic positional candidates after inherited --repo value", got)
+		}
+	})
+	t.Run("hints file positional handling", func(t *testing.T) {
+		if got := runCompletion(t, "_test_tao note run --hints-file ''", 5); got != "" {
+			t.Fatalf("positional candidates for hints file: %q", got)
+		}
+		if got := runCompletion(t, "_test_tao note r --hints-file hints.txt ''", 6); got != "compadd:-a plan_ids" {
+			t.Fatalf("missing note candidates after hints file: %q", got)
 		}
 	})
 	t.Run("static positional after value flag", func(t *testing.T) {
