@@ -320,6 +320,29 @@ func TestZshCommandArgumentsUseRegisteredFlagsAndSemanticHints(t *testing.T) {
 	}
 }
 
+func TestEditMechanicalCompletion(t *testing.T) {
+	fs := flag.NewFlagSet("amend", flag.ContinueOnError)
+	registerEditAmendFlags(fs)
+	if err := fs.Parse([]string{"--mechanical", "coupled fixtures"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := flagStringValue(fs, "mechanical"); got != "coupled fixtures" {
+		t.Fatalf("mechanical value = %q", got)
+	}
+	args := zshCommandArguments("edit", "amend")
+	if !zshArgumentsContainFlag(args, "--mechanical") || !strings.Contains(args, ":reason:") {
+		t.Fatalf("mechanical reason completion missing: %s", args)
+	}
+	for _, sub := range editCommand.subcommands {
+		if sub.name == "amend" {
+			value := sub.completion.flagValues["mechanical"]
+			if value.kind != completionValueText || value.label != "reason" {
+				t.Fatalf("mechanical completion = %+v", value)
+			}
+		}
+	}
+}
+
 func TestZshCompletionCoversRegisteredPublicFlagsByContext(t *testing.T) {
 	script := buildZshCompletionScript()
 	for i := range commandRegistry {

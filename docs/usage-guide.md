@@ -530,6 +530,19 @@ timeout continuation, verification repair, rework, and mechanical merge recovery
 remain eligible for unattended success when coverage and merge requirements hold;
 this changes no recovery admission or budget policy.
 
+A file-only `edit amend --mechanical` extension does not count as operator
+judgement when both persisted `slice_amended` and `scope_extension` events have
+matching mechanical metadata, supported operator/edit-amend attribution, a
+nonblank bounded reason, and safe paths. The amendment must change only
+`expected_files`, without verification replacements. Ordinary judgement extensions
+and legacy attributed amendments still count; malformed, missing, contradictory,
+or unknown scope evidence cannot establish complete unattended coverage. An
+independent operator action still makes the plan attended. Scorecard and trend
+rates share this classification without changing denominators, maturity, censoring,
+or reliability categories. Reasons and paths are not rendered in these reports.
+The label is an operator claim, not proof of mechanical necessity: it grants no
+ownership, lifecycle, approval, verification, recovery, or merge authority.
+
 Coverage eligibility is written best-effort only for newly allocated plans after
 instrumentation rollout. The marker alone is insufficient: supported operation
 attribution and readable, observably complete history are also required. Historical
@@ -779,6 +792,26 @@ old/new pair visible to the reviewer; Tao does not judge command equivalence.
 Generated repair slices refuse command replacement. See [slice edits](plan-format.md#state-lifecycle)
 for append/replace semantics. Continue, restart, and explicit verification repair
 are single-shot: later automatic rework rounds in that invocation run as ordinary runs.
+
+For a purely mechanical fixture, completion, or coupled documentation-table addition,
+use the file-only form; no synthetic Owner ruling task is needed:
+
+```sh
+tao edit amend <plan-id> <slice-id> \
+  --allow-file internal/cli/testdata/zsh_completion.golden \
+  --allow-file docs/configuration.md \
+  --mechanical 'Regenerate completion and synchronize the settings table'
+```
+
+Repeat `--allow-file` for each path. `--mechanical` supplies a bounded, nonblank
+reason and requires at least one nonblank path. It cannot be combined with
+`--reason-file`, goal, task, manual-check, or verification-command edits. For an
+ordinary judgement amendment, retain `--reason-file FILE` and the appropriate
+contract-edit flags instead. Both forms preserve blocked status and blocker notes;
+resume explicitly when appropriate. Mechanical classification is diagnostic, not
+proof of correctness: review gates, run-side Plan-Owned Files policy, leak-guard
+attribution, verification, approval, and merge evidence remain unchanged. Tao does
+not automatically propose or add coupled files.
 
 **Supply later observations separately from approval.** Put facts in the slice
 contract or a concrete `required_inputs` file available in the execution worktree.

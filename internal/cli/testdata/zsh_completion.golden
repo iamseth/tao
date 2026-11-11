@@ -378,8 +378,8 @@ _tao() {
           fi
           ;;
         amend)
-          _arguments '*--add-manual-check[manual check to append to the slice (repeatable)]:check:' '*--add-task[task to append to the slice (repeatable)]:task:' '*--allow-file[repository-relative expected file to append (repeatable)]:path:_files' '--goal-file[file containing the replacement slice goal]:path:_files' '--reason-file[file containing the amendment reason (required)]:path:_files' '*--replace-verification-command[exact verification command to replace (repeatable, paired by index with --with)]:command:' '*--with[replacement verification command (repeatable, paired by index with --replace-verification-command)]:command:'
-          if _tao_at_positional 4 1 0 ',,' '--add-manual-check' '--add-task' '--allow-file' '--goal-file' '--reason-file' '--replace-verification-command' '--with'; then
+          _arguments '*--add-manual-check[manual check to append to the slice (repeatable)]:check:' '*--add-task[task to append to the slice (repeatable)]:task:' '*--allow-file[repository-relative expected file to append (repeatable)]:path:_files' '--goal-file[file containing the replacement slice goal]:path:_files' '--mechanical[reason for a file-only mechanical scope extension (requires --allow-file; excludes --reason-file and other contract edits)]:reason:' '--reason-file[file containing the amendment reason (required unless --mechanical)]:path:_files' '*--replace-verification-command[exact verification command to replace (repeatable, paired by index with --with)]:command:' '*--with[replacement verification command (repeatable, paired by index with --replace-verification-command)]:command:'
+          if _tao_at_positional 4 1 0 ',,' '--add-manual-check' '--add-task' '--allow-file' '--goal-file' '--mechanical' '--reason-file' '--replace-verification-command' '--with'; then
             plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
             compadd -a plan_ids
           fi

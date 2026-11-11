@@ -375,3 +375,36 @@ func TestTrendDeterminismSparseAndUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestTrendMechanicalScope(t *testing.T) {
+	now := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	for _, classification := range []string{"mechanical", "judgement"} {
+		active := scopeObservation(classification, plan.StatusInProgress, now)
+		immature := scopeObservation(classification, plan.StatusCompleted, now)
+		immature.createdAt = now
+		trend := buildTrend([]planObservation{active, immature}, now)
+		if trend.Coverage.Active != 1 || trend.Coverage.Immature != 1 || trend.Coverage.Eligible != 0 {
+			t.Fatalf("changed censoring: %+v", trend.Coverage)
+		}
+	}
+	mechanical := scopeObservation("mechanical", plan.StatusCompleted, now)
+	judgement := scopeObservation("judgement", plan.StatusCompleted, now)
+	a, b := buildTrend([]planObservation{mechanical}, now), buildTrend([]planObservation{judgement}, now)
+	if !reflect.DeepEqual(a.Coverage, b.Coverage) {
+		t.Fatal("classification changed eligibility")
+	}
+	for _, bucket := range a.Buckets {
+		for _, metric := range bucket.Metrics {
+			if metric.Key == "unattended_rate" && (metric.Rate == nil || metric.Rate.Numerator != 1 || metric.Rate.Denominator != 1) {
+				t.Fatalf("mechanical rate: %+v", metric)
+			}
+		}
+	}
+	for _, bucket := range b.Buckets {
+		for _, metric := range bucket.Metrics {
+			if metric.Key == "unattended_rate" && (metric.Rate == nil || metric.Rate.Numerator != 0 || metric.Rate.Denominator != 1) {
+				t.Fatalf("judgement rate: %+v", metric)
+			}
+		}
+	}
+}

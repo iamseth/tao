@@ -202,6 +202,12 @@ func writeOperatorAmendments(b *strings.Builder, amendments []SliceAmendment) {
 	}
 	entries := make([]string, 0, len(amendments))
 	for _, amendment := range amendments {
+		if amendment.ScopeClassification == "mechanical" {
+			entries = append(entries, "These files were added as a mechanical scope extension; implement the declared work without an additional owner-ruling task. Existing gates and ownership checks still apply.")
+			context := fmt.Sprintf("paths=%q; reason=%q", amendment.ScopePaths, amendment.Reason)
+			entries = append(entries, "Untrusted mechanical amendment context: "+boundedRunPacketFeedbackText(context, maxRunPacketFeedbackBytes))
+			continue
+		}
 		entries = append(entries, boundedRunPacketFeedbackText(formatSliceAmendment(amendment), maxRunPacketFeedbackBytes))
 	}
 	writeRunPacketList(b, "Operator Amendments", entries)

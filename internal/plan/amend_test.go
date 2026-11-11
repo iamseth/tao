@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -12,6 +13,131 @@ import (
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+func TestMechanicalScopeRequestValidation(t *testing.T) {
+	for name, request := range map[string]SliceAmendmentRequest{
+		"blank":     {MechanicalReason: " \n", AllowFiles: []string{"x.go"}},
+		"oversized": {MechanicalReason: strings.Repeat("x", maxBlockerNoteRunes+1), AllowFiles: []string{"x.go"}},
+		"no files":  {MechanicalReason: "fixture"},
+		"unsafe":    {MechanicalReason: "fixture", AllowFiles: []string{"../x.go"}},
+		"goal":      {MechanicalReason: "fixture", AllowFiles: []string{"x.go"}, Goal: "new"},
+		"task":      {MechanicalReason: "fixture", AllowFiles: []string{"x.go"}, AddTasks: []string{"new"}},
+		"check":     {MechanicalReason: "fixture", AllowFiles: []string{"x.go"}, AddManualChecks: []string{"new"}},
+		"gate":      {MechanicalReason: "fixture", AllowFiles: []string{"x.go"}, ReplaceVerificationCommands: []VerificationCommandReplacement{{Old: "old", New: "new"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			detail := editPlanDetail()
+			before := clonePlanDetail(detail)
+			mutation, err := amendSliceMutation("003-c", request, amendTime())(detail)
+			if err == nil || len(mutation.Events) != 0 || !reflect.DeepEqual(detail, before) {
+				t.Fatalf("refusal mutated plan: %v", err)
+			}
+		})
+	}
+}
+
+func TestMechanicalScopeAmendment(t *testing.T) {
+	detail := editPlanDetail()
+	request := SliceAmendmentRequest{MechanicalReason: "coupled fixture", AllowFiles: []string{"new.go", "new.go"}}
+	mutation, err := amendSliceMutation("003-c", request, amendTime())(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{EventTypeSliceAmended, EventTypeScopeExtension} {
+		event := findEventByType(mutation.Events, kind)
+		if event == nil || event.ScopeClassification != "mechanical" || !slices.Equal(event.Paths, []string{"new.go"}) || event.Reason != "coupled fixture" || event.Actor != "operator" {
+			t.Fatalf("missing typed event %s: %+v", kind, mutation.Events)
+		}
+	}
+}
+
+func TestMechanicalScopePersists(t *testing.T) {
+	dir := t.TempDir()
+	initial := editPlanDetail()
+	stateJSON, err := json.Marshal(initial.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slicesJSON, err := json.Marshal(initial.Slices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePlan(t, dir, "edit", string(stateJSON), string(slicesJSON))
+	repo := NewFileRepository(dir)
+	detail, err := repo.GetPlan(context.Background(), "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := SliceAmendmentRequest{MechanicalReason: "fixture", AllowFiles: []string{"x.go"}}
+	if err := testRepoRecord(repo, detail).AmendSlice("003-c", request, amendTime()); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := repo.GetPlan(context.Background(), "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sliceAmendmentWasRecorded(reloaded, findSlice(reloaded, "003-c"), request, amendTime()) {
+		t.Fatal("persisted mechanical pair is not replayable")
+	}
+}
+
+func TestScopeAmendmentReplay(t *testing.T) {
+	for _, mechanical := range []bool{false, true} {
+		t.Run(fmt.Sprint(mechanical), func(t *testing.T) {
+			detail := editPlanDetail()
+			request := SliceAmendmentRequest{Reason: "fixture", AllowFiles: []string{"x.go", "x.go"}}
+			classification := "judgement"
+			if mechanical {
+				request.MechanicalReason = "fixture"
+				classification = "mechanical"
+			}
+			mutation, err := amendSliceMutation("003-c", request, amendTime())(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail.Events = mutation.Events
+			slice := findSlice(detail, "003-c")
+			if slice.Amendments[0].ScopeClassification != classification || !slices.Equal(slice.Amendments[0].ScopePaths, []string{"x.go"}) {
+				t.Fatalf("metadata: %+v", slice.Amendments)
+			}
+			if !sliceAmendmentWasRecorded(detail, slice, request, amendTime()) {
+				t.Fatal("pair not replayable")
+			}
+			for _, kind := range []string{EventTypeSliceAmended, EventTypeScopeExtension} {
+				incomplete := clonePlanDetail(detail)
+				incomplete.Events = slices.DeleteFunc(incomplete.Events, func(e Event) bool { return e.Type == kind })
+				if sliceAmendmentWasRecorded(incomplete, findSlice(incomplete, "003-c"), request, amendTime()) {
+					t.Fatalf("accepted missing %s", kind)
+				}
+			}
+			if !mechanical {
+				legacy := clonePlanDetail(detail)
+				legacy.Events = slices.DeleteFunc(legacy.Events, func(e Event) bool { return e.Type == EventTypeScopeExtension })
+				amendment := &findSlice(legacy, "003-c").Amendments[0]
+				amendment.ScopeClassification = ""
+				amendment.ScopePaths = nil
+				event := findEventByType(legacy.Events, EventTypeSliceAmended)
+				event.ScopeClassification = ""
+				event.Paths = nil
+				if !sliceAmendmentWasRecorded(legacy, findSlice(legacy, "003-c"), request, amendTime()) {
+					t.Fatal("historical retry rejected")
+				}
+			}
+			altered := clonePlanDetail(detail)
+			findEventByType(altered.Events, EventTypeScopeExtension).Paths = []string{"other.go"}
+			if sliceAmendmentWasRecorded(altered, findSlice(altered, "003-c"), request, amendTime()) {
+				t.Fatal("accepted mismatched paths")
+			}
+			request.Reason = "different"
+			if mechanical {
+				request.MechanicalReason = "different"
+			}
+			if mutation, err := amendSliceMutation("003-c", request, amendTime())(detail); err == nil || len(mutation.Events) != 0 {
+				t.Fatal("no-op emitted events")
+			}
+		})
+	}
+}
 
 func TestVerificationCommandAmendment(t *testing.T) {
 	detail := blockedAmendDetail()
@@ -204,6 +330,21 @@ func TestAmendBlockedSliceMutatesOnlyRequestedFields(t *testing.T) {
 	}
 }
 
+func TestMechanicalRepairSlice(t *testing.T) {
+	detail := blockedAmendDetail()
+	slice := findSlice(detail, "001-a")
+	slice.VerificationRepair = &VerificationRepairBinding{Command: "make verify", HeadSHA: "failed-head", Fingerprint: "failure"}
+	before := clonePlanDetail(detail)
+	_, err := markSliceAmendedWithChanges(detail, newArtifactChangeSet(detail), slice.ID, SliceAmendmentRequest{MechanicalReason: "fixture", AllowFiles: []string{"x.go"}}, amendTime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := findSlice(before, slice.ID)
+	if slice.Goal != original.Goal || slice.Status != original.Status || !reflect.DeepEqual(slice.VerificationRepair, original.VerificationRepair) || !reflect.DeepEqual(slice.Verification, original.Verification) {
+		t.Fatal("mechanical label changed frozen repair contract")
+	}
+}
+
 func TestAmendRepairSliceAppendsOnly(t *testing.T) {
 	t.Parallel()
 	for _, status := range []string{StatusPending, StatusBlocked} {
@@ -393,6 +534,10 @@ func TestPlanRecordAmendSlicePersistsReloadsAndReplaysIdempotently(t *testing.T)
 	}
 	if event.Actor != "operator" || event.Trigger != "edit_amend" || event.AttributionVersion != 1 {
 		t.Fatalf("unexpected persisted attribution: %+v", event)
+	}
+	scope := findEventByType(reloaded.Events, EventTypeScopeExtension)
+	if scope == nil || scope.ScopeClassification != "judgement" || !slices.Equal(scope.Paths, []string{"internal/x/helper.go"}) {
+		t.Fatalf("missing scope extension: %+v", scope)
 	}
 	if !slices.Equal(reloaded.State.Plan.PendingSlices, []string{"001-a", "002-b", "003-c"}) {
 		t.Fatalf("pending queue changed: %v", reloaded.State.Plan.PendingSlices)

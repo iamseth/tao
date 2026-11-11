@@ -295,6 +295,7 @@ func cloneSliceAmendments(amendments []SliceAmendment) []SliceAmendment {
 	for i, amendment := range amendments {
 		clone[i] = amendment
 		clone[i].Fields = cloneStringSlice(amendment.Fields)
+		clone[i].ScopePaths = cloneStringSlice(amendment.ScopePaths)
 		clone[i].VerificationCommands = slices.Clone(amendment.VerificationCommands)
 	}
 	return clone

@@ -14,6 +14,7 @@ const (
 	EventTypeSliceSkipped               = "slice_skipped"
 	EventTypeSlicesReordered            = "slices_reordered"
 	EventTypeSliceAmended               = "slice_amended"
+	EventTypeScopeExtension             = "scope_extension"
 	EventTypeSliceApproved              = "slice_approved"
 	EventTypePullRequestCreated         = "pull_request_created"
 	EventTypeFinalizationFailed         = "finalization_failed"
@@ -86,6 +87,7 @@ type Event struct {
 	Round                        int                              `json:"round,omitempty"`
 	Attempts                     int                              `json:"attempts,omitempty"`
 	Fingerprint                  string                           `json:"fingerprint,omitempty"`
+	ScopeClassification          string                           `json:"scope_classification,omitempty"`
 	Reason                       string                           `json:"reason,omitempty"`
 	AbortKind                    string                           `json:"abort_kind,omitempty"`
 	AmendedFields                []string                         `json:"amended_fields,omitempty"`

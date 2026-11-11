@@ -20,6 +20,32 @@ func scopeGateDetail() *PlanDetail {
 	}
 }
 
+func TestMechanicalAmendmentPreservesLifecycle(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusBlocked} {
+		t.Run(status, func(t *testing.T) {
+			detail := scopeGateDetail()
+			slice := &detail.Slices.Slices[1]
+			slice.Status = status
+			slice.Approval = &Approval{Required: true}
+			event, err := markSliceAmendedWithChanges(detail, newArtifactChangeSet(detail), slice.ID, SliceAmendmentRequest{MechanicalReason: "coupled files", AllowFiles: []string{"a.go", "z.go", "internal/plan/derive.go"}}, editTime())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(event.Paths, []string{"a.go", "z.go"}) || event.ScopeClassification != "mechanical" {
+				t.Fatalf("accepted scope: %+v", event)
+			}
+			if slice.Status != status || slice.Approval.Approved || !slice.Approval.Required {
+				t.Fatal("amendment changed lifecycle authority")
+			}
+		})
+	}
+	detail := scopeGateDetail()
+	detail.Slices.Slices[1].Amendments = []SliceAmendment{{ScopeClassification: "mechanical", ScopePaths: []string{"a.go", "z.go"}}}
+	if AnalyzeLifecycle(detail).Runnable {
+		t.Fatal("classification alone granted scope authority")
+	}
+}
+
 func TestReworkScopeGate(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {

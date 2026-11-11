@@ -1348,10 +1348,21 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	expectedFiles, filesChanged := appendMissingStrings(slice.ExpectedFiles, normalized.AllowFiles)
 	// Generated rework already lists the review's required paths. Explicitly
 	// accepting a conflicting path changes operator authority, not the list.
-	acceptsScope := slices.ContainsFunc(reworkScopeConflicts(detail, slice), func(path string) bool {
-		return slices.Contains(normalized.AllowFiles, path)
-	})
-	if filesChanged || acceptsScope {
+	conflicts := reworkScopeConflicts(detail, slice)
+	var scopePaths []string
+	for _, path := range normalized.AllowFiles {
+		if (!slices.Contains(slice.ExpectedFiles, path) || slices.Contains(conflicts, path)) && !slices.Contains(scopePaths, path) {
+			scopePaths = append(scopePaths, path)
+		}
+	}
+	classification := ""
+	if len(scopePaths) > 0 {
+		classification = "judgement"
+		if normalized.MechanicalReason != "" {
+			classification = "mechanical"
+		}
+	}
+	if filesChanged || len(scopePaths) > 0 {
 		fields = append(fields, "expected_files")
 	}
 	manualChecks, checksChanged := appendMissingStrings(slice.Verification.ManualChecks, normalized.AddManualChecks)
@@ -1370,12 +1381,14 @@ func markSliceAmendedWithChanges(detail *PlanDetail, changes *artifactChangeSet,
 	slice.ExpectedFiles = expectedFiles
 	slice.Verification = verification
 	slice.Verification.ManualChecks = manualChecks
-	slice.Amendments = append(slice.Amendments, SliceAmendment{AmendedAt: now, Reason: normalized.Reason, Fields: fields, VerificationCommands: slices.Clone(normalized.ReplaceVerificationCommands)})
+	slice.Amendments = append(slice.Amendments, SliceAmendment{AmendedAt: now, Reason: normalized.Reason, Fields: fields, VerificationCommands: slices.Clone(normalized.ReplaceVerificationCommands), ScopeClassification: classification, ScopePaths: slices.Clone(scopePaths)})
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 	markPlanEdited(detail, changes, now)
 	event := Event{
 		Type:                         EventTypeSliceAmended,
+		ScopeClassification:          classification,
+		Paths:                        slices.Clone(scopePaths),
 		Timestamp:                    now,
 		PlanID:                       detail.State.Plan.ID,
 		SliceID:                      sliceID,

@@ -24,6 +24,9 @@ func TestInterventionPairs(t *testing.T) {
 			}
 			t.Run(eventType+"/"+trigger, func(t *testing.T) {
 				event := plan.WithInterventionAttribution(plan.Event{Type: eventType, PlanID: "p"}, actor, trigger)
+				if eventType == plan.EventTypeScopeExtension {
+					event.ScopeClassification = "judgement"
+				}
 				p := interventionProjection{planID: "p"}
 				p.consume(event)
 				p.consume(event)
@@ -245,5 +248,80 @@ func TestInterventionCleanMerged(t *testing.T) {
 	got := buildCohortOutcomes([]planObservation{o})
 	if got.Quality.Unattended.Numerator != 1 || got.Quality.Unattended.Denominator != 1 {
 		t.Fatalf("rate: %+v", got.Quality.Unattended)
+	}
+}
+
+func mechanicalScopeEvents() []plan.Event {
+	amendment := plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypeSliceAmended, PlanID: "p", SliceID: "s", Timestamp: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), ScopeClassification: "mechanical", Reason: "update fixture", Paths: []string{"internal/example.golden"}, AmendedFields: []string{"expected_files"}}, "operator", "edit_amend")
+	scope := amendment
+	scope.Type = plan.EventTypeScopeExtension
+	scope.AmendedFields = nil
+	return []plan.Event{amendment, scope}
+}
+
+func TestMechanicalScopePaths(t *testing.T) {
+	for _, path := range []string{"", " ", "../secret", "a/../b", "/absolute", " /absolute ", `C:\secret`, `a\..\b`, "a\x00b"} {
+		t.Run(path, func(t *testing.T) {
+			e := mechanicalScopeEvents()[0]
+			e.Paths = []string{path}
+			if validMechanicalScope(e) {
+				t.Fatalf("accepted unsafe path %q", path)
+			}
+		})
+	}
+}
+
+func TestMechanicalScopeProjection(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		mutate            func([]plan.Event) []plan.Event
+		invalid, operator bool
+	}{
+		{name: "paired"},
+		{name: "judgement", mutate: func(es []plan.Event) []plan.Event {
+			for i := range es {
+				es[i].ScopeClassification = "judgement"
+			}
+			return es
+		}, operator: true},
+		{name: "legacy", mutate: func(es []plan.Event) []plan.Event { es[0].ScopeClassification = ""; es[0].Paths = nil; return es[:1] }, operator: true},
+		{name: "missing pair", mutate: func(es []plan.Event) []plan.Event { return es[:1] }, invalid: true},
+		{name: "mixed fields", mutate: func(es []plan.Event) []plan.Event {
+			es[0].AmendedFields = append(es[0].AmendedFields, "tasks")
+			return es
+		}, invalid: true},
+		{name: "gate replacement", mutate: func(es []plan.Event) []plan.Event {
+			es[0].ReplacedVerificationCommands = []plan.VerificationCommandReplacement{{Old: "test", New: "true"}}
+			return es
+		}, invalid: true},
+		{name: "foreign", mutate: func(es []plan.Event) []plan.Event { es[0].PlanID = "other"; return es }, invalid: true},
+		{name: "unknown", mutate: func(es []plan.Event) []plan.Event { es[0].ScopeClassification = "future"; return es }, invalid: true},
+		{name: "missing classification", mutate: func(es []plan.Event) []plan.Event { es[1].ScopeClassification = ""; return es }, invalid: true},
+		{name: "missing attribution", mutate: func(es []plan.Event) []plan.Event { es[0].Actor = ""; return es }, invalid: true},
+		{name: "empty reason", mutate: func(es []plan.Event) []plan.Event { es[0].Reason = " "; return es }, invalid: true},
+		{name: "large reason", mutate: func(es []plan.Event) []plan.Event { es[0].Reason = strings.Repeat("x", 16385); return es }, invalid: true},
+		{name: "unsafe path", mutate: func(es []plan.Event) []plan.Event { es[0].Paths = []string{"../secret"}; return es }, invalid: true},
+		{name: "contradictory pair", mutate: func(es []plan.Event) []plan.Event { es[1].Reason = "different"; return es }, invalid: true},
+		{name: "independent intervention", mutate: func(es []plan.Event) []plan.Event {
+			return append(es, plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypeSliceSkipped, PlanID: "p"}, "operator", "edit_skip"))
+		}, operator: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			es := mechanicalScopeEvents()
+			if tc.mutate != nil {
+				es = tc.mutate(es)
+			}
+			p := interventionProjection{planID: "p", marker: true, created: true, runContext: true}
+			for _, e := range es {
+				p.consume(e)
+			}
+			complete := p.complete("p", planData{historyPresent: true}, true)
+			if complete == tc.invalid || (!tc.invalid && p.operator != tc.operator) {
+				t.Fatalf("complete=%v projection=%+v", complete, p)
+			}
+			if p.complete("p", planData{}, true) {
+				t.Fatal("missing history accepted")
+			}
+		})
 	}
 }

@@ -16,13 +16,14 @@ import (
 var editCommand = commandMetadata{
 	name:                  "edit",
 	minPrefix:             "e",
-	usageLines:            []string{"edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]..."},
+	usageLines:            []string{"edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --allow-file PATH... --mechanical REASON", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]..."},
 	completionDescription: "Edit pending slices in a plan",
-	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Repeatable --replace-verification-command OLD and --with NEW flags are paired by index for one-for-one replacement, never deleting a command. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal or verification command. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
+	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Use --mechanical REASON with --allow-file PATH for file-only mechanical extensions, mutually exclusive with --reason-file and all other contract edits. Classification does not bypass ownership, review, or merge checks. Repeatable --replace-verification-command OLD and --with NEW flags are paired by index for one-for-one replacement, never deleting a command. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal or verification command. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
 	examples: "  tao edit remove my-plan 003-old-slice\n" +
 		"  tao edit skip my-plan 004-optional\n" +
 		"  tao edit move my-plan 005-tests --before 004-docs\n" +
-		"  tao edit amend my-plan 002-blocked --reason-file /tmp/reason.txt --allow-file internal/cli/helper.go --add-task 'Add the helper' --add-manual-check 'Run the helper once'",
+		"  tao edit amend my-plan 002-blocked --reason-file /tmp/reason.txt --allow-file internal/cli/helper.go --add-task 'Add the helper' --add-manual-check 'Run the helper once'\n" +
+		"  tao edit amend my-plan 002-blocked --allow-file internal/cli/testdata/zsh_completion.golden --mechanical 'Regenerate completion for the new flag'",
 	subcommands: []commandSubcommand{
 		{name: "remove", description: "Remove a pending slice from the plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "skip", description: "Mark a pending slice skipped", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
@@ -30,6 +31,7 @@ var editCommand = commandMetadata{
 		{name: "amend", description: "Amend a pending or blocked slice's contract with a recorded reason; verification replacements are one-for-one, never delete commands, and are refused for generated repair slices, as are goal replacements", registerFlags: registerEditAmendFlags, completion: completionContext{
 			positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
 			flagValues: map[string]completionFlagValue{
+				"mechanical":                   {kind: completionValueText, label: "reason"},
 				"reason-file":                  {kind: completionValuePath, label: "path"},
 				"goal-file":                    {kind: completionValuePath, label: "path"},
 				"allow-file":                   {kind: completionValuePath, label: "path"},
@@ -48,7 +50,7 @@ var editCommand = commandMetadata{
 }
 
 const (
-	editAmendUsage = "tao edit amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]... (one-for-one; never deletes commands; refused for generated repair slices)"
+	editAmendUsage = "tao edit amend <plan-id-or-slug-or-path> <slice-id> --allow-file PATH... --mechanical REASON | tao edit amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]... (one-for-one; never deletes commands; refused for generated repair slices)"
 	editUsage      = "usage: tao edit remove <plan-id-or-slug-or-path> <slice-id> | tao edit skip <plan-id-or-slug-or-path> <slice-id> | " + editAmendUsage + " | tao edit move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)"
 )
 
@@ -118,7 +120,8 @@ func registerEditMoveFlags(fs *flag.FlagSet) {
 }
 
 func registerEditAmendFlags(fs *flag.FlagSet) {
-	fs.String("reason-file", "", "file containing the amendment reason (required)")
+	fs.String("reason-file", "", "file containing the amendment reason (required unless --mechanical)")
+	fs.String("mechanical", "", "reason for a file-only mechanical scope extension (requires --allow-file; excludes --reason-file and other contract edits)")
 	fs.String("goal-file", "", "file containing the replacement slice goal")
 	fs.Var(new(stringListFlag), "add-task", "task to append to the slice (repeatable)")
 	fs.Var(new(stringListFlag), "allow-file", "repository-relative expected file to append (repeatable)")
@@ -215,6 +218,30 @@ func (a App) editAmend(ctx context.Context, repo editRepository, args []string) 
 // parseEditAmendRequest bounds the operator's reason, goal, and repeatable
 // contract additions and refuses requests that change nothing.
 func parseEditAmendRequest(fs *flag.FlagSet) (plan.SliceAmendmentRequest, error) {
+	provided := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if provided["mechanical"] {
+		for _, name := range []string{"reason-file", "goal-file", "add-task", "add-manual-check", "replace-verification-command", "with"} {
+			if provided[name] {
+				return plan.SliceAmendmentRequest{}, fmt.Errorf("--mechanical cannot be combined with --%s", name)
+			}
+		}
+		reason, err := agentinput.BoundedText(flagStringValue(fs, "mechanical"), "mechanical reason")
+		if err != nil {
+			return plan.SliceAmendmentRequest{}, err
+		}
+		if reason == "" {
+			return plan.SliceAmendmentRequest{}, errors.New("--mechanical requires a nonblank reason")
+		}
+		paths, err := boundedEditList(fs, "allow-file", "allowed file")
+		if err != nil {
+			return plan.SliceAmendmentRequest{}, err
+		}
+		if len(paths) == 0 {
+			return plan.SliceAmendmentRequest{}, errors.New("--mechanical requires at least one nonblank --allow-file")
+		}
+		return plan.SliceAmendmentRequest{Reason: reason, MechanicalReason: reason, AllowFiles: paths}, nil
+	}
 	reasonFile := strings.TrimSpace(flagStringValue(fs, "reason-file"))
 	if reasonFile == "" {
 		return plan.SliceAmendmentRequest{}, errors.New("edit amend requires --reason-file FILE containing the amendment reason")

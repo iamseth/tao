@@ -185,14 +185,22 @@ func amendSliceMutation(sliceID string, request SliceAmendmentRequest, now time.
 			if err != nil {
 				return nil, err
 			}
-			return []Event{event}, nil
+			return scopeAmendmentEvents(event), nil
 		})
 	}
 }
 
-// sliceAmendmentWasRecorded reports whether an identical amendment already
-// landed: its slice_amended event is journaled and every requested value is
-// present on the slice, so a retry after a partial persist is a no-op.
+func scopeAmendmentEvents(event Event) []Event {
+	events := []Event{event}
+	if event.ScopeClassification != "" {
+		scope := WithInterventionAttribution(Event{Type: EventTypeScopeExtension, Timestamp: event.Timestamp, PlanID: event.PlanID, SliceID: event.SliceID, ScopeClassification: event.ScopeClassification, Paths: slices.Clone(event.Paths), Reason: event.Reason}, "operator", "edit_amend")
+		events = append(events, scope)
+	}
+	return events
+}
+
+// sliceAmendmentWasRecorded requires persisted values and the complete event
+// pair for typed scope amendments, retaining single-event historical retries.
 func sliceAmendmentWasRecorded(detail *PlanDetail, slice *Slice, request SliceAmendmentRequest, now time.Time) bool {
 	normalized, err := request.normalize()
 	if err != nil {
@@ -217,8 +225,28 @@ func sliceAmendmentWasRecorded(detail *PlanDetail, slice *Slice, request SliceAm
 		if amendment.Reason != normalized.Reason || !slices.Equal(amendment.VerificationCommands, normalized.ReplaceVerificationCommands) {
 			continue
 		}
-		expected := WithInterventionAttribution(Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, ReplacedVerificationCommands: normalized.ReplaceVerificationCommands, Message: sliceAmendmentMessage}, "operator", "edit_amend")
-		if semanticEventsWereRecorded(detail.Events, []Event{expected}) {
+		if normalized.MechanicalReason != "" && amendment.ScopeClassification != "mechanical" {
+			continue
+		}
+		if normalized.MechanicalReason == "" && amendment.ScopeClassification != "" && amendment.ScopeClassification != "judgement" {
+			continue
+		}
+		if amendment.ScopeClassification != "" {
+			if len(amendment.ScopePaths) == 0 {
+				continue
+			}
+			matches := true
+			for _, path := range amendment.ScopePaths {
+				if !slices.Contains(normalized.AllowFiles, path) {
+					matches = false
+				}
+			}
+			if !matches {
+				continue
+			}
+		}
+		expected := WithInterventionAttribution(Event{Type: EventTypeSliceAmended, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: slice.ID, Reason: normalized.Reason, AmendedFields: amendment.Fields, ReplacedVerificationCommands: normalized.ReplaceVerificationCommands, Message: sliceAmendmentMessage, ScopeClassification: amendment.ScopeClassification, Paths: slices.Clone(amendment.ScopePaths)}, "operator", "edit_amend")
+		if semanticEventsWereRecorded(detail.Events, scopeAmendmentEvents(expected)) {
 			return true
 		}
 	}

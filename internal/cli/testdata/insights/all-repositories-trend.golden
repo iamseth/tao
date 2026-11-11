@@ -23,7 +23,7 @@ plans: 5; terminal: 5; eligible: 5; immature: 0; active (censored): 0; never-sta
 missing evidence: 0; unbucketed: 0; unknown attribution: 0; ambiguous attribution: 0; event evidence: 5; review evidence: 0; malformed history: 0; skipped plans: 0; unreadable repositories: 0
 metric | direction | measurement (Wilson 95% for rates) | samples | eligible / evidence / partial | availability | comparison | reason
 recorded_blocker | lower | 0/5 = 0.00% [0.00%, 43.45%] | 5 | 5 / 5 / 0 | available | unavailable | 
-unattended_rate | higher | 2/5 = 40.00% [11.76%, 76.93%] | 5 | 5 / 5 / 0 | available | unavailable | 
+unattended_rate | higher | 3/5 = 60.00% [23.07%, 88.24%] | 5 | 5 / 5 / 0 | available | unavailable | 
 
 ## 2026-10 — planner-runtime: overall (provisional: false; age-immature: true)
 plans: 4; terminal: 2; eligible: 1; immature: 1; active (censored): 1; never-started (censored): 1

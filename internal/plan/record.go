@@ -347,6 +347,9 @@ func (r *PlanRecord) RemoveSlice(sliceID string, now time.Time) error {
 // blocked slice's contract. Goal replaces the slice goal when non-empty; the
 // list fields append entries that are not already present.
 type SliceAmendmentRequest struct {
+	// MechanicalReason replaces Reason for a file-only mechanical amendment.
+	// Empty retains ordinary amendment behavior.
+	MechanicalReason            string
 	ReplaceVerificationCommands []VerificationCommandReplacement
 	Reason                      string
 	Goal                        string
@@ -359,15 +362,26 @@ type SliceAmendmentRequest struct {
 // refusing unsafe expected-file paths, empty reasons, and empty requests.
 func (request SliceAmendmentRequest) normalize() (SliceAmendmentRequest, error) {
 	reason := strings.TrimSpace(request.Reason)
+	mechanical := strings.TrimSpace(request.MechanicalReason)
+	if request.MechanicalReason != "" {
+		if mechanical == "" || len([]rune(mechanical)) > maxBlockerNoteRunes {
+			return SliceAmendmentRequest{}, fmt.Errorf("mechanical reason must be nonblank and at most %d runes", maxBlockerNoteRunes)
+		}
+		if len(trimmedNonEmpty(request.AllowFiles)) == 0 || request.Goal != "" || len(request.AddTasks) > 0 || len(request.AddManualChecks) > 0 || len(request.ReplaceVerificationCommands) > 0 {
+			return SliceAmendmentRequest{}, fmt.Errorf("mechanical amendment requires allowed files and forbids other contract changes")
+		}
+		reason = mechanical
+	}
 	if reason == "" {
 		return SliceAmendmentRequest{}, fmt.Errorf("amendment reason is required")
 	}
 	normalized := SliceAmendmentRequest{
-		Reason:          agentinput.CapRunes(reason, maxBlockerNoteRunes),
-		Goal:            strings.TrimSpace(request.Goal),
-		AddTasks:        trimmedNonEmpty(request.AddTasks),
-		AllowFiles:      trimmedNonEmpty(request.AllowFiles),
-		AddManualChecks: trimmedNonEmpty(request.AddManualChecks),
+		MechanicalReason: mechanical,
+		Reason:           agentinput.CapRunes(reason, maxBlockerNoteRunes),
+		Goal:             strings.TrimSpace(request.Goal),
+		AddTasks:         trimmedNonEmpty(request.AddTasks),
+		AllowFiles:       trimmedNonEmpty(request.AllowFiles),
+		AddManualChecks:  trimmedNonEmpty(request.AddManualChecks),
 	}
 	pairs, err := normalizeVerificationCommandReplacements(request.ReplaceVerificationCommands)
 	if err != nil {

@@ -101,7 +101,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - exact approval: 1.000 [0.566, 1.000] n=5
   - completed: 1.000 [0.566, 1.000] n=5
   - merged: 0.800 [0.376, 0.964] n=5
-  - unattended (observed): 0.600 [0.231, 0.882] n=5
+  - unattended (observed): 0.800 [0.376, 0.964] n=5
   - pull-request completed: 0.200 [0.036, 0.624] n=5
   - abandoned: 0.000 [0.000, 0.434] n=5
   - rework stopped: 0.000 [0.000, 0.434] n=5
@@ -167,7 +167,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - exact approval: 1.000 [0.566, 1.000] n=5
   - completed: 1.000 [0.566, 1.000] n=5
   - merged: 0.800 [0.376, 0.964] n=5
-  - unattended (observed): 0.600 [0.231, 0.882] n=5
+  - unattended (observed): 0.800 [0.376, 0.964] n=5
   - pull-request completed: 0.200 [0.036, 0.624] n=5
   - abandoned: 0.000 [0.000, 0.434] n=5
   - rework stopped: 0.000 [0.000, 0.434] n=5
@@ -293,7 +293,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - exact approval: 1.000 [0.566, 1.000] n=5
   - completed: 1.000 [0.566, 1.000] n=5
   - merged: 0.800 [0.376, 0.964] n=5
-  - unattended (observed): 0.600 [0.231, 0.882] n=5
+  - unattended (observed): 0.800 [0.376, 0.964] n=5
   - pull-request completed: 0.200 [0.036, 0.624] n=5
   - abandoned: 0.000 [0.000, 0.434] n=5
   - rework stopped: 0.000 [0.000, 0.434] n=5

@@ -420,6 +420,100 @@ func (r diskAmendRepository) ResolvePlanRecord(_ context.Context, _ string) (*pl
 	return plan.NewPlanRecord(r.detail.Dir, r.detail)
 }
 
+func TestEditAmendMechanical(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		ok   bool
+	}{
+		{"valid repeated paths", []string{"--mechanical", "  coupled fixtures  ", "--allow-file", "fixtures/a.golden", "--allow-file", "docs/table.md", "--allow-file", "fixtures/a.golden"}, true},
+		{"empty", []string{"--mechanical", "", "--allow-file", "a"}, false},
+		{"blank", []string{"--mechanical", " \n", "--allow-file", "a"}, false},
+		{"oversized", []string{"--mechanical", strings.Repeat("x", agentinput.MaxTextRunes+1), "--allow-file", "a"}, false},
+		{"no paths", []string{"--mechanical", "why"}, false},
+		{"blank path", []string{"--mechanical", "why", "--allow-file", " "}, false},
+		{"unsafe path", []string{"--mechanical", "why", "--allow-file", "../outside"}, false},
+		{"absolute path", []string{"--mechanical", "why", "--allow-file", "/outside"}, false},
+		{"noop", []string{"--mechanical", "why", "--allow-file", "internal/cli/existing.go"}, false},
+		{"reason file", []string{"--mechanical", "why", "--allow-file", "a", "--reason-file", ""}, false},
+		{"goal", []string{"--mechanical", "why", "--allow-file", "a", "--goal-file", ""}, false},
+		{"task", []string{"--mechanical", "why", "--allow-file", "a", "--add-task", ""}, false},
+		{"check", []string{"--mechanical", "why", "--allow-file", "a", "--add-manual-check", ""}, false},
+		{"old gate", []string{"--mechanical", "why", "--allow-file", "a", "--replace-verification-command", ""}, false},
+		{"new gate", []string{"--mechanical", "why", "--allow-file", "a", "--with", ""}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, detail := amendPlanRepo(t)
+			repo := diskAmendRepository{Repository: plantest.NewRepository(), detail: detail}
+			repo.AddDetail(detail)
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			app := newTestApp(App{Out: io.Discard, Err: io.Discard, Repository: func(_ string) Repository { return repo }})
+			err = app.Run(context.Background(), append([]string{"edit", "amend", detail.State.Plan.ID, "002-b"}, tc.args...))
+			if !tc.ok {
+				if err == nil {
+					t.Fatal("expected refusal")
+				}
+				after, marshalErr := json.Marshal(detail)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if !bytes.Equal(before, after) {
+					t.Fatal("refusal mutated plan")
+				}
+				if _, statErr := os.Stat(filepath.Join(detail.Dir, "slices.json")); !os.IsNotExist(statErr) {
+					t.Fatalf("refusal persisted: %v", statErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(detail.Dir, "slices.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &detail.Slices); err != nil {
+				t.Fatal(err)
+			}
+			s := sliceByID(detail, "002-b")
+			paths := []string{"fixtures/a.golden", "docs/table.md"}
+			if s.Status != plan.StatusBlocked || s.BlockerNote == "" || !slices.Equal(s.Tasks, []string{"Existing task"}) {
+				t.Fatalf("changed contract/status: %+v", s)
+			}
+			if len(s.Amendments) != 1 || s.Amendments[0].ScopeClassification != "mechanical" || !slices.Equal(s.Amendments[0].ScopePaths, paths) {
+				t.Fatalf("amendments: %+v", s.Amendments)
+			}
+			for _, kind := range []string{plan.EventTypeScopeExtension, plan.EventTypeSliceAmended} {
+				found := false
+				for _, event := range detail.Events {
+					if event.Type != kind {
+						continue
+					}
+					found = true
+					if event.SliceID != "002-b" || event.ScopeClassification != "mechanical" || event.Reason != "coupled fixtures" || !slices.Equal(event.Paths, paths) {
+						t.Fatalf("event: %+v", event)
+					}
+				}
+				if !found {
+					t.Fatalf("missing %s", kind)
+				}
+			}
+			selected := "002-b"
+			detail.State.Plan.CurrentSlice = &selected
+			packet, err := plan.RenderRunPacket(detail, plan.RunPacketOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(packet, "mechanical scope extension") || strings.Contains(packet, "Owner ruling") {
+				t.Fatalf("packet: %s", packet)
+			}
+		})
+	}
+}
+
 func TestEditAmendVerificationCommands(t *testing.T) {
 	const old = `! grep -q 'never change declared verification commands' prompts/run.md`
 	const replacement = `! grep -q 'obsolete rule' prompts/run.md && grep -q "Operator Amendments" prompts/run.md`

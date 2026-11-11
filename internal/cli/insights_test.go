@@ -16,6 +16,7 @@ import (
 
 	"github.com/iamseth/tao/internal/agent/logrecord"
 	"github.com/iamseth/tao/internal/insights"
+	"github.com/iamseth/tao/internal/intervention"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/view"
@@ -389,7 +390,7 @@ func representativeTrend() insights.TrendReport {
 		Buckets: []insights.TrendBucket{
 			{Month: "2026-09", Cohort: "overall", Coverage: insights.TrendCoverage{Plans: 5, Terminal: 5, Eligible: 5, EventEvidence: 5}, Metrics: []insights.TrendMetric{
 				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(0, 5, 5)), Comparison: "unavailable"},
-				{Key: "unattended_rate", Direction: "higher", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(2, 5, 5)), Comparison: "unavailable"},
+				{Key: "unattended_rate", Direction: "higher", Availability: "available", EligiblePlans: 5, EvidencePlans: 5, Rate: new(insights.EstimateRate(3, 5, 5)), Comparison: "unavailable"},
 			}},
 			{Month: "2026-10", Cohort: "overall", AgeImmature: true, Coverage: insights.TrendCoverage{Plans: 4, Terminal: 2, Eligible: 1, Immature: 1, Active: 1, NeverStarted: 1}, Metrics: []insights.TrendMetric{
 				{Key: "recorded_blocker", Direction: "lower", Availability: "available", EligiblePlans: 1, EvidencePlans: 1, Rate: new(insights.EstimateRate(1, 1, 5)), Comparison: "inconclusive"},
@@ -499,7 +500,7 @@ func representativeScorecard() insights.Scorecard {
 				Plans: n + 1, Matured: n, Censored: 1, NeverStarted: 1,
 				UnknownAttributionPlans: 2, MaturedUnknownAttributionPlans: 1,
 				Quality: insights.QualityOutcomes{
-					Unattended: rate(max(0, n-2), n),
+					Unattended: rate(max(0, n-1), n), // Includes a covered mechanical extension.
 					Started:    rate(n, n+1), FirstReviewApproved: rate(n-1, n), ExactApproval: rate(n, n),
 					Completed: rate(n, n), Merged: rate(n-1, n), PullRequestCompleted: rate(1, n),
 					Abandoned: rate(0, n), ReworkStopped: rate(0, n), AnyRework: rate(1, n), AnyVerificationRepair: rate(1, n),
@@ -930,6 +931,96 @@ func TestInsightsStructuredBlockerRenderingAgreement(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestInsightsMechanicalAmendCollection(t *testing.T) {
+	for _, mechanical := range []bool{true, false} {
+		t.Run(fmt.Sprint(mechanical), func(t *testing.T) {
+			base, detail := amendPlanRepo(t)
+			detail.Dir = filepath.Join(t.TempDir(), detail.State.Plan.ID)
+			if err := os.MkdirAll(detail.Dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			repo := diskAmendRepository{Repository: base, detail: detail}
+			var out bytes.Buffer
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})
+			args := []string{"edit", "amend", detail.State.Plan.ID, "002-b", "--allow-file", "private-fixture.golden"}
+			if mechanical {
+				args = append(args, "--mechanical", "private-scope-reason")
+			} else {
+				args = append(args, "--reason-file", writeAmendInput(t, "reason", "private-scope-reason"))
+			}
+			if err := app.Run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+			selected := "002-b"
+			detail.State.Plan.CurrentSlice = &selected
+			packet, err := plan.RenderRunPacket(detail, plan.RunPacketOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mechanical && !strings.Contains(packet, "mechanical scope extension") {
+				t.Fatal("missing packet guidance")
+			}
+			id := detail.State.Plan.ID
+			if err := intervention.WriteCoverage(detail.Dir, id); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			for _, e := range []plan.Event{
+				{Type: "plan_created", PlanID: id, Timestamp: now.AddDate(0, -2, 0), Agent: "pi"},
+				plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypeRunContext, PlanID: id}, "automatic", "run_context"),
+				{Type: plan.EventTypeSliceStarted, PlanID: id},
+				plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypePlanMerged, PlanID: id, Timestamp: now.AddDate(0, -1, 0)}, "automatic", "merge_complete"),
+			} {
+				if err := plan.AppendEvent(detail.Dir, e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report, err := insights.AggregateWithOptions(context.Background(), fakeRepository{summaries: []plan.PlanSummary{{ID: id, Dir: detail.Dir, Status: plan.StatusCompleted}}}, insights.Options{IncludeTrend: true, Now: now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Scorecard.Cohorts) != 1 {
+				t.Fatalf("cohorts: %+v", report.Scorecard)
+			}
+			rate := report.Scorecard.Cohorts[0].Outcomes.Quality.Unattended
+			want := 0
+			if mechanical {
+				want = 1
+			}
+			if rate.Numerator != want || rate.Denominator != 1 {
+				t.Fatalf("rate: %+v", rate)
+			}
+			found := false
+			for _, bucket := range report.Trend.Buckets {
+				for _, metric := range bucket.Metrics {
+					if metric.Key == "unattended_rate" {
+						found = true
+						if metric.Rate == nil || metric.Rate.Numerator != want || metric.Rate.Denominator != 1 {
+							t.Fatalf("trend rate: %+v", metric)
+						}
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing trend rate")
+			}
+			for _, render := range []func(*bytes.Buffer, insights.Report) error{renderInsightsReport, renderInsightsDigest, renderInsightsScorecard, func(out *bytes.Buffer, report insights.Report) error {
+				return view.RenderInsights(out, report, view.InsightsOptions{Scope: view.InsightsScopeRepository, Format: view.InsightsFormatTrend})
+			}} {
+				out.Reset()
+				if err := render(&out, report); err != nil {
+					t.Fatal(err)
+				}
+				for _, secret := range []string{"private-fixture", "private-scope-reason"} {
+					if strings.Contains(out.String(), secret) {
+						t.Fatalf("render leaked %s", secret)
+					}
+				}
+			}
+		})
 	}
 }
 

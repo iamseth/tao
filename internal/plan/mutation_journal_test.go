@@ -16,6 +16,58 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestScopeAmendmentJournalTornPair(t *testing.T) {
+	for _, fail := range []string{"state", "slices", "event-1", "event-2", "events-sync"} {
+		t.Run(fail, func(t *testing.T) {
+			dir := t.TempDir()
+			journal := testMutationJournal(t)
+			detail := editPlanDetail()
+			mutation, err := amendSliceMutation("003-c", SliceAmendmentRequest{MechanicalReason: "fixture", AllowFiles: []string{"x.go"}}, amendTime())(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.Events = nil
+			for _, event := range mutation.Events {
+				event.PlanID = journal.PlanID
+				event.MutationID = journal.MutationID
+				payload, err := json.Marshal(event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				journal.Events = append(journal.Events, newMutationJournalEvent(payload))
+			}
+			store := &failingMutationJournalIO{delegate: fileMutationJournalIO{}, failOperation: fail}
+			if err := installAndSettleMutation(store, dir, journal); err == nil {
+				t.Fatal("expected torn write")
+			}
+			if found, err := settlePendingMutation(fileMutationJournalIO{}, dir, journal.PlanID); err != nil || !found {
+				t.Fatalf("recovery: %t %v", found, err)
+			}
+			if found, err := settlePendingMutation(fileMutationJournalIO{}, dir, journal.PlanID); err != nil || found {
+				t.Fatalf("repeat recovery: %t %v", found, err)
+			}
+			events, warnings, err := readEvents(filepath.Join(dir, "events.jsonl"))
+			if err != nil || len(warnings) != 0 {
+				t.Fatalf("read: %v %v", err, warnings)
+			}
+			for _, kind := range []string{EventTypeSliceAmended, EventTypeScopeExtension} {
+				count := 0
+				for _, event := range events {
+					if event.Type == kind {
+						count++
+						if event.ScopeClassification != "mechanical" || event.Reason != "fixture" || len(event.Paths) != 1 || event.Paths[0] != "x.go" {
+							t.Fatalf("lost scope metadata: %+v", event)
+						}
+					}
+				}
+				if count != 1 {
+					t.Fatalf("%s count=%d", kind, count)
+				}
+			}
+		})
+	}
+}
+
 func TestMutationJournalDecodeValidation(t *testing.T) {
 	t.Parallel()
 	valid := testMutationJournal(t)

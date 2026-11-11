@@ -58,6 +58,8 @@ type Slice struct {
 // slice's contract made through `tao edit amend`. Amendments are structured
 // operator evidence, distinct from agent-authored Ruling: notes.
 type SliceAmendment struct {
+	ScopeClassification  string                           `json:"scope_classification,omitempty"`
+	ScopePaths           []string                         `json:"scope_paths,omitempty"`
 	VerificationCommands []VerificationCommandReplacement `json:"verification_commands,omitempty"`
 	AmendedAt            time.Time                        `json:"amended_at"`
 	Reason               string                           `json:"reason"`

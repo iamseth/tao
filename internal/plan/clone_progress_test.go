@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+func TestCloneAmendmentScopePaths(t *testing.T) {
+	original := []SliceAmendment{{ScopeClassification: "mechanical", ScopePaths: []string{"x.go"}}}
+	clone := cloneSliceAmendments(original)
+	clone[0].ScopePaths[0] = "other.go"
+	if original[0].ScopePaths[0] != "x.go" {
+		t.Fatal("scope paths aliased")
+	}
+}
+
 func TestClonePlanDetailDeepCopiesMutableFields(t *testing.T) {
 	t.Parallel()
 	current := "001-a"

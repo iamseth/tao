@@ -702,3 +702,31 @@ func TestScorecardMaturityUsesUTCDay(t *testing.T) {
 		}
 	}
 }
+
+func scopeObservation(classification string, status string, now time.Time) planObservation {
+	es := mechanicalScopeEvents()
+	data := planData{historyPresent: true, createdAt: now.AddDate(0, -2, 0), intervention: interventionProjection{planID: "p", marker: true, created: true, runContext: true}}
+	for _, e := range es {
+		e.ScopeClassification = classification
+		data.intervention.consume(e)
+	}
+	data.lifecycle = []plan.Event{{Type: plan.EventTypeSliceStarted}}
+	if status == plan.StatusCompleted {
+		data.lifecycle = append(data.lifecycle, plan.Event{Type: plan.EventTypePlanMerged, Timestamp: now.AddDate(0, -1, 0)})
+	}
+	return observePlan(sourceIdentity{}, plan.PlanSummary{ID: "p", Status: status}, data, now)
+}
+
+func TestScorecardMechanicalScope(t *testing.T) {
+	now := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	mechanical := scopeObservation("mechanical", plan.StatusCompleted, now)
+	judgement := scopeObservation("judgement", plan.StatusCompleted, now)
+	a, b := buildCohortOutcomes([]planObservation{mechanical}), buildCohortOutcomes([]planObservation{judgement})
+	if a.Quality.Unattended.Numerator != 1 || b.Quality.Unattended.Numerator != 0 || a.Quality.Unattended.Denominator != 1 || b.Quality.Unattended.Denominator != 1 {
+		t.Fatalf("mechanical=%+v judgement=%+v", a, b)
+	}
+	a.Quality.Unattended = b.Quality.Unattended
+	if !reflect.DeepEqual(a, b) {
+		t.Fatal("classification changed unrelated outcomes")
+	}
+}

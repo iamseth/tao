@@ -150,11 +150,11 @@
           "evidence_plans": 5,
           "partial_samples": 0,
           "rate": {
-            "numerator": 2,
+            "numerator": 3,
             "denominator": 5,
-            "rate": 0.4,
-            "lower": 0.11762077314099711,
-            "upper": 0.7692757205908813,
+            "rate": 0.6,
+            "lower": 0.23072427940911855,
+            "upper": 0.8823792268590028,
             "sparse": false
           },
           "comparison": "unavailable"
