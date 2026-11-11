@@ -32,9 +32,9 @@ const defaultNoteListLimit = 20
 var noteCommand = commandMetadata{
 	name:                  "note",
 	minPrefix:             "n",
-	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N] [--json]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] [--json] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--hints-file FILE] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
+	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N] [--json]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] [--json] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) ready [--repo REPO] [--json] <note-id>", "note (n) run (r) [--repo REPO] [--hints-file FILE] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
 	completionDescription: "Capture and maintain repository notes",
-	long:                  "Capture and maintain a private note backlog for a registered repository. With no subcommand, note lists open notes newest first. Use --json for a read-only list array or show object with advisory predecessor context.",
+	long:                  "Capture and maintain a private note backlog for a registered repository. With no subcommand, note lists open notes newest first. Use --json for a read-only list array, show object with advisory predecessor context, or ready object with the advisory readiness verdict.",
 	examples:              "  tao n c fix flaky queue test\n  printf 'First line\\n\\nMore detail\\n' | tao note create --tag testing\n  tao note list --all\n  tao note list --json\n  tao note archive 20260713-155800-abcd",
 	subcommands: []commandSubcommand{
 		{name: "create", aliases: []commandSubcommandAlias{"c"}, description: "Create a note from arguments or standard input"},
@@ -43,6 +43,7 @@ var noteCommand = commandMetadata{
 		{name: "edit", aliases: []commandSubcommandAlias{"e"}, description: "Edit a note's text and optional tags", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "archive", aliases: []commandSubcommandAlias{"a"}, description: "Archive an open note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "reopen", description: "Reopen an archived note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
+		{name: "ready", description: "Report an advisory readiness verdict for promoting a note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "run", aliases: []commandSubcommandAlias{"r"}, description: "Generate or resume and run a note's linked plan", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 	},
 	registerFlags:        registerNoteFlags,
@@ -92,7 +93,7 @@ func (a App) registerNoteFlags(fs *flag.FlagSet) {
 	fs.Var(new(stringListFlag), "tag", "tag to apply or require (repeatable)")
 	fs.Var(new(stringListFlag), "status", "status to list: open, promoted, or archived (repeatable)")
 	fs.Bool("all", false, "include all note statuses")
-	fs.Bool("json", false, "output a JSON array (list) or object with predecessor context (show)")
+	fs.Bool("json", false, "output a JSON array (list), object with predecessor context (show), or advisory readiness object (ready)")
 	fs.Int("limit", defaultNoteListLimit, "maximum notes to list (0 means unlimited)")
 	fs.String("reason", "", "archive reason")
 	fs.String("plan", "", "validated normal plan destination")
@@ -115,7 +116,7 @@ func (a App) note(ctx context.Context, args []string) error {
 	if len(positional) > 0 {
 		subcommand = normalizeNoteSubcommand(positional[0])
 		if subcommand == "" {
-			return fmt.Errorf("unknown note subcommand %q; use create, list, show, edit, archive, reopen, or run", positional[0])
+			return fmt.Errorf("unknown note subcommand %q; use create, list, show, edit, archive, reopen, ready, or run", positional[0])
 		}
 		positional = positional[1:]
 	}
@@ -172,6 +173,8 @@ func (a App) note(ctx context.Context, args []string) error {
 		return a.noteArchive(ctx, registered, repo, fs, positional)
 	case "reopen":
 		return a.noteReopen(ctx, repo, positional)
+	case "ready":
+		return a.noteReady(ctx, registered, repo, fs, positional)
 	case "run":
 		return a.noteRun(ctx, registered, repo, fs, positional)
 	default:
@@ -257,6 +260,8 @@ func normalizeNoteSubcommand(value string) string {
 		return "archive"
 	case "reopen":
 		return "reopen"
+	case "ready":
+		return "ready"
 	case "run", "r":
 		return "run"
 	default:
@@ -272,6 +277,7 @@ func validateNoteFlags(fs *flag.FlagSet, subcommand string) error {
 		"edit":    {"repo": true, "tag": true},
 		"archive": {"repo": true, "reason": true, "plan": true},
 		"reopen":  {"repo": true},
+		"ready":   {"repo": true, "json": true},
 		"run":     {"repo": true, "agent": true, "session-timeout": true, "max-slices": true, "commit-policy": true, "execution-mode": true, "pull-request": true, "dangerously-skip-permissions": true, "no-review": true, "planner-routing": true, "planner-arm": true, "hints-file": true},
 	}
 	var invalid string
@@ -419,33 +425,130 @@ func projectNotePlan(lookup note.PlanLookup) notePlanJSON {
 	return result
 }
 
-// Lookup uses only repository-scoped list projections, never stored link paths.
-func (a App) noteLookupContext(ctx context.Context, registered taodata.Repo, repo NoteRepository, item note.Note) (noteLookupJSON, error) {
-	notes, warnings, notesErr := repo.List(ctx, note.Filter{All: true})
-	summaries, plansErr := a.repository(a.registry().PlansDir(registered)).ListPlans(ctx, plan.PlanFilter{})
-	for _, err := range []error{ctx.Err(), notesErr, plansErr} {
+// noteLookupSources holds the repository-scoped note and plan projections read
+// exactly once per operation. Load failures other than cancellation degrade the
+// corresponding set to nil and are retained for unavailable marking.
+type noteLookupSources struct {
+	notes     []note.Note
+	warnings  []note.Warning
+	notesErr  error
+	summaries []plan.PlanSummary
+	plansErr  error
+}
+
+func (a App) loadNoteLookupSources(ctx context.Context, registered taodata.Repo, repo NoteRepository) (noteLookupSources, error) {
+	var src noteLookupSources
+	src.notes, src.warnings, src.notesErr = repo.List(ctx, note.Filter{All: true})
+	src.summaries, src.plansErr = a.repository(a.registry().PlansDir(registered)).ListPlans(ctx, plan.PlanFilter{})
+	for _, err := range []error{ctx.Err(), src.notesErr, src.plansErr} {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return noteLookupJSON{}, err
+			return noteLookupSources{}, err
 		}
 	}
-	if notesErr != nil {
-		notes = nil
+	if src.notesErr != nil {
+		src.notes = nil
 	}
-	if plansErr != nil {
-		summaries = nil
+	if src.plansErr != nil {
+		src.summaries = nil
 	}
-	lookup := note.LookupPlan(item, summaries)
-	if plansErr != nil && lookup.Resolution != "unlinked" {
+	return src, nil
+}
+
+// references resolves the note text and marks reference plans unavailable when
+// the notes or plans could not be loaded completely.
+func (s noteLookupSources) references(text string) []note.ReferenceLookup {
+	refs := note.ResolveReferences(text, s.notes, s.summaries)
+	for i := range refs {
+		if s.notesErr != nil || len(s.warnings) > 0 || (s.plansErr != nil && refs[i].NoteID != "" && refs[i].Plan.Resolution != "unlinked") {
+			refs[i].Plan = note.PlanLookup{Resolution: "unavailable"}
+		}
+	}
+	return refs
+}
+
+// Lookup uses only repository-scoped list projections, never stored link paths.
+func (a App) noteLookupContext(ctx context.Context, registered taodata.Repo, repo NoteRepository, item note.Note) (noteLookupJSON, error) {
+	src, err := a.loadNoteLookupSources(ctx, registered, repo)
+	if err != nil {
+		return noteLookupJSON{}, err
+	}
+	lookup := note.LookupPlan(item, src.summaries)
+	if src.plansErr != nil && lookup.Resolution != "unlinked" {
 		lookup = note.PlanLookup{Resolution: "unavailable"}
 	}
 	result := noteLookupJSON{Plan: projectNotePlan(lookup), References: []noteReferenceJSON{}}
-	for _, ref := range note.ResolveReferences(item.Text, notes, summaries) {
-		if notesErr != nil || len(warnings) > 0 || (plansErr != nil && ref.NoteID != "" && ref.Plan.Resolution != "unlinked") {
-			ref.Plan = note.PlanLookup{Resolution: "unavailable"}
-		}
+	for _, ref := range src.references(item.Text) {
 		result.References = append(result.References, noteReferenceJSON{Reference: ref.Reference, NoteID: ref.NoteID, Plan: projectNotePlan(ref.Plan)})
 	}
 	return result, nil
+}
+
+type noteReadinessCheckJSON struct {
+	Name    string   `json:"name"`
+	Status  string   `json:"status"`
+	Reasons []string `json:"reasons"`
+}
+
+// noteReady prints the advisory readiness verdict. It is presentation only:
+// it never promotes, locks, or writes note, plan, or lock storage, and both
+// verdicts return nil so the process exit code never encodes the verdict.
+func (a App) noteReady(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: tao note ready <note-id> [--repo REPO] [--json]")
+	}
+	item, err := repo.Get(ctx, args[0])
+	if err != nil {
+		return fmt.Errorf("ready note: %w", err)
+	}
+	src, err := a.loadNoteLookupSources(ctx, registered, repo)
+	if err != nil {
+		return err
+	}
+	input := note.ReadinessInput{
+		Note:       item,
+		Notes:      src.notes,
+		References: src.references(item.Text),
+		Health:     a.noteRepositoryHealth(ctx, registered),
+	}
+	sites, err := note.CheckFixSites(ctx, registered.Root, note.ExtractFixSites(item.Text))
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case err != nil:
+		input.FixSiteError = err.Error()
+	default:
+		input.FixSites = sites
+	}
+	verdict := note.EvaluateReadiness(input)
+	if flagBoolValue(fs, "json") {
+		checks := make([]noteReadinessCheckJSON, 0, len(verdict.Checks))
+		for _, check := range verdict.Checks {
+			reasons := check.Reasons
+			if reasons == nil {
+				reasons = []string{}
+			}
+			checks = append(checks, noteReadinessCheckJSON{Name: check.Name, Status: check.Status, Reasons: reasons})
+		}
+		return json.NewEncoder(a.Out).Encode(struct {
+			ID         string                   `json:"id"`
+			Repository string                   `json:"repository"`
+			Ready      bool                     `json:"ready"`
+			Checks     []noteReadinessCheckJSON `json:"checks"`
+		}{item.ID, registered.ID, verdict.Ready, checks})
+	}
+	lines := []string{"ID: " + item.ID, "Repository: " + registered.ID}
+	if verdict.Ready {
+		lines = append(lines, "Verdict: ready")
+	} else {
+		lines = append(lines, "Verdict: not ready (advisory)")
+	}
+	for _, check := range verdict.Checks {
+		lines = append(lines, check.Status+" "+check.Name)
+		for _, reason := range check.Reasons {
+			lines = append(lines, "  - "+reason)
+		}
+	}
+	return writeLines(a.Out, lines...)
 }
 
 func (a App) noteShow(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) error {
@@ -1007,11 +1110,17 @@ func (a App) acquireNotePromotionLock(ctx context.Context, dir, noteID, owner st
 	return lock.Release, nil
 }
 
-func (a App) requireHealthyNoteRepository(ctx context.Context, registered taodata.Repo) error {
-	health := taodata.RepoHealthChecker{}.Check(ctx, registered)
+// noteRepositoryHealth is the single catalog health check shared by note run
+// admission and the advisory readiness verdict so the two cannot disagree.
+func (a App) noteRepositoryHealth(ctx context.Context, registered taodata.Repo) taodata.RepoHealth {
 	if a.RepoHealthCheck != nil {
-		health = a.RepoHealthCheck(ctx, registered)
+		return a.RepoHealthCheck(ctx, registered)
 	}
+	return taodata.RepoHealthChecker{}.Check(ctx, registered)
+}
+
+func (a App) requireHealthyNoteRepository(ctx context.Context, registered taodata.Repo) error {
+	health := a.noteRepositoryHealth(ctx, registered)
 	if health.Error {
 		return fmt.Errorf("repository %s is unhealthy [%s]: %s", registered.ID, health.Status, health.Message)
 	}

@@ -444,7 +444,7 @@ func TestCompletionMetadataPreservesSubcommandFlagScopes(t *testing.T) {
 		parentFlags    bool
 		subcommandFlag map[string]bool
 	}{
-		{command: "note", parentFlags: true, subcommandFlag: map[string]bool{"create": false, "list": false, "show": false, "edit": false, "archive": false, "reopen": false, "run": false}},
+		{command: "note", parentFlags: true, subcommandFlag: map[string]bool{"create": false, "list": false, "show": false, "edit": false, "archive": false, "reopen": false, "ready": false, "run": false}},
 		{command: "workspace", parentFlags: true, subcommandFlag: map[string]bool{"list": false, "prepare": false, "status": false, "clean": true}},
 		{command: "edit", parentFlags: true, subcommandFlag: map[string]bool{"remove": false, "skip": false, "move": true, "amend": true}},
 	}
