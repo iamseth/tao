@@ -191,6 +191,19 @@ func TestZshCommandCasesFollowRegistryOrder(t *testing.T) {
 	}
 }
 
+func TestListJSONCompletion(t *testing.T) {
+	for _, command := range []string{"list", "note"} {
+		fs := flag.NewFlagSet(command, flag.ContinueOnError)
+		commandByName(command).registerFlags(fs)
+		if fs.Lookup("json") == nil {
+			t.Fatalf("%s omitted json flag", command)
+		}
+		if got := zshParentCompletionContext(commandByName(command), ""); !strings.Contains(got, zshFlagSpec(t, command, "", "json", "")) {
+			t.Fatalf("%s JSON completion missing: %s", command, got)
+		}
+	}
+}
+
 func TestZshCompletionScriptMatchesGolden(t *testing.T) {
 	assertGolden(t, "testdata/zsh_completion.golden", []byte(buildZshCompletionScript()))
 }

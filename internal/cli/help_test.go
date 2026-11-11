@@ -12,6 +12,12 @@ import (
 	"github.com/iamseth/tao/internal/term/cells"
 )
 
+func TestListJSONHelp(t *testing.T) {
+	for _, command := range []string{"list", "note"} {
+		assertCommandOutputContains(t, command+" JSON help", []string{command, "--help"}, "--json", "JSON array", "tao "+command+map[string]string{"list": " --json", "note": " list --json"}[command])
+	}
+}
+
 func TestUsageRendersGroupedLayout(t *testing.T) {
 	var out bytes.Buffer
 	if err := (newTestApp(App{Out: &out})).usage(); err != nil {

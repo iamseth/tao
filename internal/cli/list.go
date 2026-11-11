@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/term/cells"
@@ -15,12 +18,13 @@ import (
 var listCommand = commandMetadata{
 	name:                  "list",
 	minPrefix:             "l",
-	usageLines:            []string{"list (l) [--active] [--limit N]"},
+	usageLines:            []string{"list (l) [--active] [--limit N] [--json]"},
 	completionDescription: "List plans",
-	long:                  "List Tao plans for the selected repository. By default Tao shows the most recent plans, with flags to focus on active work or adjust the limit.",
+	long:                  "List Tao plans for the selected repository. By default Tao shows the most recent plans, with flags to focus on active work or adjust the limit. Use --json for a read-only JSON array.",
 	examples: "  tao list\n" +
 		"  tao list --active\n" +
-		"  tao list --limit 0",
+		"  tao list --limit 0\n" +
+		"  tao list --json",
 	registerFlags: registerListFlags,
 	repository:    repositoryDefault,
 	execute: func(c commandContext) error {
@@ -30,6 +34,7 @@ var listCommand = commandMetadata{
 
 func registerListFlags(fs *flag.FlagSet) {
 	fs.Bool("active", false, "show only active plans")
+	fs.Bool("json", false, "output plans as a JSON array")
 	fs.Int("limit", 15, "maximum number of plans to show; use 0 for all")
 }
 
@@ -51,7 +56,53 @@ func (a App) list(ctx context.Context, repo planLister, args []string) error {
 		summaries = summaries[:limit]
 	}
 
+	if flagBoolValue(fs, "json") {
+		rows := make([]planListJSONRow, 0, len(summaries))
+		for _, summary := range summaries {
+			rows = append(rows, projectPlanListJSON(summary))
+		}
+		return json.NewEncoder(a.Out).Encode(rows)
+	}
 	return a.renderPlanList(a.Out, summaries, a.now())
+}
+
+type planListJSONRow struct {
+	ID       string `json:"id"`
+	Slug     string `json:"slug"`
+	Status   string `json:"status"`
+	Progress struct {
+		Completed int `json:"completed"`
+		Total     int `json:"total"`
+	} `json:"progress"`
+	UpdatedAt   *time.Time                `json:"updated_at"`
+	Abandonment *planview.ShowAbandonment `json:"abandonment,omitempty"`
+	Warnings    []string                  `json:"warnings"`
+	NextAction  *plan.PlanNextAction      `json:"next_action,omitempty"`
+}
+
+func projectPlanListJSON(summary plan.PlanSummary) planListJSONRow {
+	row := planListJSONRow{ID: summary.ID, Slug: listPlanLabel(summary), Status: summary.Status, UpdatedAt: summary.LastActivityAt, Warnings: append([]string{}, summary.Warnings...)}
+	row.Progress.Completed, row.Progress.Total = summary.CompletedCount, summary.TotalCount
+	if summary.NextAction.Primary.Kind != "" {
+		next := summary.NextAction
+		next.Alternatives = append([]plan.PlanAction{}, next.Alternatives...)
+		if summary.Status == plan.StatusAbandoned {
+			next.Primary.Reason = "the plan was abandoned"
+		}
+		row.NextAction = &next
+	}
+	if summary.Status == plan.StatusAbandoned && summary.Abandonment != nil {
+		reason := strings.Join(strings.FieldsFunc(summary.Abandonment.Reason, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
+		if reason == "" {
+			reason = "No abandonment reason was recorded."
+		}
+		row.Abandonment = &planview.ShowAbandonment{Reason: reason}
+		if !summary.Abandonment.AbandonedAt.IsZero() {
+			at := summary.Abandonment.AbandonedAt.UTC()
+			row.Abandonment.AbandonedAt = &at
+		}
+	}
+	return row
 }
 
 func (a App) renderPlanList(out io.Writer, summaries []plan.PlanSummary, now time.Time) error {

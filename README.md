@@ -188,6 +188,28 @@ commands also accept the short unambiguous prefixes shown by help.
 | Settings | `config`, `completion`, `doctor`, `update` | Manage scoped preferences, configure shell support, diagnose setup, and update release binaries. |
 | Other | `version`, `slice-complete`, `slice-blocked` | Inspect the build or support Tao-managed agent lifecycle handoffs and compatibility. |
 
+### JSON discovery
+
+Use `tao list --active --json` or `tao note list --all --json` for read-only CLI
+arrays (empty results are `[]`). Existing repository selection, filters, ordering,
+and limits apply; `--limit 0` includes all matches. `tao note --json` and
+`tao note l --json` are equivalent to the explicit note list command.
+
+Plan rows contain full `id`, `slug` (title/ID fallback for malformed IDs), `status`,
+`progress` (`completed`, `total`), `updated_at` (null when absent), and `warnings`
+(always an array, including invalid-plan rows). Optional `abandonment` contains a
+normalized `reason` and `abandoned_at` when known. Optional `next_action` uses the
+same `primary`/`alternatives` shape as `show --json`; progress and abandonment use
+compatible shared fields. Actions come only from loaded summaries, never extra
+per-plan loads; warning-only rows have no invented action.
+
+Note rows contain `id`, `status`, `tags` (always an array), `destination`,
+`created_at`, `updated_at`, `first_line` (untruncated), and `text` (full original
+multiline text). Destination is a bare plan ID, preferring the archive link over
+the promotion link, or null; legacy planning-session links are not plan IDs.
+Timestamps are machine-readable RFC3339 strings, text is JSON-escaped, and note
+warnings go to stderr. No new API routes or dashboard views are introduced.
+
 ### Everyday command paths
 
 Open the terminal dashboard for **WIP**, **Backlog**, **History**,

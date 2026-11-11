@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -27,10 +29,10 @@ const defaultNoteListLimit = 20
 var noteCommand = commandMetadata{
 	name:                  "note",
 	minPrefix:             "n",
-	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
+	usageLines:            []string{"note (n) [list (l)] [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N] [--json]", "note (n) create (c) [--repo REPO] [--tag TAG] [--] [TEXT...]", "note (n) show (s) [--repo REPO] <note-id>", "note (n) edit (e) [--repo REPO] [--tag TAG] <note-id> [--] [TEXT...]", "note (n) archive (a) [--repo REPO] [--reason TEXT | --plan PLAN] <note-id>", "note (n) reopen [--repo REPO] <note-id>", "note (n) run (r) [--repo REPO] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions] <note-id>"},
 	completionDescription: "Capture and maintain repository notes",
-	long:                  "Capture and maintain a private note backlog for a registered repository. With no subcommand, note lists open notes newest first.",
-	examples:              "  tao n c fix flaky queue test\n  printf 'First line\\n\\nMore detail\\n' | tao note create --tag testing\n  tao note list --all\n  tao note archive 20260713-155800-abcd",
+	long:                  "Capture and maintain a private note backlog for a registered repository. With no subcommand, note lists open notes newest first. Use --json for a read-only JSON array.",
+	examples:              "  tao n c fix flaky queue test\n  printf 'First line\\n\\nMore detail\\n' | tao note create --tag testing\n  tao note list --all\n  tao note list --json\n  tao note archive 20260713-155800-abcd",
 	subcommands: []commandSubcommand{
 		{name: "create", aliases: []commandSubcommandAlias{"c"}, description: "Create a note from arguments or standard input"},
 		{name: "list", aliases: []commandSubcommandAlias{"l"}, description: "List notes (the default subcommand)"},
@@ -86,6 +88,7 @@ func (a App) registerNoteFlags(fs *flag.FlagSet) {
 	fs.Var(new(stringListFlag), "tag", "tag to apply or require (repeatable)")
 	fs.Var(new(stringListFlag), "status", "status to list: open, promoted, or archived (repeatable)")
 	fs.Bool("all", false, "include all note statuses")
+	fs.Bool("json", false, "output notes as a JSON array (list only)")
 	fs.Int("limit", defaultNoteListLimit, "maximum notes to list (0 means unlimited)")
 	fs.String("reason", "", "archive reason")
 	fs.String("plan", "", "validated normal plan destination")
@@ -146,7 +149,7 @@ func boundNoteTextArgs(args []string) []string {
 		"planner-routing": true, "planner-arm": true,
 	}
 	knownFlags := map[string]bool{
-		"all": true, "pull-request": true,
+		"all": true, "json": true, "pull-request": true,
 		"dangerously-skip-permissions": true, "no-review": true,
 	}
 	for name := range valueFlags {
@@ -223,7 +226,7 @@ func normalizeNoteSubcommand(value string) string {
 func validateNoteFlags(fs *flag.FlagSet, subcommand string) error {
 	allowed := map[string]map[string]bool{
 		"create":  {"repo": true, "tag": true},
-		"list":    {"repo": true, "tag": true, "status": true, "all": true, "limit": true},
+		"list":    {"repo": true, "tag": true, "status": true, "all": true, "limit": true, "json": true},
 		"show":    {"repo": true},
 		"edit":    {"repo": true, "tag": true},
 		"archive": {"repo": true, "reason": true, "plan": true},
@@ -277,7 +280,7 @@ func (a App) noteCreate(ctx context.Context, repo NoteRepository, fs *flag.FlagS
 
 func (a App) noteList(ctx context.Context, repo NoteRepository, fs *flag.FlagSet, args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: tao note list [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N]")
+		return errors.New("usage: tao note list [--repo REPO] [--tag TAG] [--status STATUS] [--all] [--limit N] [--json]")
 	}
 	limit := flagIntValue(fs, "limit")
 	if limit < 0 {
@@ -299,6 +302,13 @@ func (a App) noteList(ctx context.Context, repo NoteRepository, fs *flag.FlagSet
 	if limit > 0 && len(notes) > limit {
 		notes = notes[:limit]
 	}
+	if flagBoolValue(fs, "json") {
+		rows := make([]noteListJSONRow, 0, len(notes))
+		for _, item := range notes {
+			rows = append(rows, projectNoteListJSON(item))
+		}
+		return json.NewEncoder(a.Out).Encode(rows)
+	}
 	if len(notes) == 0 {
 		return writeln(a.Out, "No notes found.")
 	}
@@ -315,6 +325,30 @@ func (a App) noteList(ctx context.Context, repo NoteRepository, fs *flag.FlagSet
 		}
 	}
 	return nil
+}
+
+type noteListJSONRow struct {
+	ID          string      `json:"id"`
+	Status      note.Status `json:"status"`
+	Tags        []string    `json:"tags"`
+	Destination *string     `json:"destination"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	FirstLine   string      `json:"first_line"`
+	Text        string      `json:"text"`
+}
+
+func projectNoteListJSON(item note.Note) noteListJSONRow {
+	first, _, _ := strings.Cut(item.Text, "\n")
+	row := noteListJSONRow{ID: item.ID, Status: item.Status, Tags: append([]string{}, item.Tags...), CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt, FirstLine: first, Text: item.Text}
+	if item.Archive != nil && item.Archive.Plan != nil {
+		id := item.Archive.Plan.ID
+		row.Destination = &id
+	} else if item.Promotion != nil && item.Promotion.Plan != nil {
+		id := item.Promotion.Plan.ID
+		row.Destination = &id
+	}
+	return row
 }
 
 func (a App) noteShow(ctx context.Context, repo NoteRepository, args []string) error {

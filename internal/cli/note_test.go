@@ -1652,3 +1652,152 @@ func TestNoteRunPlannerRoutingOffOverridesEnvironment(t *testing.T) {
 		t.Fatalf("off wrote routes: %#v", routes)
 	}
 }
+
+type jsonNoteRepository struct {
+	NoteRepository
+	rows     []note.Note
+	warnings []note.Warning
+	err      error
+	filter   note.Filter
+}
+
+func (r *jsonNoteRepository) List(_ context.Context, filter note.Filter) ([]note.Note, []note.Warning, error) {
+	r.filter = filter
+	return r.rows, r.warnings, r.err
+}
+
+func TestNoteJSONContract(t *testing.T) {
+	registered := taodata.Repo{ID: "repo-one", Name: "one", Root: t.TempDir()}
+	app, out, errOut := noteTestApp(t, nil, registered)
+	at := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	text := strings.Repeat("雪", 100) + "\nsecond\tline\x00"
+	repo := &jsonNoteRepository{rows: []note.Note{
+		{ID: "full-note-id", Status: note.StatusOpen, Text: text, CreatedAt: at, UpdatedAt: at},
+		{ID: "promoted", Promotion: &note.PromotionLinks{Plan: &note.PlanLink{ID: "plan-promoted", Dir: "private"}}},
+		{ID: "archived", Archive: &note.ArchiveMetadata{Plan: &note.PlanLink{ID: "plan-archived"}}, Promotion: &note.PromotionLinks{Plan: &note.PlanLink{ID: "older"}}},
+		{ID: "legacy", Promotion: &note.PromotionLinks{PlanningSession: &note.PlanningSessionLink{ID: "session"}}},
+	}, warnings: []note.Warning{{Path: "broken", Err: errors.New("bad record")}}}
+	app.NoteRepository = func(string, note.RepoReference) NoteRepository { return repo }
+	args := []string{"note", "list", "--json", "--repo", "one", "--all", "--status", "open", "--status", "promoted", "--tag", "a", "--tag", "b", "--limit", "0"}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 || len(rows[0]) != 8 || rows[0]["text"] != text || rows[0]["first_line"] != strings.Repeat("雪", 100) || rows[0]["destination"] != nil || rows[0]["created_at"] != at.Format(time.RFC3339) {
+		t.Fatalf("rows: %#v", rows)
+	}
+	if tags, ok := rows[0]["tags"].([]any); !ok || len(tags) != 0 {
+		t.Fatalf("tags: %#v", rows[0]["tags"])
+	}
+	if rows[1]["destination"] != "plan-promoted" || rows[2]["destination"] != "plan-archived" || rows[3]["destination"] != nil {
+		t.Fatalf("destinations: %#v", rows)
+	}
+	if !strings.Contains(errOut.String(), "bad record") || !repo.filter.All || len(repo.filter.Statuses) != 2 || !reflect.DeepEqual(repo.filter.Tags, []string{"a", "b"}) {
+		t.Fatalf("filter: %+v, stderr: %s", repo.filter, errOut.String())
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"note", "--json", "--limit", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil || len(rows) != 1 {
+		t.Fatalf("limit: %s, %v", out.String(), err)
+	}
+	for _, flags := range [][]string{{"--limit", "-1"}, {"--status", "bogus"}, {"--repo", "missing"}} {
+		if err := app.Run(context.Background(), append([]string{"note", "--json"}, flags...)); err == nil {
+			t.Fatalf("accepted %v", flags)
+		}
+	}
+	boom := errors.New("write failed")
+	app.Out = failingWriter{err: boom}
+	if err := app.Run(context.Background(), []string{"note", "--json"}); !errors.Is(err, boom) {
+		t.Fatalf("writer: %v", err)
+	}
+	repo.err = boom
+	app.Out = out
+	if err := app.Run(context.Background(), []string{"note", "--json"}); !errors.Is(err, boom) {
+		t.Fatalf("repository: %v", err)
+	}
+}
+
+func TestNoteJSONSelectionParity(t *testing.T) {
+	registered := taodata.Repo{ID: "repo-one", Name: "one", Root: t.TempDir()}
+	app, out, _ := noteTestApp(t, nil, registered)
+	repo := note.NewRepository(app.registry().NotesDir(registered), note.RepoReference{ID: registered.ID, Root: registered.Root})
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	repo.Now = func() time.Time { now = now.Add(time.Second); return now }
+	repo.IDSuffix = func() string { return "abcd" }
+	var ids []string
+	for i := 0; i < 3; i++ {
+		item, err := repo.Create(context.Background(), fmt.Sprintf("note %d", i), []string{"a", "b"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, item.ID)
+		if i == 1 {
+			if _, err := repo.Archive(context.Background(), item.ID, "done"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, flags := range [][]string{{}, {"--all"}, {"--status", "open", "--status", "archived", "--tag", "a", "--tag", "b"}, {"--limit", "1"}, {"--limit", "0"}, {"--tag", "missing"}} {
+		out.Reset()
+		args := append([]string{"note", "list", "--repo", "one"}, flags...)
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		human := out.String()
+		out.Reset()
+		if err := app.Run(context.Background(), append(args, "--json")); err != nil {
+			t.Fatal(err)
+		}
+		var rows []noteListJSONRow
+		if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+			t.Fatal(err)
+		}
+		previous := -1
+		for _, row := range rows {
+			position := strings.Index(human, row.ID)
+			if position < 0 || position <= previous {
+				t.Fatalf("order/selection differs: %s / %s", human, out.String())
+			}
+			previous = position
+		}
+		for _, id := range ids {
+			found := false
+			for _, row := range rows {
+				if row.ID == id {
+					found = true
+				}
+			}
+			if found != strings.Contains(human, id) {
+				t.Fatalf("selection differs: %s / %s", human, out.String())
+			}
+		}
+	}
+}
+
+func TestNoteJSONListOnly(t *testing.T) {
+	app, _, _ := noteTestApp(t, nil, taodata.Repo{ID: "repo-one", Name: "one", Root: t.TempDir()})
+	for _, sub := range []string{"create", "c", "show", "s", "edit", "e", "archive", "a", "reopen", "run", "r"} {
+		if err := app.Run(context.Background(), []string{"note", sub, "--json"}); err == nil || !strings.Contains(err.Error(), "--json is not valid") {
+			t.Fatalf("%s: %v", sub, err)
+		}
+	}
+}
+
+func TestNoteJSONListAliases(t *testing.T) {
+	registered := taodata.Repo{ID: "repo-one", Name: "one", Root: t.TempDir()}
+	app, out, _ := noteTestApp(t, nil, registered)
+	for _, args := range [][]string{{"note", "--json"}, {"note", "list", "--json"}, {"note", "l", "--json"}} {
+		out.Reset()
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(out.String()) != "[]" {
+			t.Fatalf("output: %s", out.String())
+		}
+	}
+}

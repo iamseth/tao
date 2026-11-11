@@ -3,7 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/plantest"
 	"github.com/iamseth/tao/internal/term/cells"
+	planview "github.com/iamseth/tao/internal/view"
 )
 
 func TestListAppliesLimitAndShowsShortIDAndSlug(t *testing.T) {
@@ -194,5 +198,134 @@ func TestRenderPlanListUsesHumanUpdatedTime(t *testing.T) {
 	}
 	if strings.Contains(text, "11:18:00") {
 		t.Fatalf("expected compact updated time, got:\n%s", text)
+	}
+}
+
+// This seam deliberately implements only ListPlans: JSON cannot load individual plans.
+type jsonPlanLister struct{ rows []plan.PlanSummary }
+
+func (r jsonPlanLister) ListPlans(context.Context, plan.PlanFilter) ([]plan.PlanSummary, error) {
+	return r.rows, nil
+}
+
+func TestListJSONInvalidDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "broken-plan"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	app := newTestApp(App{Out: &out, Repository: func(dir string) Repository { return plan.NewFileRepository(dir) }})
+	if err := app.Run(context.Background(), []string{"--plans-dir", dir, "list", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0]["id"] != "broken-plan" || rows[0]["next_action"] != nil {
+		t.Fatalf("invalid rows: %s", out.String())
+	}
+	if warnings, ok := rows[0]["warnings"].([]any); !ok || len(warnings) == 0 {
+		t.Fatalf("warnings: %s", out.String())
+	}
+}
+
+func TestListJSONContract(t *testing.T) {
+	at := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	summary := plan.PlanSummary{ID: "20261111-120000-snow", Status: plan.StatusAbandoned, CompletedCount: 2, TotalCount: 3, LastActivityAt: &at, Abandonment: &plan.AbandonmentEvidence{AbandonedAt: at, Reason: "雪\n reason\x1b"}}
+	summary.NextAction.Primary.Kind = "inspect"
+	var out bytes.Buffer
+	app := newTestApp(App{Out: &out})
+	if err := app.list(context.Background(), jsonPlanLister{[]plan.PlanSummary{summary}}, []string{"--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || len(rows[0]) != 8 {
+		t.Fatalf("shape: %s", out.String())
+	}
+	var shared struct {
+		Progress    planview.ShowProgress     `json:"progress"`
+		Abandonment *planview.ShowAbandonment `json:"abandonment"`
+		Next        plan.PlanNextAction       `json:"next_action"`
+		Warnings    []string                  `json:"warnings"`
+	}
+	encoded, _ := json.Marshal(rows[0])
+	if err := json.Unmarshal(encoded, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if shared.Progress.Completed != 2 || shared.Progress.Total != 3 || shared.Abandonment.Reason != "雪 reason" || !shared.Abandonment.AbandonedAt.Equal(at) || shared.Next.Primary.Reason != "the plan was abandoned" || shared.Next.Alternatives == nil || shared.Warnings == nil {
+		t.Fatalf("shared: %+v", shared)
+	}
+	if string(rows[0]["id"]) != `"20261111-120000-snow"` || string(rows[0]["slug"]) != `"snow"` {
+		t.Fatalf("IDs: %s", encoded)
+	}
+	boom := errors.New("writer failed")
+	app.Out = failingWriter{err: boom}
+	if err := app.list(context.Background(), jsonPlanLister{}, []string{"--json"}); !errors.Is(err, boom) {
+		t.Fatalf("writer: %v", err)
+	}
+	if err := app.list(context.Background(), fakeRepository{err: boom}, []string{"--json"}); !errors.Is(err, boom) {
+		t.Fatalf("repo: %v", err)
+	}
+	if err := app.list(context.Background(), jsonPlanLister{}, []string{"--json", "--limit", "-1"}); err == nil {
+		t.Fatal("negative limit accepted")
+	}
+}
+
+func TestListJSONSelectionParity(t *testing.T) {
+	rows := []plan.PlanSummary{{ID: "20261111-120000-first", Status: plan.StatusInProgress, IsActive: true}, {ID: "20261110-120000-second", Status: plan.StatusCompleted}}
+	for _, flags := range [][]string{{}, {"--active"}, {"--limit", "1"}, {"--limit", "0"}} {
+		var human, machine bytes.Buffer
+		app := newTestApp(App{Out: &human, Repository: func(string) Repository { return fakeRepository{summaries: rows} }})
+		args := append([]string{"--plans-dir", t.TempDir(), "list"}, flags...)
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatal(err)
+		}
+		app.Out = &machine
+		if err := app.Run(context.Background(), append(args, "--json")); err != nil {
+			t.Fatal(err)
+		}
+		var got []map[string]any
+		if err := json.Unmarshal(machine.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			selected := strings.Contains(human.String(), listPlanLabel(row))
+			found := false
+			for _, r := range got {
+				if r["id"] == row.ID {
+					found = true
+				}
+			}
+			if selected != found {
+				t.Fatalf("selection differs: %s / %s", human.String(), machine.String())
+			}
+		}
+	}
+}
+
+func TestListJSON(t *testing.T) {
+	for _, summaries := range [][]plan.PlanSummary{nil, {{ID: "legacy", Title: "雪", Warnings: []string{"invalid"}}}} {
+		var out bytes.Buffer
+		err := newTestApp(App{Out: &out}).list(context.Background(), fakeRepository{summaries: summaries}, []string{"--json", "--limit", "0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows == nil || len(rows) != len(summaries) {
+			t.Fatalf("rows: %s", out.String())
+		}
+		if len(rows) > 0 {
+			r := rows[0]
+			if r["id"] != "legacy" || r["slug"] != "雪" || r["updated_at"] != nil || r["next_action"] != nil {
+				t.Fatalf("row: %#v", r)
+			}
+		}
 	}
 }
