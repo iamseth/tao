@@ -62,6 +62,8 @@ func TestCommandRegistryOrder(t *testing.T) {
 		{name: "route"},
 		{name: "approve", minPrefix: "a"},
 		{name: "abandon"},
+		{name: "park"},
+		{name: "unpark"},
 		{name: "slice-complete"},
 		{name: "slice-blocked"},
 		{name: "show", minPrefix: "s"},

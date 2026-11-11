@@ -148,6 +148,8 @@ var commandRegistry = []commandMetadata{
 	routeCommand,
 	approveCommand,
 	abandonCommand,
+	parkCommand,
+	unparkCommand,
 	sliceCompleteCommand,
 	sliceBlockedCommand,
 	showCommand,

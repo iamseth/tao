@@ -126,6 +126,9 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	instruction := func(text, reason string) PlanNextAction {
 		return PlanNextAction{Primary: PlanAction{Kind: PlanActionRecoverPullRequest, Class: PlanActionClassRecovery, Instruction: text, Reason: reason}, Alternatives: []PlanAction{}}
 	}
+	if detail.State.Plan.Parking != nil {
+		return primary(PlanActionKind("unpark"), PlanActionClassAdministrative, command("tao unpark"), "the plan is explicitly parked; unpark does not resolve other gates")
+	}
 	administrativeMerge := PlanAction{
 		Kind: PlanActionMerge, Class: PlanActionClassAdministrative,
 		Command: command("tao merge --force"), Reason: "administrative exception that bypasses review and merge safeguards",
@@ -400,6 +403,10 @@ func AnalyzeRunCapabilities(detail *PlanDetail) RunCapabilities {
 func runCapabilitiesForDetail(detail *PlanDetail, lifecycle Lifecycle) RunCapabilities {
 	capabilities := RunCapabilitiesFromLifecycle(lifecycle)
 	capabilities.Reviewed = detail.State.Status != StatusAbandoned && CurrentReview(detail) != nil
+	if err := RequireNotParked(detail); err != nil {
+		capabilities.CanRun, capabilities.CanContinue, capabilities.Active = false, false, false
+		capabilities.DisabledReason, capabilities.ContinueDisabledReason = err.Error(), err.Error()
+	}
 	return capabilities
 }
 
@@ -691,6 +698,7 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 		ReviewVerdict:                    reviewVerdict(CurrentReview(detail)),
 		IsActive:                         derived.Active,
 		Capabilities:                     derived.Capabilities,
+		Parking:                          detail.State.Plan.Parking,
 		SliceCompletionPending:           derived.SliceCompletionPending,
 		UnresolvedReworkStop:             derived.UnresolvedReworkStop,
 		NextAction:                       derived.NextAction,

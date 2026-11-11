@@ -30,6 +30,12 @@ const (
 	ReviewStatusError     = "error"
 )
 
+// Parking is explicit run-admission and presentation state, never lifecycle evidence.
+type Parking struct {
+	Reason   string    `json:"reason"`
+	ParkedAt time.Time `json:"parked_at"`
+}
+
 // MaxAbandonmentReasonBytes bounds durable user-supplied abandonment evidence.
 const MaxAbandonmentReasonBytes = 1000
 
@@ -304,6 +310,7 @@ type PlanSequence = Sequence
 
 // PlanState is the mutable queue state for a plan.
 type PlanState struct {
+	Parking              *Parking              `json:"parking,omitempty"`
 	ID                   string                `json:"id"`
 	Title                string                `json:"title"`
 	ChangeType           ChangeType            `json:"change_type,omitempty"`

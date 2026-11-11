@@ -98,6 +98,10 @@ func NewActions(options ActionOptions) (*Actions, error) {
 
 // RunPlan starts the selected plan unless its fresh heartbeat already shows it live.
 func (a *Actions) RunPlan(ctx context.Context, row monitor.Row) {
+	if row.Parking != nil {
+		a.recordFailure(row, fmt.Errorf("plan is parked; run tao unpark %s first", row.PlanID))
+		return
+	}
 	if !actionableRow(row) || row.Liveness == monitor.LivenessLive {
 		return
 	}

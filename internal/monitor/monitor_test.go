@@ -19,6 +19,21 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestParkingKeepsTerminalRowsDiscoverable(t *testing.T) {
+	summary := plan.PlanSummary{ID: "parked", Status: plan.StatusCompleted, Parking: &plan.Parking{Reason: "decision", ParkedAt: time.Now()}}
+	if !(Collector{}).includeSummary(summary, time.Now()) {
+		t.Fatal("parked terminal row excluded")
+	}
+	row := planRow(taodata.RepoInventoryEntry{}, summary)
+	if row.Parking == nil || row.Status != plan.StatusCompleted || DeriveNextAction(row) != "UNPARK" {
+		t.Fatalf("row = %+v", row)
+	}
+	summary.Parking = nil
+	if (Collector{}).includeSummary(summary, time.Now()) {
+		t.Fatal("unpark bypassed completed window")
+	}
+}
+
 type fakeInventory struct {
 	entries []taodata.RepoInventoryEntry
 	err     error

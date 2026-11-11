@@ -66,6 +66,20 @@ func TestRunActionLaunchesExactDetachedCommand(t *testing.T) {
 	}
 }
 
+func TestParkedRunActionRefusesBeforeLaunch(t *testing.T) {
+	launcher := &recordingActionLauncher{}
+	actions := newTestActions(t, launcher, func(string) (plan.RunLock, error) {
+		t.Fatal("parked action inspected lock")
+		return plan.RunLock{}, nil
+	}, nil)
+	row := testActionRow()
+	row.Parking = &plan.Parking{Reason: "decision", ParkedAt: time.Now()}
+	actions.RunPlan(context.Background(), row)
+	if len(launcher.calls) != 0 || len(actions.labels()) == 0 {
+		t.Fatalf("calls=%v feedback=%v", launcher.calls, actions.labels())
+	}
+}
+
 func TestAbandonedPlanSuppressesEveryPlanAction(t *testing.T) {
 	launcher := &recordingActionLauncher{}
 	actions := newTestActions(t, launcher, nil, nil)

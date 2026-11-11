@@ -44,6 +44,9 @@ func (s Service) prepareRunExecution(ctx context.Context, detail *plan.PlanDetai
 
 func (s Service) prepareRequestRunExecution(ctx context.Context, detail *plan.PlanDetail, request Request, config ExecutionConfig) (runExecution, error) {
 	execution := newRequestRunExecution(request, config, s.dependencies)
+	if err := plan.RequireNotParked(detail); err != nil {
+		return execution, cannotStartf("%s", err)
+	}
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return execution, cannotStartf("%s", err)
 	}

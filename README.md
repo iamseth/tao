@@ -181,7 +181,7 @@ commands also accept the short unambiguous prefixes shown by help.
 
 | Command group | Commands | Use |
 | --- | --- | --- |
-| Plan | `list`, `show`, `report`, `note`, `validate`, `staleness`, `edit`, `abandon`, `delete` | Capture backlog items and inspect, validate, share, or maintain local plans. |
+| Plan | `list`, `show`, `report`, `note`, `validate`, `staleness`, `edit`, `park`, `unpark`, `abandon`, `delete` | Capture backlog items and inspect, validate, share, or maintain local plans. |
 | Planner routing | `tao route show <route-id>`, `tao route list`, `tao route link <route-id> <plan-id>` | Inspect the local routing ledger or repair a same-repository plan link; all accept `--repo REPO` and `--json`. |
 | Execution | `run`, `commit`, `approve`, `review`, `rework` | Execute slices, satisfy gates, inspect exact-diff reviews, and address findings. |
 | Workspace and cleanup | `workspace`, `cleanup`, `merge` | Inspect managed worktrees, clean eligible Git state, and integrate approved plans. |
@@ -250,6 +250,11 @@ multiline text). Destination is a bare plan ID, preferring the archive link over
 the promotion link, or null; legacy planning-session links are not plan IDs.
 Timestamps are machine-readable RFC3339 strings, text is JSON-escaped, and note
 warnings go to stderr. No new API routes or dashboard views are introduced.
+
+Park owner-blocked work with `tao park <id> --reason "awaiting owner decision"`;
+resume admission with `tao unpark <id>`. Parked plans stay visible but leave
+`list --active` and dashboard WIP for the Parked group. Parking does not change
+lifecycle or merge eligibility; unpark does not resolve blockers.
 
 ### Everyday command paths
 

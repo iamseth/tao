@@ -15,6 +15,7 @@ type artifactChangeSet struct {
 	clearWorkspaceDependencyFingerprint bool
 	clearWorkspaceRebaseIntent          bool
 	clearPlanCurrentSlice               bool
+	clearPlanParking                    bool
 	clearPlanFinalizationFailure        bool
 	clearSingleMergeResolution          bool
 	planFinalizationFailure             *FinalizationFailure
@@ -121,6 +122,16 @@ func (c *artifactChangeSet) ClearSliceExecutionBoundary(sliceID string) error {
 	slice.ExecutionRoot = ""
 	slice.ExecutionStart = nil
 	return nil
+}
+
+func (c *artifactChangeSet) ClearPlanParking() {
+	if c == nil {
+		return
+	}
+	c.clearPlanParking = true
+	if c.detail != nil {
+		c.detail.State.Plan.Parking = nil
+	}
 }
 
 func (c *artifactChangeSet) ClearPlanCurrentSlice() {
@@ -259,6 +270,9 @@ func (c *artifactChangeSet) applyState(state *State) {
 	if c.clearPlanCurrentSlice {
 		state.Plan.CurrentSlice = nil
 	}
+	if c.clearPlanParking {
+		state.Plan.Parking = nil
+	}
 	if c.clearSingleMergeResolution && state.Plan.MergeCommitIntent != nil {
 		state.Plan.MergeCommitIntent.Resolution = nil
 	}
@@ -299,6 +313,9 @@ func validateSlicesChangeDeclarations(baseline, intended SlicesFile, changes *ar
 }
 
 func validateStateChangeDeclarations(baseline, intended State, changes *artifactChangeSet) error {
+	if baseline.Plan.Parking != nil && intended.Plan.Parking == nil && (changes == nil || !changes.clearPlanParking) {
+		return fmt.Errorf("persist state: PlanState.Parking cleared without ClearPlanParking")
+	}
 	var baselineFailure, baselineFingerprint string
 	var baselineRebaseIntent, intendedRebaseIntent *WorkspaceRebaseIntent
 	if baseline.Workspace != nil {
@@ -388,6 +405,9 @@ func lowerStateJSONChanges(root map[string]any, changes *artifactChangeSet) erro
 		}
 	}
 	plan := jsonObject(root, "plan")
+	if changes.clearPlanParking {
+		plan["parking"] = nil
+	}
 	if changes.clearSingleMergeResolution {
 		intent := jsonObject(plan, "merge_commit_intent")
 		intent["resolution"] = nil

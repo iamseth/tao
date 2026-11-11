@@ -76,6 +76,7 @@ type PlanSummary struct {
 	VerificationRecoveryCommand      string
 	FinalizationRecovery             *FinalizationRecovery
 	Abandonment                      *AbandonmentEvidence
+	Parking                          *Parking
 	PlanningSessionPresent           bool
 	PlanningSessionValid             bool
 	PlanningSessionUnavailableReason string
@@ -128,12 +129,12 @@ func SummarizePlans(summaries []PlanSummary) PlanRollup {
 }
 
 func (p PlanSummary) Active() bool {
-	if p.Status == StatusAbandoned {
+	if p.Parking != nil || p.Status == StatusAbandoned {
 		return false
 	}
 	return p.IsActive || active(p.Status, p.CurrentSliceID, p.CurrentSlice, p.Complete)
 }
 
 func (p PlanSummary) Runnable() bool {
-	return !p.Complete && p.Status != StatusCompleted && p.Status != StatusAbandoned && p.PendingCount > 0
+	return p.Parking == nil && !p.Complete && p.Status != StatusCompleted && p.Status != StatusAbandoned && p.PendingCount > 0
 }

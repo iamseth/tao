@@ -133,6 +133,7 @@ type Row struct {
 	Overview          plan.DecisionOverview
 	AbandonedAt       *time.Time
 	AbandonmentReason string
+	Parking           *plan.Parking
 
 	Liveness            Liveness
 	Phase               runstatus.Phase
@@ -325,7 +326,7 @@ func (c Collector) runLockReader() RunLockReader {
 }
 
 func (c Collector) includeSummary(summary plan.PlanSummary, now time.Time) bool {
-	if c.IncludeAllCompleted || summary.Status != plan.StatusCompleted || summary.NextAction.Primary.Class == plan.PlanActionClassRecovery {
+	if summary.Parking != nil || c.IncludeAllCompleted || summary.Status != plan.StatusCompleted || summary.NextAction.Primary.Class == plan.PlanActionClassRecovery {
 		return true
 	}
 	if c.IncludeCompletedWithin <= 0 {
@@ -364,6 +365,7 @@ func planRow(entry taodata.RepoInventoryEntry, summary plan.PlanSummary) Row {
 		PlanTitle:              summary.Title,
 		PlanDir:                planDir(entry, summary),
 		Status:                 summary.Status,
+		Parking:                summary.Parking,
 		Overview:               cloneOverview(summary.Overview),
 		Liveness:               LivenessMissing,
 		SliceID:                summary.CurrentSliceID,
@@ -504,6 +506,9 @@ func cloneOverview(value plan.DecisionOverview) plan.DecisionOverview {
 
 // DeriveNextAction returns advisory workflow text without granting action authority.
 func DeriveNextAction(row Row) string {
+	if row.Parking != nil {
+		return "UNPARK"
+	}
 	if row.Kind == RowKindRepositoryWarning || row.Status == plan.StatusInvalid {
 		return "INSPECT"
 	}

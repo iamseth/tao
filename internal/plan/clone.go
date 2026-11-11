@@ -48,6 +48,10 @@ func cloneState(state State) State {
 
 func clonePlanState(plan PlanState) PlanState {
 	clone := plan
+	if plan.Parking != nil {
+		parking := *plan.Parking
+		clone.Parking = &parking
+	}
 	clone.Decision = cloneDecision(plan.Decision)
 	clone.Sequence = cloneSequence(plan.Sequence)
 	clone.RuntimePrerequisites = cloneRuntimePrerequisites(plan.RuntimePrerequisites)

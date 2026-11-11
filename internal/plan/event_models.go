@@ -24,6 +24,8 @@ const (
 	EventTypePlanReopened               = "plan_reopened"
 	EventTypePlanMerged                 = "plan_merged"
 	EventTypePlanAbandoned              = "plan_abandoned"
+	EventTypePlanParked                 = "plan_parked"
+	EventTypePlanUnparked               = "plan_unparked"
 	EventTypeVerificationCommandInvalid = "verification_command_invalid"
 	EventTypeVerificationClaimMismatch  = "verification_claim_mismatch"
 	EventTypeRunContext                 = "run_context"
@@ -47,6 +49,7 @@ const (
 
 // Event is one append-only lifecycle entry from events.jsonl.
 type Event struct {
+	ParkingOperationID           string                           `json:"parking_operation_id,omitempty"`
 	Actor                        string                           `json:"actor,omitempty"`
 	Trigger                      string                           `json:"trigger,omitempty"`
 	AttributionVersion           int                              `json:"attribution_version,omitempty"`

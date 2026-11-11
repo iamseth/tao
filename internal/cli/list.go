@@ -67,9 +67,10 @@ func (a App) list(ctx context.Context, repo planLister, args []string) error {
 }
 
 type planListJSONRow struct {
-	ID       string `json:"id"`
-	Slug     string `json:"slug"`
-	Status   string `json:"status"`
+	ID       string        `json:"id"`
+	Slug     string        `json:"slug"`
+	Status   string        `json:"status"`
+	Parking  *plan.Parking `json:"parking,omitempty"`
 	Progress struct {
 		Completed int `json:"completed"`
 		Total     int `json:"total"`
@@ -82,6 +83,11 @@ type planListJSONRow struct {
 
 func projectPlanListJSON(summary plan.PlanSummary) planListJSONRow {
 	row := planListJSONRow{ID: summary.ID, Slug: listPlanLabel(summary), Status: summary.Status, UpdatedAt: summary.LastActivityAt, Warnings: append([]string{}, summary.Warnings...)}
+	if summary.Parking != nil {
+		marker := *summary.Parking
+		marker.Reason = planview.FormatAbandonmentText(marker.Reason)
+		row.Parking = &marker
+	}
 	row.Progress.Completed, row.Progress.Total = summary.CompletedCount, summary.TotalCount
 	if summary.NextAction.Primary.Kind != "" {
 		next := summary.NextAction
@@ -150,8 +156,13 @@ func planListRow(summary plan.PlanSummary, now time.Time) []string {
 		}
 		reason = planview.FormatAbandonmentText(summary.Abandonment.Reason)
 	}
+	status := summary.Status
+	if summary.Parking != nil {
+		status += " (parked)"
+		reason = planview.FormatAbandonmentText(summary.Parking.Reason)
+	}
 	return []string{
-		summary.Status,
+		status,
 		planview.ShortPlanID(summary.ID),
 		listPlanLabel(summary),
 		planview.DoneLabel(summary),

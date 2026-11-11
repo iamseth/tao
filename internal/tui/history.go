@@ -21,7 +21,14 @@ func historyStatus(status string) bool {
 func BuildPageSections(rows []monitor.Row, filter Filter, page PageID, ordering Sort) []Section {
 	page = normalizePage(page)
 	filtered := make([]monitor.Row, 0, len(rows))
+	parked := make([]monitor.Row, 0)
 	for _, row := range rows {
+		if row.Parking != nil {
+			if page == PagePlans {
+				parked = append(parked, row)
+			}
+			continue
+		}
 		if historyStatus(row.Status) == (page == PageHistory) {
 			filtered = append(filtered, row)
 		}
@@ -40,7 +47,11 @@ func BuildPageSections(rows []monitor.Row, filter Filter, page PageID, ordering 
 		title = "WIP"
 		orderPlannedRows(filtered)
 	}
-	return []Section{{Title: title, Rows: SortPlanRows(filterRows(filtered, filterForPage(filter, page)), ordering)}}
+	sections := []Section{{Title: title, Rows: SortPlanRows(filterRows(filtered, filterForPage(filter, page)), ordering)}}
+	if len(parked) > 0 {
+		sections = append(sections, Section{Title: "PARKED", Rows: SortPlanRows(filterRows(parked, filterForPage(filter, page)), ordering)})
+	}
+	return sections
 }
 
 // The persisted status set holds both pages' selections. Projecting it keeps

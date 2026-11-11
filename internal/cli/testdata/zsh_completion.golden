@@ -64,6 +64,8 @@ _tao() {
     'a:Approve a gated slice'
     'approve:Approve a gated slice'
     'abandon:Record an intentional terminal plan outcome'
+    'park:Park a plan until explicitly unparked'
+    'unpark:Remove a plan'\''s explicit parking marker'
     'slice-complete:Verify gates, complete a slice, or replay durable intent'
     'slice-blocked:Block a slice after an exceptional stop'
     's:Show plan details and the recommended next action'
@@ -272,6 +274,19 @@ _tao() {
     abandon)
       _arguments '--reason[required reason for abandoning the plan]:text:'
       if _tao_at_positional 3 1 0 ',,' '--reason'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    park)
+      _arguments '--reason[required reason for parking the plan]:text:'
+      if _tao_at_positional 3 1 0 ',,' '--reason'; then
+        plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+        compadd -a plan_ids
+      fi
+      ;;
+    unpark)
+      if _tao_at_positional 3 1 0 ',,'; then
         plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
         compadd -a plan_ids
       fi

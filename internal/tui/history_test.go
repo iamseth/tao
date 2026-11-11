@@ -114,6 +114,38 @@ func TestHistoryFiltersAreIndependentAndPersistTogether(t *testing.T) {
 	}
 }
 
+func TestParkingSectionsAndSelection(t *testing.T) {
+	marker := &plan.Parking{Reason: "decision", ParkedAt: time.Now()}
+	active := monitor.Row{RepositoryID: "repo", PlanID: "active", Status: plan.StatusPlanned}
+	done := monitor.Row{RepositoryID: "repo", PlanID: "done", Status: plan.StatusCompleted, Parking: marker}
+	rows := []monitor.Row{active, done}
+	sections := BuildPageSections(rows, Filter{}, PagePlans, Sort{})
+	if len(sections) != 2 || sections[0].Title != "WIP" || len(sections[0].Rows) != 1 || sections[1].Title != "PARKED" || len(sections[1].Rows) != 1 {
+		t.Fatalf("sections = %+v", sections)
+	}
+	if got := BuildPageSections(rows, Filter{}, PageHistory, Sort{}); len(got[0].Rows) != 0 {
+		t.Fatal("parked terminal row remained in History")
+	}
+	// History's saved status filter must not hide parked rows on Plans.
+	filtered := BuildPageSections(rows, Filter{Enabled: true, Statuses: []string{plan.StatusAbandoned}}, PagePlans, Sort{})
+	if len(filtered[1].Rows) != 1 {
+		t.Fatal("history filter hid parked row")
+	}
+	s := loopState{snapshot: monitor.Snapshot{Rows: rows}}
+	active.Parking = marker
+	s.replaceSnapshot(monitor.Snapshot{Rows: []monitor.Row{done, active}})
+	if row, ok := s.selectedRow(); !ok || row.PlanID != "active" {
+		t.Fatal("parking lost selection")
+	}
+	done.Parking = nil
+	if got := BuildPageSections([]monitor.Row{done}, Filter{}, PageHistory, Sort{}); len(got[0].Rows) != 1 {
+		t.Fatal("unpark did not restore History")
+	}
+	if planNextAction(active) != "UNPARK" || !strings.Contains(planNextActionDisplay(active), "tao unpark active") {
+		t.Fatal("missing unpark guidance")
+	}
+}
+
 func TestHistoryNavigationRefreshAndDetails(t *testing.T) {
 	active := monitor.Row{RepositoryID: "repo", PlanID: "active", Status: plan.StatusPlanned, PlanDir: "/active"}
 	done := monitor.Row{RepositoryID: "repo", PlanID: "done", Status: plan.StatusCompleted, PlanDir: "/done"}

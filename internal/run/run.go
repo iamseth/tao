@@ -304,7 +304,10 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 				})
 			})
 		},
-	}, func(ownedCtx context.Context, _ *plan.PlanDetail) error {
+	}, func(ownedCtx context.Context, detail *plan.PlanDetail) error {
+		if err := plan.RequireNotParked(detail); err != nil {
+			return cannotStartf("%s", err)
+		}
 		err := operation(ownedCtx)
 		if err != nil {
 			// Diagnostic journaling uses entry metadata and finishes under ownership.
@@ -319,6 +322,9 @@ func (s Service) WithPlanRunLock(ctx context.Context, request Request, operation
 }
 
 func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
+	if err := plan.RequireNotParked(detail); err != nil {
+		return cannotStartf("%s", err)
+	}
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return cannotStartf("%s", err)
 	}

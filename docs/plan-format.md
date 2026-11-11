@@ -121,6 +121,30 @@ New plans should include a concise planning brief with these fixed headings:
 
 Missing or malformed briefs are warning-only findings so existing plan directories remain compatible. `tao validate` does not check for the `Review Focus` heading.
 
+## Explicit parking
+
+Optional `state.plan.parking` is `{ "reason": "awaiting owner decision",
+"parked_at": "2026-11-11T20:00:00Z" }`. Absent or null means unparked, including
+historical plans. `tao park <id> --reason TEXT` records trimmed, nonblank UTF-8
+text of at most 1000 bytes without control characters and a UTC timestamp.
+`tao unpark <id>` explicitly clears the marker. Both serialize under the plan
+run lock, reload, and journal state plus audit event atomically/recoverably.
+Repeated same-state calls do not change the marker or append events; changing
+a reason requires unpark then park.
+
+Parking is not a lifecycle status. It excludes plans from Active/Runnable views
+and refuses every run mode until explicit unpark, without changing slices,
+blockers, approvals, intents, workspace metadata or merge eligibility. Parked
+terminal plans appear under Parked on the dashboard Plans page; unpark restores
+ordinary History routing without reviving them. Reasons are untrusted and
+human-facing projections normalize unsafe terminal text.
+
+`plan_parked` records the reason; `plan_unparked` records its removal. Both carry
+plan ID, UTC timestamp, and a unique `parking_operation_id` that keeps separate
+reversible operations distinct even at equal supplied timestamps. These events are audit-only: loaders never reconstruct
+the marker from them, and they grant no lifecycle, recovery or merge authority.
+They do not count as insights human interventions.
+
 ## State Lifecycle
 
 Rework slices are refused before a session when any `expected_files` entry

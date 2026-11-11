@@ -26,6 +26,9 @@ func filterRows(rows []monitor.Row, filter Filter) []monitor.Row {
 }
 
 func planNextAction(row monitor.Row) string {
+	if row.Parking != nil {
+		return "UNPARK"
+	}
 	if row.MergeInProgress {
 		return "MERGING"
 	}
@@ -47,6 +50,9 @@ func planNextAction(row monitor.Row) string {
 }
 
 func planNextActionDisplay(row monitor.Row) string {
+	if row.Parking != nil {
+		return "tao unpark " + row.PlanID
+	}
 	if row.MergeInProgress {
 		if phase := rowlabel.PhaseLabel(row); phase != "-" {
 			return "MERGING · " + phase

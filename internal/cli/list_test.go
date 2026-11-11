@@ -52,6 +52,18 @@ func TestListAppliesLimitAndShowsShortIDAndSlug(t *testing.T) {
 	}
 }
 
+func TestListParkingPreservesStatusAndSanitizesReason(t *testing.T) {
+	summary := plan.PlanSummary{ID: "parked", Status: plan.StatusBlocked, Parking: &plan.Parking{Reason: "owner\x1b decision", ParkedAt: time.Now().UTC()}}
+	row := projectPlanListJSON(summary)
+	if row.Status != plan.StatusBlocked || row.Parking == nil || strings.Contains(row.Parking.Reason, "\x1b") {
+		t.Fatalf("JSON projection = %+v", row)
+	}
+	text := strings.Join(planListRow(summary, time.Now()), " ")
+	if !strings.Contains(text, "blocked (parked)") || strings.Contains(text, "\x1b") {
+		t.Fatalf("row = %q", text)
+	}
+}
+
 func TestListRejectsNegativeLimit(t *testing.T) {
 	var out bytes.Buffer
 	err := newTestApp(App{Out: &out, Err: &out}).list(context.Background(), plantest.NewRepository(), []string{"--limit", "-1"})
