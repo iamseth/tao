@@ -3,10 +3,12 @@ package agentsession
 import (
 	"context"
 	"io"
+	"maps"
 	"time"
 
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
+	"github.com/iamseth/tao/internal/agent/process"
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/promptcapture"
@@ -14,6 +16,8 @@ import (
 
 // Config describes the stable policy and dependencies for bounded sessions.
 type Config struct {
+	// GateEnv optionally pins allowlisted environment values for provider children only.
+	GateEnv map[string]string
 	// Models is copied at construction; nil preserves legacy model/effort defaults.
 	Models          *configtypes.ModelSelection
 	DefaultRole     configtypes.SessionRole
@@ -31,6 +35,7 @@ type Config struct {
 
 // Runner invokes exactly one provider session for each Run call.
 type Runner struct {
+	gateEnv        map[string]string
 	models         *configtypes.ModelSelection
 	defaultRole    configtypes.SessionRole
 	now            func() time.Time
@@ -63,6 +68,7 @@ func New(config Config) Runner {
 		models = &selection
 	}
 	return Runner{
+		gateEnv:        maps.Clone(config.GateEnv),
 		models:         models,
 		defaultRole:    config.DefaultRole,
 		now:            config.Now,
@@ -164,7 +170,11 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	invoked := false
 	run := func() (agent.SessionResult, error) {
 		invoked = true
-		return r.runtime.RunSession(ctx, agent.Session{
+		providerCtx := ctx
+		if len(r.gateEnv) != 0 {
+			providerCtx = process.WithGateEnv(ctx, r.gateEnv)
+		}
+		return r.runtime.RunSession(providerCtx, agent.Session{
 			Model:                model,
 			Effort:               effort,
 			RepoRoot:             request.RepoRoot,

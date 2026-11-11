@@ -3,6 +3,7 @@ package runtimeconfig
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -242,6 +243,7 @@ func builtinEnvDefaults() EnvDefaults {
 }
 
 func cloneEnvDefaults(d EnvDefaults) EnvDefaults {
+	d.GateEnv = maps.Clone(d.GateEnv)
 	d.MaxSlices = cloneEnvPointer(d.MaxSlices)
 	d.Continue = cloneEnvPointer(d.Continue)
 	d.PullRequest = cloneEnvPointer(d.PullRequest)

@@ -16,6 +16,8 @@ import (
 
 	"github.com/iamseth/tao/internal/agent"
 	agentmetrics "github.com/iamseth/tao/internal/agent/metrics"
+	"github.com/iamseth/tao/internal/agent/process"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -1473,6 +1475,32 @@ func TestImplementationWrapUpPolicy(t *testing.T) {
 				}
 			} else if err != nil || calls != 1 {
 				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestAgentSessionRepositoryPins(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, role := range []string{"run", "review", "rework", "pr"} {
+		t.Run(role, func(t *testing.T) {
+			runtime := agentRuntimeFunc(func(ctx context.Context, _ agent.Session) (agent.SessionResult, error) {
+				child, err := process.DefaultProcessStarter(ctx, "", "sh", []string{"-c", `printf '%s' "$CI"`})
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, readErr := io.ReadAll(child.Stdout())
+				err = child.Wait()
+				if err != nil || readErr != nil || string(data) != "provider-pin" {
+					t.Fatalf("pins: %q %v %v", data, err, readErr)
+				}
+				return agent.SessionResult{}, nil
+			})
+			root := t.TempDir()
+			detail := runPathSessionDetail(t, root, plan.StatusPlanned, []string{"001-a"}, nil, plan.StatusPending)
+			runner := newAgentSessionRunner(agentSessionRunnerConfig{runtimeEnv: gateEnvSnapshot(`{"CI":"provider-pin"}`), descriptor: agent.Descriptor{Label: "test", NewRuntime: func(agent.RuntimeDeps) agent.Runtime { return runtime }}, logAppender: unscopedFileRepository(t), sessionLogWriter: io.Discard, now: time.Now})
+			if _, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{Role: configtypes.SessionRole(role), PlanDir: detail.Dir, RepoRoot: root}); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

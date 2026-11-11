@@ -439,6 +439,18 @@ func TestCompleteVerifiedMovedFile(t *testing.T) {
 	}
 }
 
+func TestCompleteVerifiedInvalidPinsBeforeExecution(t *testing.T) {
+	testenv.SkipIfShort(t)
+	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	service := SliceCompletionService{RuntimeEnv: gateEnvSnapshot(`{"PATH":"bad"}`), CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+		t.Fatal("executed with invalid pins")
+		return nil
+	}}
+	if err := service.Complete(context.Background(), request); err == nil || !strings.Contains(err.Error(), "gate_env") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 	testenv.SkipIfShort(t)
 	for _, outcome := range []string{plan.SliceCompletionCommitted, plan.SliceCompletionNoChanges, plan.SliceCompletionManualUncommitted} {
@@ -447,7 +459,7 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 			if outcome == plan.SliceCompletionManualUncommitted {
 				policy = CommitPolicyNone
 			}
-			request := verifiedCompletionFixture(t, policy, "true", "true")
+			request := verifiedCompletionFixture(t, policy, `test "$CI" = tao-pinned`, "true")
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
 			if outcome != plan.SliceCompletionNoChanges {
 				if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0o600); err != nil {
@@ -455,7 +467,7 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 				}
 			}
 			calls := 0
-			service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+			service := SliceCompletionService{RuntimeEnv: gateEnvSnapshot(`{"CI":"tao-pinned"}`), CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 				if name == "sh" {
 					calls++
 				}
@@ -474,6 +486,7 @@ func TestCompleteVerifiedSuccessAndRecovery(t *testing.T) {
 			if policy == CommitPolicySlice && (!strings.Contains(slice.CommitIntent.Message, "Tao-Verify-Exit: 1: 0") || !strings.Contains(slice.CommitIntent.Message, "Tao-Verify-Exit: 2: 0")) {
 				t.Fatalf("missing ordered trailers: %s", slice.CommitIntent.Message)
 			}
+			service.RuntimeEnv = gateEnvSnapshot(`{"PATH":"invalid"}`)
 			// Claims and the mutable latest attempt must not become recovery authority.
 			request.VerificationResults = []plan.VerificationRun{{Command: "forged", Result: "passed"}}
 			request.VerificationClaims = []VerificationClaim{{Command: "true", CWD: root, Result: "failed"}}

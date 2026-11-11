@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/gateenv"
 	"github.com/iamseth/tao/internal/herdr"
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/plan"
@@ -86,7 +87,14 @@ func (launcher *uiPlanFixLauncher) Launch(ctx context.Context, row monitor.Row) 
 	cmd := exec.CommandContext(ctx, descriptor.ToolName, args...) //nolint:gosec // G204: registered executable and validated plan ID, without a shell.
 	cmd.Dir = root
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = launcher.input, launcher.output, launcher.app.noteErrorOutput()
-	cmd.Env = herdr.StripInjectedEnv(os.Environ())
+	pins, err := app.envSnapshot().GateEnv()
+	if err != nil {
+		return err
+	}
+	cmd.Env, err = gateenv.Apply(herdr.StripInjectedEnv(os.Environ()), pins)
+	if err != nil {
+		return err
+	}
 	if err := launcher.run(cmd); err != nil {
 		return fmt.Errorf("foreground plan fix: %w", err)
 	}

@@ -368,3 +368,49 @@ func TestResolveSettingsPresentationAndInvocation(t *testing.T) {
 		}
 	}
 }
+
+func TestGateEnvResolution(t *testing.T) {
+	for _, raw := range []string{"", `{}`, `{"CI":"","GOFLAGS":"-mod=readonly"}`} {
+		var repo configtypes.SettingsValues
+		if raw != "" {
+			repo = settingLayer("gate_env", raw)
+		}
+		s := ResolveSettings(nil, repo, capturedSettings(map[string]string{"CI": "inherited", "TAO_GATE_ENV": `{"CI":"alias"}`}))
+		pins, err := s.GateEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw == "" || raw == "{}" {
+			if len(pins) != 0 {
+				t.Fatal(pins)
+			}
+			continue
+		}
+		if pins["CI"] != "" || pins["GOFLAGS"] != "-mod=readonly" || len(pins) != 2 {
+			t.Fatal(pins)
+		}
+		repo["gate_env"][2] = 'X'
+		pins["CI"] = "mutated"
+		s.Defaults().GateEnv["CI"] = "also mutated"
+		again, err := s.GateEnv()
+		if err != nil || again["CI"] != "" {
+			t.Fatalf("alias: %v %v", again, err)
+		}
+	}
+	for _, bad := range []string{`{"CI":"ok","PATH":"bad"}`, `{"CI":"x","CI":"y"}`, `null`} {
+		s := ResolveSettings(nil, settingLayer("gate_env", bad), capturedSettings(nil))
+		if _, err := s.GateEnv(); err == nil {
+			t.Fatal("invalid setting admitted")
+		}
+		if len(s.Defaults().GateEnv) != 0 {
+			t.Fatal("partial map applied")
+		}
+		if row := settingStatus(t, s, "gate_env"); row.Warning == "" {
+			t.Fatal("missing diagnostic")
+		}
+	}
+	s := ResolveSettings(settingLayer("gate_env", `{"CI":"bad scope"}`), settingLayer("gate_env", `{"CI":"valid"}`), capturedSettings(nil))
+	if _, err := s.GateEnv(); err == nil {
+		t.Fatal("invalid saved layer masked")
+	}
+}

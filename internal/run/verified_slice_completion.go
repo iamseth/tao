@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
@@ -63,6 +64,10 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 		}
 		return s.recoverVerifiedCompletion(ctx, request, *slice.CommitIntent)
 	}
+	pins, err := runtimeEnv(s.RuntimeEnv).GateEnv()
+	if err != nil {
+		return err
+	}
 	request.Notes = strings.TrimSpace(request.Notes)
 	if err := admitVerifiedCompletion(request); err != nil {
 		return err
@@ -98,7 +103,7 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	if _, err := rand.Read(id); err != nil {
 		return fmt.Errorf("create verification attempt identity: %w", err)
 	}
-	runs, gateErr := (SliceVerifier{CommandRunner: s.CommandRunner}).Verify(ctx, SliceVerificationRequest{ExecutionRoot: before.root, Verification: declaration})
+	runs, gateErr := (SliceVerifier{CommandRunner: s.CommandRunner}).Verify(commandrunner.WithGateEnv(ctx, pins), SliceVerificationRequest{ExecutionRoot: before.root, Verification: declaration})
 	snapshot := plan.SliceVerificationSnapshot{
 		Version: plan.SliceVerificationSnapshotVersion, AttemptID: hex.EncodeToString(id),
 		ExecutionRoot: before.root, StartingBranch: before.branch, StartingHead: before.head,

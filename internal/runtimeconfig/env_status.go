@@ -88,6 +88,7 @@ const (
 // environment variables.
 type EnvDefaults struct {
 	WorkspaceSetup string
+	GateEnv        map[string]string
 	RunOptionsPatch
 	SessionWarnPercent          int
 	AutoRework                  *bool

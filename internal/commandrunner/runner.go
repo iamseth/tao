@@ -4,10 +4,13 @@ package commandrunner
 import (
 	"context"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/iamseth/tao/internal/gateenv"
 )
 
 // SliceCompletionOwnerEnv carries the managed-session token that authorizes
@@ -18,6 +21,13 @@ const SliceCompletionOwnerEnv = "TAO_SLICE_COMPLETION_OWNER"
 
 // Runner runs a local command with optional stdout and stderr writers.
 type Runner func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error
+
+type gateEnvKey struct{}
+
+// WithGateEnv captures child-only pins without retaining the caller's map.
+func WithGateEnv(ctx context.Context, pins map[string]string) context.Context {
+	return context.WithValue(ctx, gateEnvKey{}, maps.Clone(pins))
+}
 
 // DefaultLocal executes commands on the local machine.
 func DefaultLocal(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -31,7 +41,11 @@ func DefaultLocal(ctx context.Context, cwd string, name string, args []string, s
 	if err != nil {
 		return err
 	}
-	cmd.Env = environ
+	pins, _ := ctx.Value(gateEnvKey{}).(map[string]string)
+	cmd.Env, err = gateenv.Apply(environ, pins)
+	if err != nil {
+		return err
+	}
 	// A shell can exit while descendants retain its output pipes. Bound Wait's
 	// pipe drain too: context cancellation alone does not interrupt that wait
 	// after the shell exits. ErrWaitDelay reports incomplete output, and deferred

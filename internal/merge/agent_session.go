@@ -289,6 +289,10 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 			return BatchAgentSession{}, err
 		}
 	}
+	pins, err := snapshot.GateEnv()
+	if err != nil {
+		return BatchAgentSession{}, err
+	}
 	defaults := snapshot.Defaults()
 	kind := config.Agent
 	if kind == "" {
@@ -325,6 +329,7 @@ func newBatchAgentSession(config BatchAgentSessionConfig, confineFilesystem bool
 		progress, framedLog = nil, config.Log
 	}
 	runner := agentsession.New(agentsession.Config{
+		GateEnv:         pins,
 		Descriptor:      descriptor,
 		Models:          &config.Models,
 		Deps:            agent.RuntimeDeps{ProcessStarter: starter},

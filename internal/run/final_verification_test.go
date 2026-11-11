@@ -174,6 +174,17 @@ func sameHeadRerunFixture(t *testing.T) (string, *plan.PlanDetail) {
 	return root, detail
 }
 
+func TestFinalVerificationInvalidPinsBeforeExecution(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\ttrue\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{RuntimeEnv: gateEnvSnapshot(`{"PATH":"bad"}`)}, RunDependencies{}))
+	if err := f.verifyCompletedBranch(context.Background(), completedReviewPlanDetail(t.TempDir()), root); err == nil || !strings.Contains(err.Error(), "gate_env") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestVerifyCompletedBranchCache(t *testing.T) {
 	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
@@ -191,7 +202,7 @@ func TestVerifyCompletedBranchCache(t *testing.T) {
 			root := filepath.Join(sliceVerifierRoot(t), "execution worktree")
 			runCommitTestGitCommand(t, repo, "worktree", "add", "-b", "final-cache", root)
 			if mode != "skipped" {
-				makefile := "verify:\n\t@printf '%s\\n' \"$$GOLANGCI_LINT_CACHE\"\n\t@printf data > \"$$GOLANGCI_LINT_CACHE/entry\"\n\t@touch executed\n"
+				makefile := "verify:\n\t@test \"$$CI\" = tao-pinned\n\t@printf '%s\\n' \"$$GOLANGCI_LINT_CACHE\"\n\t@printf data > \"$$GOLANGCI_LINT_CACHE/entry\"\n\t@touch executed\n"
 				if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(makefile), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -204,7 +215,7 @@ func TestVerifyCompletedBranchCache(t *testing.T) {
 			detail := completedReviewPlanDetail(t.TempDir())
 			detail.State.Repo.Root = repo
 			calls := 0
-			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{
+			finalizer := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{RuntimeEnv: gateEnvSnapshot(`{"CI":"tao-pinned"}`)}, RunDependencies{
 				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 					calls++
 					if cwd != root || name != "sh" || len(args) != 2 || args[0] != "-c" || args[1] != "make verify" {

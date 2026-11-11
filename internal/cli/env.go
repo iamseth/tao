@@ -47,7 +47,7 @@ func (a App) flagDefaults() runtimeconfig.EnvDefaults {
 // routing, update, merge, or budget policy. Those have their own consumers.
 func (a App) runEnvDefaults() (envDefaults, error) {
 	keys := []string{
-		"max_slices", "workspace.setup", runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode,
+		"max_slices", "workspace.setup", "gate_env", runtimeconfig.EnvCommitPolicy, runtimeconfig.EnvExecutionMode,
 		runtimeconfig.EnvAgent, runtimeconfig.EnvReviewAgent, runtimeconfig.EnvPullRequest, runtimeconfig.EnvReview,
 		runtimeconfig.EnvSessionTimeout, runtimeconfig.EnvSkipPermissions,
 	}

@@ -117,7 +117,7 @@ func TestSettingsParserParity(t *testing.T) {
 func TestSettingInventory(t *testing.T) {
 	defs := SettingDefinitions()
 	seen := map[string]bool{}
-	expected := strings.Fields("workspace.setup max_slices commit_policy execution_mode agent pull_request review_enabled session_timeout session_warn_percent review_agent max_rework_attempts rework_escalation_from_attempt dangerously_skip_permissions run_header models.model models.run_model models.review_model models.merge_review_model models.resolver_model models.rework_escalation_model models.effort models.run_effort models.review_effort models.merge_review_effort models.resolver_effort theme update budget.slice.output_tokens.warn budget.slice.output_tokens.stop budget.slice.cost.warn budget.slice.cost.stop budget.slice.tool_calls.warn budget.slice.assistant_messages.warn budget.slice.errored_messages.warn budget.plan.output_tokens.warn budget.plan.cost.warn budget.plan.tool_calls.warn budget.plan.assistant_messages.warn budget.plan.errored_messages.warn")
+	expected := strings.Fields("gate_env workspace.setup max_slices commit_policy execution_mode agent pull_request review_enabled session_timeout session_warn_percent review_agent max_rework_attempts rework_escalation_from_attempt dangerously_skip_permissions run_header models.model models.run_model models.review_model models.merge_review_model models.resolver_model models.rework_escalation_model models.effort models.run_effort models.review_effort models.merge_review_effort models.resolver_effort theme update budget.slice.output_tokens.warn budget.slice.output_tokens.stop budget.slice.cost.warn budget.slice.cost.stop budget.slice.tool_calls.warn budget.slice.assistant_messages.warn budget.slice.errored_messages.warn budget.plan.output_tokens.warn budget.plan.cost.warn budget.plan.tool_calls.warn budget.plan.assistant_messages.warn budget.plan.errored_messages.warn")
 	for _, key := range expected {
 		d, err := settingDefinition(key)
 		if err != nil {
@@ -127,7 +127,7 @@ func TestSettingInventory(t *testing.T) {
 		if key == "theme" || key == "update" {
 			want = []string{"global"}
 		}
-		if key == "workspace.setup" {
+		if key == "workspace.setup" || key == "gate_env" {
 			want = []string{"repo"}
 		}
 		if !reflect.DeepEqual(d.Scopes, want) {
@@ -148,7 +148,7 @@ func TestSettingInventory(t *testing.T) {
 			budgets++
 		}
 		if d.EnvKey == "" {
-			if d.Key != "max_slices" && d.Key != "workspace.setup" {
+			if d.Key != "max_slices" && d.Key != "workspace.setup" && d.Key != "gate_env" {
 				t.Fatal(d)
 			}
 			continue
@@ -214,5 +214,38 @@ func TestSettingInventory(t *testing.T) {
 				t.Fatal("shared choices")
 			}
 		}
+	}
+}
+
+func TestGateEnvObject(t *testing.T) {
+	d, err := settingDefinition("gate_env")
+	if err != nil || d.Kind != "object" || d.EnvKey != "" || !reflect.DeepEqual(d.Scopes, []string{"repo"}) {
+		t.Fatalf("metadata: %+v %v", d, err)
+	}
+	raw, err := ParseSetting("gate_env", `{"GOFLAGS":"","CI":"true"}`)
+	if err != nil || string(raw) != `{"CI":"true","GOFLAGS":""}` {
+		t.Fatalf("parse: %s %v", raw, err)
+	}
+	for _, input := range []string{`null`, `[]`, `"x"`, `{"PATH":"x"}`, `{"CI":true}`, `{"CI":"x","CI":"y"}`, `{"CI":"ok","PATH":"bad"}`, `{} {}`, `{"CI":"\u0000"}`, `{"CI":"` + strings.Repeat("x", 4097) + `"}`, `{` + strings.Repeat(" ", 16384) + `}`} {
+		if _, err := ParseSetting("gate_env", input); err == nil {
+			t.Fatalf("accepted %s", input)
+		}
+		if _, err := DecodeSettings([]byte(`{"gate_env":`+input+`}`), "repo"); err == nil {
+			t.Fatalf("decoded %s", input)
+		}
+	}
+	values, err := DecodeSettings([]byte(`{"gate_env":`+string(raw)+`}`), "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeSettings(values, "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSettings(encoded, "repo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSettings(values, "global"); err == nil {
+		t.Fatal("global accepted")
 	}
 }

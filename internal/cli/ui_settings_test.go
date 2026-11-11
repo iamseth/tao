@@ -315,3 +315,23 @@ func TestUISettingsRepositoryReworkProjection(t *testing.T) {
 		}
 	}
 }
+
+func TestUISettingsGateEnvScope(t *testing.T) {
+	env := runtimeconfig.ResolveSettings(nil, nil, runtimeconfig.LoadEnv(nil))
+	for _, repository := range []bool{false, true} {
+		for _, editable := range []bool{false, true} {
+			found := false
+			for _, row := range uiSettingsValues(env, repository, editable) {
+				if row.Key == "gate_env" {
+					found = true
+					if row.Editable != (repository && editable) {
+						t.Fatalf("repo=%v editable=%v row=%+v", repository, editable, row)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing gate_env")
+			}
+		}
+	}
+}

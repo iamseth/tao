@@ -1,5 +1,6 @@
 verbose=false
 agents: claude
+gate_env: "none" (source: "builtin")
 implementation: claude
 plan reviewer: pi
 warning: configured runtime pi missing from PATH. Install pi, add it to PATH, then run tao install-prompts and tao doctor --verbose.
@@ -12,6 +13,7 @@ Pi readiness (passive; no model request; shared merge probe):
 Claude readiness (passive; no model request):
   ⚠ warning Claude 2.1.308: launch_flags — help does not advertise --verbose
 verbose=true
+gate_env: "none" (source: "builtin")
 implementation: claude
 plan reviewer: pi
 warning: configured runtime pi missing from PATH. Install pi, add it to PATH, then run tao install-prompts and tao doctor --verbose.

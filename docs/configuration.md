@@ -71,6 +71,7 @@ runtime parsers below, then save native scalars.
 | Global and repository | `budget.<slice\|plan>.<metric>.warn` | Non-negative count integer or cost number |
 | Global and repository | `budget.slice.output_tokens.stop`, `budget.slice.cost.stop` | Non-negative integer/number or `null` |
 | Repository only | `workspace.setup` | String; workspace setup command (empty by default) |
+| Repository only | `gate_env` | Native JSON object; bounded child environment pins (empty by default) |
 | Global only | `theme`, `update` | String; choices below |
 | Environment/flags only (not persisted) | `merge_verify_command`, `aggregate_review_convergence_window`, `approved_by`, `planner_routing`, `planner_routing_arms`, `planner_routing_floor` | Existing process/merge/planner controls; see below and command help |
 
@@ -83,6 +84,41 @@ instead.
 Bootstrap paths and recovery actions are never persisted settings.
 
 ### Workspace setup
+
+`gate_env` is repository-only and has no runtime environment alias:
+
+```sh
+tao config set gate_env '{"GOTOOLCHAIN":"local","GOFLAGS":"-mod=readonly","CI":"true"}' --repo my-repo
+tao config unset gate_env --repo my-repo
+```
+
+The native JSON object accepts exactly `GOTOOLCHAIN`, `GOFLAGS`, and `CI`,
+with string values of at most 4096 bytes and at most 16384 encoded bytes for
+the object. Duplicate or unknown keys, non-string values, null, trailing JSON,
+and NUL are rejected atomically. Empty strings are explicit empty values;
+`{}`, omission, and unset mean no overlay. Global persistence is rejected.
+Pins are literal child-environment values, not shell expressions: configured
+keys replace inherited child values, while unpinned keys retain normal inheritance.
+The parent process environment is never rewritten. Ordinary inherited environment
+is not an additional persistable allowlist; arbitrary passthrough is unsupported.
+These local repository preferences are not automatically distributed to other
+machines, and toolchain/flag pins are not a sandbox.
+
+Pins apply to Tao-run verification gates and Tao-launched agent sessions for
+both Pi and Claude. Beyond the command matrix below, consumers include
+`slice-complete` (using the plan-recorded repository), rework triage, and the
+dashboard's foreground note-planning and plan-fix launchers. Detached dashboard
+Tao commands resolve their selected repository settings in the child invocation.
+Frozen-intent recovery does not re-admit pins or rerun gates.
+
+`tao doctor` and `tao doctor --verbose` passively show the effective pins and
+source, explicitly show no pins, and warn about invalid saved values. Output is
+quoted, escaped and bounded; repository-unavailable diagnostics remain visible.
+Doctor does not execute pin values, run gates, or grant lifecycle authority.
+Prompt rendering alone neither spawns a child nor sets a shell environment.
+User-owned shells and externally launched agents are unaffected. CI receives
+pins when it invokes Tao against the configured repository, not in unrelated
+CI commands.
 
 `workspace.setup` is an opt-in, repository-only command with no environment
 alias. It runs via `sh -c` in the worktree after dependency preparation on every
@@ -153,6 +189,7 @@ PRs or inherit automatic slice-commit behavior.
 | `TAO_PULL_REQUEST` | yes | yes | yes | — | — | — |
 | `TAO_REVIEW` | yes | yes | yes | — | — | — |
 | `TAO_SESSION_TIMEOUT` | yes | yes | yes | yes | yes | — |
+| `gate_env` | yes | yes | yes | yes | yes | — |
 | `TAO_MODEL` | yes | yes | yes | yes | yes | — |
 | `TAO_RUN_MODEL` | yes | yes | yes | — | — | — |
 | `TAO_REVIEW_MODEL` | yes | yes | yes | yes | — | — |

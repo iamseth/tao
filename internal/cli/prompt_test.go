@@ -26,6 +26,15 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestDoctorSettingTextEscapesControls(t *testing.T) {
+	for _, value := range []string{"line\nbreak", "\x1b[31m", "\r\t\b", "\u202e"} {
+		got := doctorSettingText(value)
+		if strings.Contains(got, value) || strings.ContainsAny(got, "\n\r\t\b\x1b") {
+			t.Fatalf("unsafe diagnostic %q", got)
+		}
+	}
+}
+
 func TestPromptSiblingScope(t *testing.T) {
 	root, id := siblingCLIArtifacts(t)
 	path := filepath.Join(root, id, "slices.json")

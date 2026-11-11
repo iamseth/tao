@@ -20,6 +20,32 @@ import (
 
 const claudeTestHelp = "  --print  Print\n  --output-format <format>  (choices: text, json, stream-json)\n  --verbose  Verbose\n  --no-session-persistence  Disable\n  --permission-mode <mode>  (choices: auto, plan, bypassPermissions)\n  --model <model>  Model\n  --effort <level>  (low, medium, high)\n"
 
+func TestDoctorGateEnvBothFormats(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		render := renderCompactDoctor
+		if verbose {
+			render = renderVerboseDoctor
+		}
+		report := doctorReport{}
+		var out bytes.Buffer
+		if err := render(&out, report, theme.Palette{}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), `gate_env: "none"`) {
+			t.Fatal(out.String())
+		}
+		report.gateEnv.Value = strings.Repeat("x", 20000) + "\x1b[31m"
+		report.gateEnv.Warning = "bad\n\x1b[31m"
+		out.Reset()
+		if err := render(&out, report, theme.Palette{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.String()) > 3000 || strings.Contains(out.String(), "\x1b") || !strings.Contains(out.String(), "truncated") || !strings.Contains(out.String(), `bad\n\x1b`) {
+			t.Fatalf("unsafe output: %q", out.String())
+		}
+	}
+}
+
 func TestClaudeLaunchSurface(t *testing.T) {
 	for _, tc := range []struct{ name, help, status string }{
 		{"supported", claudeTestHelp, "ok"},

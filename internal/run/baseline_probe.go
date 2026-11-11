@@ -19,6 +19,10 @@ func (f Finalizer) probeBaselineFailure(ctx context.Context, detail *plan.PlanDe
 	if detail == nil || ctx.Err() != nil || head.FailureKind != plan.FinalVerificationFailureKindCode || plan.VerificationRepairAttemptCount(detail) >= plan.VerificationRepairAttemptCap {
 		return nil
 	}
+	pins, pinErr := runtimeEnv(f.execution.Config.RuntimeEnv).GateEnv()
+	if pinErr != nil {
+		return nil
+	}
 	if !f.failuresOutsidePlanOwnership(ctx, detail, executionRoot, combinedOutput) {
 		return nil
 	}
@@ -31,7 +35,7 @@ func (f Finalizer) probeBaselineFailure(ctx context.Context, detail *plan.PlanDe
 	var overlap []string
 	err := gitClient(f.execution, executionRoot).WithDetachedCheckout(ctx, base.SHA, func(dir string) error {
 		var stdout, stderr bytes.Buffer
-		runErr := f.execution.Dependencies.CommandRunner(commandrunner.WithVerificationCache(ctx, dir), dir, "sh", []string{"-c", head.Command}, &stdout, &stderr)
+		runErr := f.execution.Dependencies.CommandRunner(commandrunner.WithGateEnv(commandrunner.WithVerificationCache(ctx, dir), pins), dir, "sh", []string{"-c", head.Command}, &stdout, &stderr)
 		if runErr == nil || errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
 			return nil
 		}

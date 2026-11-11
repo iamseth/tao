@@ -17,6 +17,8 @@ import (
 	"github.com/iamseth/tao/internal/taodata"
 )
 
+func TestUIPlanFixGateEnv(t *testing.T) { testGateEnvForeground(t, true) }
+
 func planFixFixture(t *testing.T) (App, monitor.Row) {
 	t.Helper()
 	app, repo, _ := planningFixture(t)

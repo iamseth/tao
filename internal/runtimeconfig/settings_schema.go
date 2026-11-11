@@ -15,7 +15,7 @@ import (
 
 // SettingDefinition describes a canonical setting. Empty Scopes denotes an
 // environment-only control; deprecated aliases remain in the environment table,
-// not in this persisted-key inventory. Kind describes the native JSON scalar.
+// not in this persisted-key inventory. Kind describes the native JSON value.
 type SettingDefinition struct {
 	Key     string
 	EnvKey  string
@@ -51,6 +51,11 @@ var nonEnvSettings = map[string]struct {
 			d.MaxSlices = &n
 			return strconv.Itoa(n), nil
 		},
+	},
+	"gate_env": {
+		definition:   SettingDefinition{Key: "gate_env", Kind: "object", Scopes: []string{"repo"}},
+		defaultValue: "{}",
+		apply:        applyGateEnv,
 	},
 	"workspace.setup": {
 		definition: SettingDefinition{Key: "workspace.setup", Kind: "string", Scopes: []string{"repo"}},
@@ -141,6 +146,10 @@ func validateSetting(key string, raw json.RawMessage, scope string) error {
 	}
 	if !slices.Contains(d.Scopes, scope) {
 		return fmt.Errorf("%s: not allowed in %s scope", key, scope)
+	}
+	if key == "gate_env" {
+		_, err := ParseSetting(key, string(raw))
+		return err
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()

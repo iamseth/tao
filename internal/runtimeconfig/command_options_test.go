@@ -11,6 +11,17 @@ import (
 	"github.com/iamseth/tao/internal/configtypes"
 )
 
+func TestCommandGateEnvAdmission(t *testing.T) {
+	snapshot := ResolveSettings(nil, settingLayer("gate_env", `{"PATH":"bad"}`), LoadEnv(nil))
+	for _, profile := range []CommandProfile{CommandRun, CommandReview, CommandMerge, CommandPromptRun, CommandPromptOther} {
+		_, err := ResolveCommandOptions(CommandOptionsInput{Profile: profile, Env: snapshot})
+		wantErr := profile == CommandRun || profile == CommandReview || profile == CommandMerge
+		if (err != nil) != wantErr {
+			t.Fatalf("%s: error %v, want error %v", profile, err, wantErr)
+		}
+	}
+}
+
 func TestCommandWorkspaceSetupAdmission(t *testing.T) {
 	snapshot := ResolveSettings(nil, configtypes.SettingsValues{"workspace.setup": json.RawMessage(`"   "`)}, LoadEnv(nil))
 	var warning string

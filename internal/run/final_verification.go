@@ -68,6 +68,10 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 		return recordErr
 	}
 
+	pins, err := runtimeEnv(f.execution.Config.RuntimeEnv).GateEnv()
+	if err != nil {
+		return err
+	}
 	headSHA, err := f.execution.Dependencies.reviewGitFactory(executionRoot).RevParse(ctx, "HEAD")
 	if err != nil {
 		return fmt.Errorf("resolve final verification HEAD: %w", err)
@@ -80,7 +84,7 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	startedAt := now(f.execution)
-	gateCtx := commandrunner.WithVerificationCache(ctx, executionRoot)
+	gateCtx := commandrunner.WithGateEnv(commandrunner.WithVerificationCache(ctx, executionRoot), pins)
 	runErr := f.execution.Dependencies.CommandRunner(gateCtx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
 	combined := combineFinalVerificationOutput(stdout.String(), stderr.String())
 	if runErr != nil {

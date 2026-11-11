@@ -14,6 +14,7 @@ import (
 	commitcontract "github.com/iamseth/tao/internal/commit"
 	"github.com/iamseth/tao/internal/gitops"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 )
 
 // SliceCompletionRequest contains the validated report used by the recoverable
@@ -30,6 +31,7 @@ type SliceCompletionRequest struct {
 
 // SliceCompletionService owns the intent -> Git -> completion transaction.
 type SliceCompletionService struct {
+	RuntimeEnv    *runtimeconfig.EnvSnapshot
 	CommandRunner commandrunner.Runner
 	Output        io.Writer
 }

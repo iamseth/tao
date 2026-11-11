@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/iamseth/tao/internal/gateenv"
 )
 
 const singleMergePIDConfinementHelper = "TAO_TEST_SINGLE_MERGE_PID_CONFINEMENT_HELPER"
@@ -21,6 +23,11 @@ func TestSingleMergeProcessSandboxHidesTaoParent(t *testing.T) {
 	if os.Getenv(singleMergePIDConfinementHelper) == "1" {
 		// TestMain must bootstrap successfully inside the private namespace,
 		// using the writable runtime TMPDIR without relaxing confinement.
+		for key, want := range map[string]string{"CI": "merge-pin", "GOFLAGS": "", "GOTOOLCHAIN": "local"} {
+			if got, ok := os.LookupEnv(key); !ok || got != want {
+				t.Fatalf("confined pin %s = %q, present %v; want %q", key, got, ok, want)
+			}
+		}
 		assertEffectiveGitSettings(t, t.TempDir())
 		assertTaoParentIsOutsidePIDNamespace(t)
 		return
@@ -83,6 +90,10 @@ func TestSingleMergeProcessSandboxHidesTaoParent(t *testing.T) {
 	}
 	command := exec.Command(name, args...) //nolint:gosec // the current test binary probes Tao's generated sandbox command.
 	command.Dir = integrationRoot
+	command.Env, err = gateenv.Apply(os.Environ(), map[string]string{"CI": "merge-pin", "GOFLAGS": "", "GOTOOLCHAIN": "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("private PID confinement failed: %v:\n%s", err, output)
 	}

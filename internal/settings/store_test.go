@@ -240,3 +240,56 @@ func TestSymlinkRefusal(t *testing.T) {
 		t.Fatal("symlink followed")
 	}
 }
+
+func TestGateEnvRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "repos", "repo-123", "repo.json")
+	put(t, path, `{"schema":"tao.repo.v1","id":"repo-123","name":"repo","root":"/missing/checkout","custom":{"keep":true}}`)
+	s := NewService(home, runtimeconfig.LoadEnv(nil))
+	ctx := context.Background()
+	target := Target{RepositoryID: "repo-123"}
+	changes := map[string]*string{"gate_env": text(`{"CI":"true","GOFLAGS":""}`)}
+	if err := s.Update(ctx, Target{Global: true}, changes); err == nil {
+		t.Fatal("global setup accepted")
+	}
+	if err := s.Update(ctx, target, changes); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Read(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, v.Stored["gate_env"]); err != nil {
+		t.Fatal(err)
+	}
+	if compact.String() != `{"CI":"true","GOFLAGS":""}` {
+		t.Fatal(v.Stored)
+	}
+	before, err := os.ReadFile(path) //nolint:gosec // test-owned temporary data home
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(before, []byte(`"custom"`)) {
+		t.Fatal("metadata lost")
+	}
+	for _, bad := range []string{`{"CI":"ok","PATH":"bad"}`, `{"CI":"x","CI":"y"}`} {
+		if err := s.Update(ctx, target, map[string]*string{"gate_env": text(bad), "agent": text("claude")}); err == nil {
+			t.Fatal("invalid update accepted")
+		}
+		after, err := os.ReadFile(path) //nolint:gosec // test-owned temporary data home
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("non-atomic failure: %v", err)
+		}
+	}
+	if err := s.Update(ctx, target, map[string]*string{"gate_env": nil}); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Read(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.Stored["gate_env"]; ok {
+		t.Fatal("unset retained")
+	}
+}

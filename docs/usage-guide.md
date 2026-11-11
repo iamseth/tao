@@ -952,8 +952,18 @@ variables for a shell/CI job. Check [settings precedence](configuration.md#how-s
 when an old shell export masks a newly saved value. `tao config get` and `tao status` show both stored
 values and effective sources, so inspect those before changing more defaults.
 
-For example, save `tao config set session_timeout 30m`, then use
-`tao run --agent claude --session-timeout 45m <plan>` for a one-off exception.
+For the Tao repository, persist preferences instead of repeating per-launch exports:
+
+```sh
+tao config set agent pi --repo tao
+tao config set session_timeout 45m --repo tao
+tao config set gate_env '{"GOTOOLCHAIN":"local","GOFLAGS":"-mod=readonly","CI":"true"}' --repo tao
+```
+
+Choose toolchain pins appropriate to your installation; `local` uses the installed
+Go toolchain. `tao doctor` shows pins safely without running gates. Pins affect
+Tao-owned gates and agent children, not your shell or unrelated CI commands.
+Use `tao run --agent claude --session-timeout 45m <plan>` for a one-off exception.
 The same two flags work on `tao note run`. Permissions remain runtime-specific:
 `--dangerously-skip-permissions` bypasses Claude checks but is a compatibility
 no-op for Pi. Neither preferences nor overrides authorize recovery actions.

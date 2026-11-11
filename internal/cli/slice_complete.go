@@ -74,7 +74,21 @@ func (a App) sliceComplete(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	service := run.SliceCompletionService{CommandRunner: a.CommandRunner, Output: a.Out}
+	// Frozen intents must settle independently of mutable repository settings.
+	recovering := false
+	for _, slice := range record.Detail().Slices.Slices {
+		if slice.ID == sliceID && slice.CommitIntent != nil {
+			recovering = true
+		}
+	}
+	if !recovering {
+		a, err = a.settingsForPlanRoot(ctx, record.Detail().State.Repo.Root)
+		if err != nil {
+			return err
+		}
+	}
+	snapshot := a.envSnapshot()
+	service := run.SliceCompletionService{CommandRunner: a.CommandRunner, Output: a.Out, RuntimeEnv: &snapshot}
 	if err := service.Complete(ctx, run.SliceCompletionRequest{
 		Record: record, SliceID: sliceID, Notes: inputs.Notes,
 		VerificationResults: inputs.VerificationResults, VerificationClaims: inputs.VerificationClaims,

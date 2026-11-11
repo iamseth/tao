@@ -101,6 +101,17 @@ func TestComposedRunFlagDefaultsAreNotOverrides(t *testing.T) {
 	}
 }
 
+func TestRunSavedGateEnvAdmission(t *testing.T) {
+	snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"gate_env": []byte(`{"PATH":"bad"}`)}, runtimeconfig.LoadEnv(nil))
+	app := newTestApp(App{RuntimeEnv: &snapshot})
+	if _, err := app.runEnvDefaults(); err == nil {
+		t.Fatal("invalid pins admitted")
+	}
+	if _, err := app.envDefaultsFor(runtimeconfig.EnvAgent); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunSavedWorkspaceSetupAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw, want string
@@ -1108,6 +1119,57 @@ func TestDoctorUsesCapturedReviewRolesAndRepositoryDefaults(t *testing.T) {
 	app.RuntimeEnv = snapshotWith(map[string]string{runtimeconfig.EnvReviewAgent: "invalid"})
 	if _, err := app.collectDoctorReport(); err == nil || !strings.Contains(err.Error(), runtimeconfig.EnvReviewAgent) {
 		t.Fatalf("invalid reviewer not diagnosed: %v", err)
+	}
+}
+
+func TestDoctorInvalidSavedSessionTimeoutWarning(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	repo := taodata.Repo{ID: "doctor-invalid-timeout"}
+	home := persistStatusRepository(t, repo)
+	data := `{"schema":"tao.repo.v1","id":"doctor-invalid-timeout","name":"test-repo","root":"/unused","run_defaults":{"session_timeout":"invalid"}}`
+	if err := os.WriteFile(filepath.Join(home, "repos", repo.ID, "repo.json"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"--verbose"}} {
+		var warnings bytes.Buffer
+		app := newTestApp(App{Out: io.Discard, Err: &warnings, RuntimeEnv: snapshotWith(nil), Registry: func() NoteRegistry {
+			return &fakeNoteRegistry{current: repo}
+		}})
+		if err := app.doctor(args); err != nil {
+			t.Fatal(err)
+		}
+		if got := warnings.String(); !strings.Contains(got, "warning: settings:") || !strings.Contains(got, "session_timeout") {
+			t.Fatalf("doctor %v lost saved-setting warning: %q", args, got)
+		}
+	}
+}
+
+func TestDoctorPersistedGateEnv(t *testing.T) {
+	testenv.SkipIfShort(t)
+	t.Setenv("PATH", t.TempDir())
+	for _, raw := range []string{`{"CI":"value"}`, `{}`, `{"PATH":"bad"}`} {
+		app, repo, _ := planningFixture(t)
+		app = gateEnvApp(t, app, repo, raw)
+		app.registry().(*fakeNoteRegistry).current = repo
+		report, err := app.collectDoctorReport()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.repositoryUnavailable || report.gateEnv.Key != "gate_env" {
+			t.Fatalf("missing projection: %+v", report)
+		}
+		if strings.Contains(raw, "PATH") != (report.gateEnv.Warning != "") {
+			t.Fatalf("warning: %+v", report.gateEnv)
+		}
+		if strings.Contains(raw, "value") && (!strings.Contains(report.gateEnv.Value, "value") || report.gateEnv.Source != "repository") {
+			t.Fatalf("pins: %+v", report.gateEnv)
+		}
+		app.Registry = func() NoteRegistry { return &unavailableDoctorRegistry{} }
+		report, err = app.collectDoctorReport()
+		if err != nil || !report.repositoryUnavailable {
+			t.Fatalf("missing repository: %+v %v", report, err)
+		}
 	}
 }
 

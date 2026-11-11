@@ -18,6 +18,8 @@ import (
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/run"
+	"github.com/iamseth/tao/internal/settings"
+	"github.com/iamseth/tao/internal/taodata"
 
 	"github.com/iamseth/tao/internal/testenv"
 )
@@ -69,6 +71,37 @@ func reloadCLICompletion(t *testing.T, record *plan.PlanRecord) *plan.PlanDetail
 		t.Fatal(err)
 	}
 	return d
+}
+
+func TestSliceCompleteUsesRecordedRepositoryPins(t *testing.T) {
+	testenv.SkipIfShort(t)
+	record, args := newVerifiedCLICompletion(t, "slice", `test "$CI" = recorded`)
+	home := t.TempDir()
+	selected := taodata.Repo{ID: "selected", Root: record.Detail().State.Repo.Root}
+	current := taodata.Repo{ID: "current", Root: t.TempDir()}
+	for _, repo := range []taodata.Repo{selected, current} {
+		value := "wrong"
+		if repo.ID == selected.ID {
+			value = "recorded"
+		}
+		dir := filepath.Join(home, "repos", repo.ID)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(map[string]any{"schema": "tao.repo.v1", "id": repo.ID, "name": repo.ID, "root": repo.Root, "run_defaults": map[string]any{"gate_env": map[string]string{"CI": value}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "repo.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard, SettingsService: settings.NewService(home, *snapshotWith(nil)), Registry: func() NoteRegistry {
+		return &fakeNoteRegistry{current: current, repos: []taodata.Repo{current, selected}}
+	}})
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSliceCompleteObservedGatesAndOptionalClaims(t *testing.T) {

@@ -716,3 +716,27 @@ func TestRuntimeEnvDoesNotCache(t *testing.T) {
 		t.Fatal("production binding cached across invocations")
 	}
 }
+
+func TestGateEnvSnapshotCopies(t *testing.T) {
+	for _, s := range []EnvSnapshot{{}, LoadEnv(nil)} {
+		pins, err := s.GateEnv()
+		if err != nil || len(pins) != 0 {
+			t.Fatalf("default: %v %v", pins, err)
+		}
+	}
+	original := EnvDefaults{GateEnv: map[string]string{"CI": ""}}
+	copied := cloneEnvDefaults(original)
+	copied.GateEnv["CI"] = "changed"
+	if original.GateEnv["CI"] != "" {
+		t.Fatal("defaults alias")
+	}
+	s := EnvSnapshot{defaults: original}
+	pins, err := s.GateEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins["CI"] = "changed"
+	if original.GateEnv["CI"] != "" {
+		t.Fatal("accessor alias")
+	}
+}

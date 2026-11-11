@@ -114,10 +114,13 @@ type agentSessionRunner struct {
 }
 
 func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
+	// Admission occurs at launch; invalid settings never become partial pins.
+	pins, _ := runtimeEnv(config.runtimeEnv).GateEnv()
 	return agentSessionRunner{
 		runtimeEnv:     runtimeEnv(config.runtimeEnv),
 		sessionTimeout: config.sessionTimeout,
 		session: agentsession.New(agentsession.Config{
+			GateEnv:         pins,
 			Descriptor:      config.descriptor,
 			Models:          config.models,
 			Deps:            config.deps,
@@ -137,6 +140,9 @@ func newAgentSessionRunner(config agentSessionRunnerConfig) agentSessionRunner {
 func (r agentSessionRunner) clock() func() time.Time { return r.nowFn }
 
 func (r agentSessionRunner) RunAgentSession(ctx context.Context, request AgentSessionRequest) (AgentSessionResult, error) {
+	if _, err := r.runtimeEnv.GateEnv(); err != nil {
+		return AgentSessionResult{}, err
+	}
 	// This is the live operation context, not persisted telemetry or lifecycle evidence.
 	implementation := request.Metrics != nil && request.Metrics.SliceID != "" &&
 		(request.Metrics.Role == plan.AgentRoleExecution || request.Metrics.Role == plan.AgentRoleRework)

@@ -248,6 +248,7 @@ func (a App) doctor(args []string) error {
 }
 
 type doctorReport struct {
+	gateEnv               runtimeconfig.SettingStatus
 	selectedAgent         runtimeconfig.AgentKind
 	reviewAgent           runtimeconfig.AgentKind
 	repositoryUnavailable bool
@@ -298,6 +299,11 @@ func (a App) collectDoctorReport() (doctorReport, error) {
 	}
 	report := doctorReport{selectedAgent: defaults.Agent, reviewAgent: reviewAgent,
 		repositoryUnavailable: repoErr != nil, agents: agentpkg.Installed()}
+	for _, status := range a.envSnapshot().SettingsStatus() {
+		if status.Key == "gate_env" {
+			report.gateEnv = status
+		}
+	}
 	report.prompts, err = promptinstall.CheckDiscovered(report.agents)
 	if err != nil {
 		return doctorReport{}, err
@@ -371,7 +377,31 @@ func collectDoctorTool(tool doctorTool) doctorToolResult {
 	return doctorToolResult{tool: tool, status: status, found: found}
 }
 
+// Quote and bound diagnostic data, including rejected saved values.
+func doctorSettingText(value string) string {
+	if len(value) > 1024 {
+		value = value[:1024] + "... (truncated)"
+	}
+	return fmt.Sprintf("%+q", value)
+}
+
 func renderDoctorRoles(out io.Writer, report doctorReport) error {
+	value := report.gateEnv.Value
+	if value == "" || value == "{}" {
+		value = "none"
+	}
+	source := report.gateEnv.Source
+	if source == "" {
+		source = "builtin"
+	}
+	if err := writef(out, "gate_env: %s (source: %s)\n", doctorSettingText(value), doctorSettingText(source)); err != nil {
+		return err
+	}
+	if report.gateEnv.Warning != "" {
+		if err := writef(out, "warning: gate_env: %s\n", doctorSettingText(report.gateEnv.Warning)); err != nil {
+			return err
+		}
+	}
 	if err := writef(out, "implementation: %s\nplan reviewer: %s\n", report.selectedAgent, report.reviewAgent); err != nil {
 		return err
 	}

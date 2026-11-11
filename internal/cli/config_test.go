@@ -29,6 +29,9 @@ func TestConfigSchemaRoundTrips(t *testing.T) {
 		for _, scope := range def.Scopes {
 			t.Run(scope+"/"+def.Key, func(t *testing.T) {
 				value := "2"
+				if def.Kind == "object" {
+					value = `{"CI":"true","GOFLAGS":""}`
+				}
 				if strings.HasSuffix(def.Key, ".stop") {
 					value = "null"
 				}
@@ -69,7 +72,7 @@ func TestConfigErrorsRepairAndMasking(t *testing.T) {
 	var out bytes.Buffer
 	app := newTestApp(App{Out: &out, Err: &out, SettingsService: settings.NewService(home, env)})
 	ctx := context.Background()
-	for _, args := range [][]string{{"set", "unknown", "x", "--global"}, {"set", "pull_request", "null", "--global"}, {"set", "pull_request", "wrong", "--global"}, {"--global", "--repo", "a"}, {"--repo", ""}, {"--repo", "missing"}} {
+	for _, args := range [][]string{{"set", "gate_env", `{"CI":"true"}`, "--global"}, {"set", "gate_env", `{"PATH":"x"}`, "--global"}, {"set", "unknown", "x", "--global"}, {"set", "pull_request", "null", "--global"}, {"set", "pull_request", "wrong", "--global"}, {"--global", "--repo", "a"}, {"--repo", ""}, {"--repo", "missing"}} {
 		if err := app.config(ctx, args); err == nil {
 			t.Fatalf("accepted %v", args)
 		}
@@ -177,5 +180,41 @@ func TestConfigGlobalRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "stored=false") {
 		t.Fatalf("missing stored false: %s", &out)
+	}
+}
+
+func TestConfigGateEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TAO_DATA_HOME", home)
+	registry := taodata.NewRegistry(home)
+	if err := registry.WriteRepo(taodata.Repo{Schema: taodata.RepoSchema, ID: "repo-a", Name: "example", Root: filepath.Join(home, "missing")}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	app := newTestApp(App{Out: &out, Err: &out, SettingsService: settings.NewService(home, runtimeconfig.LoadEnv(nil))})
+	ctx := context.Background()
+	if err := app.config(ctx, []string{"set", "gate_env", `{"CI":"true","GOFLAGS":""}`, "--repo", "repo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "repos", "repo-a", "repo.json")
+	before, err := os.ReadFile(path) //nolint:gosec // test-owned temporary data home
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{`{"PATH":"x"}`, `{"CI":"a","CI":"b"}`, `null`, `{"CI":false}`} {
+		if err := app.config(ctx, []string{"set", "gate_env", input, "--repo", "repo-a"}); err == nil {
+			t.Fatalf("accepted %s", input)
+		}
+	}
+	after, err := os.ReadFile(path) //nolint:gosec // test-owned temporary data home
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("invalid writes changed repo: %v", err)
+	}
+	out.Reset()
+	if err := app.config(ctx, []string{"get", "gate_env", "--repo", "repo-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"CI":"true"`) || !strings.Contains(out.String(), `"GOFLAGS":""`) {
+		t.Fatal(out.String())
 	}
 }

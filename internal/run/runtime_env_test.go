@@ -24,6 +24,21 @@ func runEnvSnapshot(values map[string]string) *runtimeconfig.EnvSnapshot {
 	return &snapshot
 }
 
+func gateEnvSnapshot(value string) *runtimeconfig.EnvSnapshot {
+	snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"gate_env": []byte(value)}, runtimeconfig.LoadEnv(nil))
+	return &snapshot
+}
+
+func TestInvalidGateEnvRejectsSessionsBeforeLaunch(t *testing.T) {
+	for _, role := range []plan.AgentRole{plan.AgentRoleExecution, plan.AgentRoleRework, plan.AgentRoleReview, plan.AgentRoleUnknown} {
+		runner := agentSessionRunner{runtimeEnv: *gateEnvSnapshot(`{"PATH":"bad"}`)}
+		_, err := runner.RunAgentSession(context.Background(), AgentSessionRequest{Metrics: &AgentSessionMetricsRequest{Role: role}})
+		if err == nil || !strings.Contains(err.Error(), "gate_env") {
+			t.Fatalf("%s: %v", role, err)
+		}
+	}
+}
+
 func TestComposedSnapshotSessionAdmission(t *testing.T) {
 	global := configtypes.SettingsValues{"budget.slice.cost.warn": []byte(`0`), "budget.slice.cost.stop": []byte(`4`)}
 	for _, stop := range []string{`0`, `null`} {

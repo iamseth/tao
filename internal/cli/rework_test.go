@@ -31,6 +31,14 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestReworkTriageRejectsInvalidGateEnv(t *testing.T) {
+	snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"gate_env": json.RawMessage(`{"PATH":"bad"}`)}, *snapshotWith(nil))
+	app := newTestApp(App{RuntimeEnv: &snapshot})
+	if _, err := newReworkTriageTextGenerator(app, nil); err == nil || !strings.Contains(err.Error(), "gate_env") {
+		t.Fatalf("admission: %v", err)
+	}
+}
+
 func TestClassifyReworkPRThreadsCapturesPrompt(t *testing.T) {
 	t.Setenv("TAO_AGENT", "claude")
 	root := t.TempDir()

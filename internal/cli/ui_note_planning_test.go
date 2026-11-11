@@ -39,6 +39,8 @@ func planningFixture(t *testing.T) (App, taodata.Repo, note.CatalogNote) {
 	return app, registered, note.CatalogNote{RepositoryID: registered.ID, RepositoryRoot: root, RepositoryName: "not a selector", ID: n.ID, Text: "stale prose"}
 }
 
+func TestUINotePlanningGateEnv(t *testing.T) { testGateEnvForeground(t, false) }
+
 func TestUINotePlanningCommand(t *testing.T) {
 	for _, kind := range []string{"", "pi", "claude"} {
 		t.Run("agent="+kind, func(t *testing.T) {

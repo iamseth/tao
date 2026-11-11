@@ -9,10 +9,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/iamseth/tao/internal/gateenv"
 	"github.com/iamseth/tao/internal/herdr"
 )
 
@@ -37,6 +39,13 @@ type Process interface {
 // alter provider arguments or process cancellation policy.
 func WithSessionLifetime(ctx context.Context, env []string, ended func()) context.Context {
 	return context.WithValue(ctx, sessionLifetimeKey{}, sessionLifetime{env: append([]string(nil), env...), ended: ended})
+}
+
+type gateEnvKey struct{}
+
+// WithGateEnv captures child-only pins without retaining the caller's map.
+func WithGateEnv(ctx context.Context, pins map[string]string) context.Context {
+	return context.WithValue(ctx, gateEnvKey{}, maps.Clone(pins))
 }
 
 type sessionLifetimeKey struct{}
@@ -66,7 +75,12 @@ func DefaultProcessStarter(ctx context.Context, cwd string, name string, args []
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Env = herdr.StripInjectedEnv(cmd.Environ())
+	pins, _ := ctx.Value(gateEnvKey{}).(map[string]string)
+	environ, err := gateenv.Apply(herdr.StripInjectedEnv(cmd.Environ()), pins)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = environ
 	lifetime, _ := ctx.Value(sessionLifetimeKey{}).(sessionLifetime)
 	for _, entry := range lifetime.env {
 		key, _, _ := strings.Cut(entry, "=")

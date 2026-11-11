@@ -210,7 +210,12 @@ func newReworkTriageTextGenerator(app App, observe func(agentsession.Result, str
 	if observe != nil {
 		observer = func(result agentsession.Result, err error) { observe(result, result.ResolvedEffort, err) }
 	}
+	pins, err := app.envSnapshot().GateEnv()
+	if err != nil {
+		return agentsession.TextGenerator{}, err
+	}
 	return agentsession.NewTextGenerator(agentsession.Config{
+		GateEnv:    pins,
 		Descriptor: descriptor, Deps: agent.RuntimeDeps{ProcessStarter: starter},
 		SkipPermissions: defaults.SkipPermissions, Timeout: defaults.SessionTimeoutValue(),
 		Progress: app.Out, CommandRunner: app.CommandRunner,

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/iamseth/tao/internal/agent"
+	"github.com/iamseth/tao/internal/gateenv"
 	"github.com/iamseth/tao/internal/herdr"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -84,7 +85,14 @@ func (launcher *uiNotePlanningLauncher) Launch(ctx context.Context, item note.Ca
 	cmd := exec.CommandContext(ctx, descriptor.ToolName, args...) //nolint:gosec // G204: registered executable and exact validated note ID; no shell or note prose.
 	cmd.Dir = root
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = launcher.input, launcher.output, launcher.app.noteErrorOutput()
-	cmd.Env = herdr.StripInjectedEnv(os.Environ())
+	pins, err := app.envSnapshot().GateEnv()
+	if err != nil {
+		return err
+	}
+	cmd.Env, err = gateenv.Apply(herdr.StripInjectedEnv(os.Environ()), pins)
+	if err != nil {
+		return err
+	}
 	if err := launcher.run(cmd); err != nil {
 		return fmt.Errorf("foreground note planning: %w", err)
 	}

@@ -30,6 +30,63 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestMergeSessionGateEnv(t *testing.T) {
+	testenv.SkipIfShort(t)
+	t.Setenv("CI", "inherited")
+	for _, kind := range []runtimeconfig.AgentKind{runtimeconfig.AgentPi, runtimeconfig.AgentClaude} {
+		for _, tc := range []struct{ raw, want string }{
+			{`{"CI":"repo-a"}`, "repo-a"}, {`{"CI":""}`, ""}, {`{}`, "inherited"}, {"", "inherited"}, {`{"CI":"repo-b"}`, "repo-b"},
+		} {
+			var snapshot *runtimeconfig.EnvSnapshot
+			if tc.raw != "" {
+				snapshot = mergeGateSnapshot(tc.raw)
+			}
+			called := false
+			session, err := NewBatchAgentSession(BatchAgentSessionConfig{Agent: kind, RuntimeEnv: snapshot, ProcessStarter: func(ctx context.Context, _, _ string, _ []string) (agent.Process, error) {
+				called = true
+				p, err := agent.DefaultProcessStarter(ctx, "", "sh", []string{"-c", `printf '%s' "$CI"`})
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, err := io.ReadAll(p.Stdout())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := p.Wait(); err != nil {
+					t.Fatal(err)
+				}
+				if string(out) != tc.want {
+					t.Fatalf("%s %s: got %q want %q", kind, tc.raw, out, tc.want)
+				}
+				return nil, errors.New("observed environment")
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, operation := range []BatchAgentOperation{
+				BatchAgentOperationCandidateResolution, BatchAgentOperationSinglePlanResolution,
+				BatchAgentOperationSinglePlanReview, BatchAgentOperationAggregateReview,
+				BatchAgentOperationAggregateRework, BatchAgentOperationProposalGeneration,
+			} {
+				called = false
+				_, _ = session.Resolve(context.Background(), BatchAgentSessionRequest{Operation: operation, IntegrationRoot: t.TempDir(), Prompt: "test"})
+				if !called {
+					t.Fatalf("%s: provider not started", operation)
+				}
+			}
+		}
+	}
+	for _, single := range []bool{false, true} {
+		config := BatchAgentSessionConfig{RuntimeEnv: mergeGateSnapshot(`{"PATH":"bad"}`), ProcessStarter: func(context.Context, string, string, []string) (agent.Process, error) {
+			t.Fatal("invalid pins started child")
+			return nil, nil
+		}}
+		if _, err := newBatchAgentSession(config, single); err == nil {
+			t.Fatal("invalid pins admitted")
+		}
+	}
+}
+
 func TestMergeSessionPromptCapture(t *testing.T) {
 	for _, mode := range []string{"capture", "nil", "empty", "failure"} {
 		t.Run(mode, func(t *testing.T) {

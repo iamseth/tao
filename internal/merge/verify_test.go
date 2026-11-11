@@ -3,6 +3,7 @@ package merge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,11 +17,43 @@ import (
 	"unicode/utf8"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+func mergeGateSnapshot(raw string) *runtimeconfig.EnvSnapshot {
+	s := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"gate_env": json.RawMessage(raw)}, runtimeconfig.LoadEnv(nil))
+	return &s
+}
+
+func TestMergeVerifyGateEnv(t *testing.T) {
+	testenv.SkipIfShort(t)
+	t.Setenv("CI", "inherited")
+	for _, tc := range []struct{ raw, want string }{
+		{`{"CI":"repo-a"}`, "repo-a"}, {`{"CI":""}`, ""}, {`{}`, "inherited"}, {"", "inherited"}, {`{"CI":"repo-b"}`, "repo-b"},
+	} {
+		var snapshot *runtimeconfig.EnvSnapshot
+		if tc.raw != "" {
+			snapshot = mergeGateSnapshot(tc.raw)
+		}
+		s := Service{RuntimeEnv: snapshot}
+		out, err := s.runMergeVerifyAtRoot(context.Background(), t.TempDir(), `printf '%s' "$CI"`)
+		if err != nil || out != tc.want {
+			t.Fatalf("%s: output %q err %v", tc.raw, out, err)
+		}
+	}
+	called := false
+	s := Service{RuntimeEnv: mergeGateSnapshot(`{"PATH":"bad"}`), Runner: func(context.Context, string, string, []string, io.Writer, io.Writer) error { called = true; return nil }}
+	if _, err := s.runMergeVerifyAtRoot(context.Background(), t.TempDir(), "true"); err == nil || called {
+		t.Fatalf("invalid pins: err %v called %v", err, called)
+	}
+	if err := s.verify(context.Background(), mergeVerifyDetail(), "main", "before", Options{NoVerify: true}); err != nil || called {
+		t.Fatalf("unused invalid pins blocked skipped gate: %v, called %v", err, called)
+	}
+}
 
 type verifyRunnerCall struct {
 	cwd  string

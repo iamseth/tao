@@ -162,7 +162,7 @@ func TestBaselineProbe(t *testing.T) {
 					t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 					t.Setenv("EXPECTED_PROBE_CWD", cwd)
 					for range 2 {
-						if err := commandrunner.DefaultLocal(ctx, cwd, "sh", []string{"-c", `printf cache >> "$GOLANGCI_LINT_CACHE/entry"`}, io.Discard, stderr); err != nil {
+						if err := commandrunner.DefaultLocal(ctx, cwd, "sh", []string{"-c", `test "$CI" = baseline-pin && printf cache >> "$GOLANGCI_LINT_CACHE/entry"`}, io.Discard, stderr); err != nil {
 							t.Fatal(err)
 						}
 					}
@@ -184,7 +184,7 @@ func TestBaselineProbe(t *testing.T) {
 			if tc.name == "base passes" {
 				factory = func(d *plan.PlanDetail) (PlanMutationRecord, error) { return plan.NewPlanRecord(d.Dir, d) }
 			}
-			f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated}}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: factory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })}))
+			f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{RuntimeEnv: gateEnvSnapshot(`{"CI":"baseline-pin"}`), ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated}}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: factory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })}))
 			outside := f.failuresOutsidePlanOwnership(context.Background(), detail, root, tc.head)
 			if outside != (tc.calls == 1) {
 				t.Fatalf("failuresOutsidePlanOwnership=%v want %v", outside, tc.calls == 1)
