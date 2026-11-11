@@ -49,3 +49,36 @@ func TestInterventionAttribution(t *testing.T) {
 		t.Fatal("diagnostics changed lifecycle/action")
 	}
 }
+
+func TestWithVia(t *testing.T) {
+	base := WithInterventionAttribution(Event{Type: EventTypeSliceApproved, PlanID: "plan"}, "operator", "approve")
+
+	labeled := WithVia(base, "  claude-code-workflow wf_43dba409-ce8 ")
+	if labeled.Via != "claude-code-workflow wf_43dba409-ce8" {
+		t.Fatalf("expected trimmed label, got %q", labeled.Via)
+	}
+	if base.Via != "" {
+		t.Fatal("WithVia mutated its input")
+	}
+	for name, raw := range map[string]string{
+		"empty":     "",
+		"oversized": strings.Repeat("x", 129),
+		"newline":   "relay\nbot",
+		"tab":       "relay\tbot",
+	} {
+		got := WithVia(base, raw)
+		if got.Via != "" {
+			t.Fatalf("%s: expected empty via, got %q", name, got.Via)
+		}
+		if got.Actor != "operator" || got.Trigger != "approve" || got.AttributionVersion != 1 {
+			t.Fatalf("%s: attribution changed: %+v", name, got)
+		}
+	}
+	if labeled.Actor != "operator" || labeled.Trigger != "approve" || labeled.AttributionVersion != 1 {
+		t.Fatalf("attribution changed: %+v", labeled)
+	}
+	data, _ := json.Marshal(base)
+	if strings.Contains(string(data), "via") {
+		t.Fatal("empty via not omitted")
+	}
+}

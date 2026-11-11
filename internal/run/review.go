@@ -30,6 +30,9 @@ type ReviewRun struct {
 	RepoRoot             string
 	Base                 string
 	HeadSHA              string
+	// Via is an optional bounded provenance label for a relayed review
+	// decision; it is persisted on the review and its event only.
+	Via string
 }
 
 type ReviewCreator interface {
@@ -107,7 +110,7 @@ func (s Service) Review(ctx context.Context, request Request) (review plan.PlanR
 		if err := writef(s.out, "Running agent review: %s\n", execution.Config.ReviewAgentKind()); err != nil {
 			return err
 		}
-		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail), ReviewRangePresenter: execution.Dependencies.ReviewRangePresenter})
+		review, err = execution.Dependencies.ReviewCreator.CreateReview(ownedCtx, ReviewRun{PlanDir: absolutePlanDir(detail.Dir), PlanID: detail.State.Plan.ID, LogPath: plan.LogPath(detail.Dir), Detail: detail, RepoRoot: execution.ExecutionRoot, Base: reviewDetailBase(detail), ReviewRangePresenter: execution.Dependencies.ReviewRangePresenter, Via: request.Via})
 		return err
 	})
 	return review, lockErr
@@ -582,6 +585,7 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	extracted := extractTypedReview(result.Output, changeType)
 	reviewedAt := now(options).UTC()
 	review := plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: extracted.Verdict, Summary: extracted.Summary, FindingsCount: extracted.FindingsCount, Findings: extracted.Findings, CommitMessage: extracted.CommitMessage, Base: base, Head: head, Agent: options.Agent, ReviewedAt: reviewedAt}
+	review.Via = run.Via
 	record, err := reviewPlanRecord(recordFactory, planDir, detail)
 	if err != nil {
 		return plan.PlanReview{}, err

@@ -13,3 +13,15 @@ func WithInterventionAttribution(event Event, actor, trigger string) Event {
 	event.AttributionVersion = 1
 	return event
 }
+
+// WithVia copies an event and records an optional bounded provenance label
+// describing who or what relayed the action. The label is set only when
+// intervention.ParseVia accepts it and yields a nonempty result; otherwise
+// Via stays empty, meaning a direct action. It never changes actor, trigger,
+// or lifecycle state.
+func WithVia(event Event, via string) Event {
+	if label, err := intervention.ParseVia(via); err == nil && label != "" {
+		event.Via = label
+	}
+	return event
+}

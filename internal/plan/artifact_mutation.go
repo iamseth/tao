@@ -88,10 +88,10 @@ func completeSliceWithOutcomeMutation(sliceID string, notes string, verification
 	}
 }
 
-func approveSliceMutation(sliceID string, approvedBy string, now time.Time) artifactMutationFunc {
+func approveSliceMutation(sliceID string, approvedBy string, via string, now time.Time) artifactMutationFunc {
 	return func(detail *PlanDetail) (lifecycleMutation, error) {
 		return applyLifecycleMutation(detail, func(_ *artifactChangeSet) ([]Event, error) {
-			event, appendEvent, err := markSliceApproved(detail, sliceID, approvedBy, now)
+			event, appendEvent, err := markSliceApproved(detail, sliceID, approvedBy, via, now)
 			if err != nil {
 				return nil, err
 			}

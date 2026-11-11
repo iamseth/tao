@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -206,5 +207,109 @@ func TestApproveCommandRejectsNonGatedSlice(t *testing.T) {
 	err := app.Run(context.Background(), []string{"approve", "--by", "Seth", planID})
 	if err == nil || !strings.Contains(err.Error(), "does not require approval") {
 		t.Fatalf("expected non-gated rejection, got %v", err)
+	}
+}
+
+// fileApproveFixture writes a file-backed plan with one approval-gated blocked
+// slice so tests can inspect the raw slices.json and events.jsonl bytes.
+func fileApproveFixture(t *testing.T) (root, dir, planID, sliceID string) {
+	t.Helper()
+	fixture := newRunPlanFixture(t, plan.StatusBlocked, []string{"001-a"}, nil, "001-a", plan.StatusBlocked)
+	detail, err := plan.NewFileRepository(fixture.root).ResolvePlan(context.Background(), fixture.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.State.Plan.CurrentSlice = &detail.Slices.Slices[0].ID
+	detail.Slices.Slices[0].Approval = plantest.Approval(true, "human approval", false)
+	record, err := plan.NewPlanRecord(fixture.dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	return fixture.root, fixture.dir, fixture.id, "001-a"
+}
+
+func TestApproveCommandViaRecordsProvenanceLabel(t *testing.T) {
+	root, dir, planID, sliceID := fileApproveFixture(t)
+	const label = "claude-code-workflow wf_43dba409-ce8"
+	var out bytes.Buffer
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return plan.NewFileRepository(root) }})
+	if err := app.Run(context.Background(), []string{"approve", "--by", "Seth", "--via", label, planID}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := plan.NewFileRepository(root).ResolvePlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sl := findSlice(detail, sliceID)
+	if sl == nil || sl.Approval == nil || !sl.Approval.Approved || sl.Approval.Via == nil || *sl.Approval.Via != label {
+		t.Fatalf("approval = %+v, want via %q", sl, label)
+	}
+	found := false
+	for _, event := range detail.Events {
+		if event.Type == plan.EventTypeSliceApproved {
+			found = true
+			if event.Via != label || event.Actor != "operator" || event.Trigger != "approve" {
+				t.Fatalf("slice_approved event = %+v, want via %q", event, label)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected slice_approved event, got %+v", detail.Events)
+	}
+	if !strings.Contains(readText(t, filepath.Join(dir, "slices.json")), `"via": "`+label+`"`) {
+		t.Fatalf("slices.json missing via: %s", readText(t, filepath.Join(dir, "slices.json")))
+	}
+}
+
+func TestApproveCommandWithoutViaOmitsField(t *testing.T) {
+	root, dir, planID, sliceID := fileApproveFixture(t)
+	var out bytes.Buffer
+	app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return plan.NewFileRepository(root) }})
+	if err := app.Run(context.Background(), []string{"approve", "--by", "Seth", planID}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := plan.NewFileRepository(root).ResolvePlan(context.Background(), planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sl := findSlice(detail, sliceID); sl == nil || sl.Approval == nil || !sl.Approval.Approved {
+		t.Fatalf("expected approval, got %+v", sl)
+	}
+	for _, name := range []string{"slices.json", "events.jsonl"} {
+		if text := readText(t, filepath.Join(dir, name)); strings.Contains(text, `"via"`) {
+			t.Fatalf("%s unexpectedly contains a via key:\n%s", name, text)
+		}
+	}
+}
+
+func TestApproveCommandRejectsInvalidViaBeforeMutation(t *testing.T) {
+	for name, label := range map[string]string{
+		"oversized": strings.Repeat("x", 129),
+		"newline":   "orchestrator\nrun",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, _, planID, sliceID := fileApproveFixture(t)
+			var out bytes.Buffer
+			app := newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return plan.NewFileRepository(root) }})
+			err := app.Run(context.Background(), []string{"approve", "--by", "Seth", "--via", label, planID})
+			if err == nil || !strings.Contains(err.Error(), "--via:") {
+				t.Fatalf("approve error = %v, want --via rejection", err)
+			}
+			detail, err := plan.NewFileRepository(root).ResolvePlan(context.Background(), planID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sl := findSlice(detail, sliceID); sl == nil || sl.Approval == nil || sl.Approval.Approved {
+				t.Fatalf("invalid via mutated approval: %+v", sl)
+			}
+			for _, event := range detail.Events {
+				if event.Type == plan.EventTypeSliceApproved {
+					t.Fatalf("invalid via appended slice_approved: %+v", event)
+				}
+			}
+		})
 	}
 }

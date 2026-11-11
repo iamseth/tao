@@ -146,6 +146,9 @@ tao approve --slice "$SLICE_ID" --by you "$PLAN_ID"
 tao run "$PLAN_ID"
 ```
 
+An orchestrator relaying an owner's decision may add `--via LABEL` to record
+provenance; the label never changes who may approve or what the gate requires.
+
 For a solo local workflow, integrate an approved exact-base/head review with:
 
 ```sh

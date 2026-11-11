@@ -157,6 +157,7 @@ func (p insightsProjection) renderScorecard(out io.Writer) error {
 	fmt.Fprintf(&b, "- plans: %d; never started: %d; active: %d; terminal: %d\n", c.Plans, c.NeverStarted, c.Active, c.Terminal)
 	fmt.Fprintf(&b, "- matured: %d; censored: %d\n", c.Matured, c.Censored)
 	renderUnknownAttribution(&b, c.UnknownAttributionPlans, c.Plans, c.MaturedUnknownAttributionPlans, c.Matured)
+	renderOperatorProvenance(&b, c.OperatorDirectPlans, c.OperatorRelayedPlans, c.OperatorMixedPlans)
 	fmt.Fprintf(&b, "- treatment confidence: high=%d; low=%d; ambiguous=%d; missing=%d\n", c.TreatmentHigh, c.TreatmentLow, c.TreatmentAmbiguous, c.TreatmentMissing)
 	fmt.Fprintf(&b, "- planning-metrics coverage: %d/%d plans\n", c.PlanningMetricsPlans, c.Plans)
 	fmt.Fprintf(&b, "- role attribution: %d attributed; %d unattributed sessions\n", c.RoleAttributedSessions, c.UnattributedSessions)
@@ -172,7 +173,7 @@ func (p insightsProjection) renderScorecard(out io.Writer) error {
 	}
 	b.WriteString("\nObservational evidence, not a causal ranking. Runtime-only labels do not establish provider or model.\n")
 	b.WriteString("Outcome rates use matured plans; active plans inside the maturity window are censored, not failures. Started is coverage across all plans. Rate intervals are Wilson 95%.\n")
-	b.WriteString("Unattended (observed) counts matured plans that reached merge with sufficient attribution coverage and no observed operator intervention over their lifetime; not proof of no human involvement. Unknown coverage stays in the denominator and contributes no success. External-agent operator commands count; Tao-owned automatic recovery alone does not. Manual edits and silent log loss may be undetectable.\n")
+	b.WriteString("Unattended (observed) counts matured plans that reached merge with sufficient attribution coverage and no observed operator intervention over their lifetime; not proof of no human involvement. Unknown coverage stays in the denominator and contributes no success. External-agent operator commands count; Tao-owned automatic recovery alone does not. Manual edits and silent log loss may be undetectable. Relayed counts plans whose observed operator actions all carried a via label; mixed counts plans with both labeled and unlabeled actions or invalid labels; the label is a self-declared provenance claim, not proof.\n")
 	b.WriteString("\n## Cohorts\n")
 	if len(s.Cohorts) == 0 {
 		b.WriteString("none\n")
@@ -231,6 +232,7 @@ func renderScorecardCohort(b *strings.Builder, cohort insights.TreatmentCohort) 
 	fmt.Fprintf(b, "- runtime: %s; provider: %s; model: %s; confidence: %s\n", scorecardText(cohort.Runtime), scorecardText(cohort.Provider), scorecardText(cohort.Model), scorecardText(string(cohort.Confidence)))
 	fmt.Fprintf(b, "- n plans=%d; matured=%d; censored=%d; never started=%d\n", o.Plans, o.Matured, o.Censored, o.NeverStarted)
 	renderUnknownAttribution(b, o.UnknownAttributionPlans, o.Plans, o.MaturedUnknownAttributionPlans, o.Matured)
+	renderOperatorProvenance(b, o.OperatorDirectPlans, o.OperatorRelayedPlans, o.OperatorMixedPlans)
 	b.WriteString("- quality rates:\n")
 	q := o.Quality
 	for _, metric := range []struct {
@@ -287,6 +289,10 @@ func renderUnknownAttribution(b *strings.Builder, unknown, plans, maturedUnknown
 			fmt.Fprintf(b, "%.1f%%)\n", 100*float64(population.unknown)/float64(population.total))
 		}
 	}
+}
+
+func renderOperatorProvenance(b *strings.Builder, direct, relayed, mixed int) {
+	fmt.Fprintf(b, "- observed operator provenance: direct=%d; relayed=%d; mixed=%d\n", direct, relayed, mixed)
 }
 
 func scorecardSparse(sparse bool) string {

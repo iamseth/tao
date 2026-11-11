@@ -1923,3 +1923,63 @@ func TestAutomaticFinalizerDoesNotPresentReviewRange(t *testing.T) {
 		t.Fatal("automatic review did not run")
 	}
 }
+
+func TestCreateReviewWithAgentSessionPersistsVia(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		via  string
+	}{
+		{name: "relayed", via: "claude-code-workflow wf_43dba409-ce8"},
+		{name: "direct", via: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			planDir := t.TempDir()
+			repoRoot := t.TempDir()
+			reviewedAt := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+			detail := runPlanDetail(plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted, nil, &reviewedAt)
+			detail.Dir = planDir
+			detail.State.Repo.Root = repoRoot
+			detail.State.Repo.BaseCommit = "base123"
+			persistReviewState(t, planDir, detail)
+			output := "Review.\n\n```tao-review-json\n{\"verdict\": \"comment\", \"summary\": \"Fine.\", \"findings\": []}\n```\n"
+			executor := &recordingAgentSessionExecutor{result: AgentSessionResult{Output: output}}
+			store := unscopedFileRepository(t)
+
+			review, err := createReviewWithAgentSession(context.Background(), executor, agentOperationOptions{Agent: "pi", reviewGitFactory: fixedReviewGit(&fakeReviewGit{head: "head123"}), Now: func() time.Time { return reviewedAt }}, ReviewRun{PlanDir: planDir, PlanID: "plan-a", Detail: detail, RepoRoot: repoRoot, Via: tc.via}, fileReviewRecordFactory(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if review.Via != tc.via {
+				t.Fatalf("returned review via = %q, want %q", review.Via, tc.via)
+			}
+			gotState, err := plan.ReadState(planDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotState.Plan.Review == nil || gotState.Plan.Review.Via != tc.via {
+				t.Fatalf("persisted review = %+v, want via %q", gotState.Plan.Review, tc.via)
+			}
+			eventData, err := os.ReadFile(filepath.Join(planDir, "events.jsonl")) //nolint:gosec // test reads a t.TempDir-derived artifact.
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event plan.Event
+			if err := json.Unmarshal(bytes.TrimSpace(eventData), &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Type != plan.EventTypePlanReviewed || event.Review == nil || event.Review.Via != tc.via {
+				t.Fatalf("plan_reviewed event = %+v, want review via %q", event, tc.via)
+			}
+			stateData, err := os.ReadFile(filepath.Join(planDir, "state.json")) //nolint:gosec // test reads a t.TempDir-derived artifact.
+			if err != nil {
+				t.Fatal(err)
+			}
+			hasVia := bytes.Contains(stateData, []byte(`"via"`)) || bytes.Contains(eventData, []byte(`"via"`))
+			if hasVia != (tc.via != "") {
+				t.Fatalf("via key presence = %t, want %t\nstate: %s\nevents: %s", hasVia, tc.via != "", stateData, eventData)
+			}
+		})
+	}
+}

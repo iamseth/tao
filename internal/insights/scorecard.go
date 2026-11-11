@@ -90,6 +90,9 @@ type ReliabilityOutcomes struct {
 type CohortOutcomes struct {
 	UnknownAttributionPlans        int                 `json:"unknown_attribution_plans"`
 	MaturedUnknownAttributionPlans int                 `json:"matured_unknown_attribution_plans"`
+	OperatorDirectPlans            int                 `json:"operator_direct_plans"`
+	OperatorRelayedPlans           int                 `json:"operator_relayed_plans"`
+	OperatorMixedPlans             int                 `json:"operator_mixed_plans"`
 	Plans                          int                 `json:"plans"`
 	Matured                        int                 `json:"matured"`
 	Censored                       int                 `json:"censored"`
@@ -124,6 +127,9 @@ type ExcludedLabel struct {
 type ScorecardCoverage struct {
 	UnknownAttributionPlans        int `json:"unknown_attribution_plans"`
 	MaturedUnknownAttributionPlans int `json:"matured_unknown_attribution_plans"`
+	OperatorDirectPlans            int `json:"operator_direct_plans"`
+	OperatorRelayedPlans           int `json:"operator_relayed_plans"`
+	OperatorMixedPlans             int `json:"operator_mixed_plans"`
 	Plans                          int `json:"plans"`
 	NeverStarted                   int `json:"never_started"`
 	Active                         int `json:"active"`
@@ -164,6 +170,7 @@ type planObservation struct {
 	defectMergeSHA                                                    string
 	defectMergeConflict                                               bool
 	attributionComplete, unattended                                   bool
+	provenance                                                        string
 	createdAt, firstApprovalAt, mergeAt                               time.Time
 	historyPresent, historyMalformed                                  bool
 	recordedBlocker, recordedRework                                   bool
@@ -330,6 +337,7 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 	o.matured = o.class == observationTerminal || (summary.LastActivityAt != nil && now.Sub(*summary.LastActivityAt) >= scorecardMaturityWindow)
 	o.attributionComplete = data.intervention.complete(summary.ID, data, o.started)
 	o.unattended = o.merged && o.attributionComplete && !data.intervention.operator
+	o.provenance = data.intervention.provenance()
 	return o
 }
 
@@ -518,6 +526,7 @@ func buildCohortOutcomes(observations []planObservation) CohortOutcomes {
 				out.MaturedUnknownAttributionPlans++
 			}
 		}
+		countOperatorProvenance(o.provenance, &out.OperatorDirectPlans, &out.OperatorRelayedPlans, &out.OperatorMixedPlans)
 		if o.class == observationNeverStarted {
 			out.NeverStarted++
 		}
@@ -760,6 +769,19 @@ func scorecardInversions(scorecard Scorecard) []Inversion {
 	return result
 }
 
+// countOperatorProvenance tallies the diagnostic provenance classification over
+// every observation; it never feeds unattended, merged, or any rate numerator.
+func countOperatorProvenance(provenance string, direct, relayed, mixed *int) {
+	switch provenance {
+	case "direct":
+		*direct++
+	case "relayed":
+		*relayed++
+	case "mixed":
+		*mixed++
+	}
+}
+
 func scorecardCoverage(observations []planObservation) ScorecardCoverage {
 	c := ScorecardCoverage{MaturityWindowDays: int(scorecardMaturityWindow / (24 * time.Hour)), MinimumSamples: scorecardMinimumSamples}
 	for _, o := range observations {
@@ -770,6 +792,7 @@ func scorecardCoverage(observations []planObservation) ScorecardCoverage {
 				c.MaturedUnknownAttributionPlans++
 			}
 		}
+		countOperatorProvenance(o.provenance, &c.OperatorDirectPlans, &c.OperatorRelayedPlans, &c.OperatorMixedPlans)
 		c.ReasoningEffortRecorded += o.reasoningEffortRecorded
 		switch o.class {
 		case observationNeverStarted:

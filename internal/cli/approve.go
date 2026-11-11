@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/iamseth/tao/internal/identity"
+	"github.com/iamseth/tao/internal/intervention"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 )
@@ -14,11 +15,12 @@ import (
 var approveCommand = commandMetadata{
 	name:                  "approve",
 	minPrefix:             "a",
-	usageLines:            []string{"approve (a) [--slice ID] [--by NAME] <plan-id-or-slug-or-path>"},
+	usageLines:            []string{"approve (a) [--slice ID] [--by NAME] [--via LABEL] <plan-id-or-slug-or-path>"},
 	completionDescription: "Approve a gated slice",
 	long:                  "Approve a gated pending slice so a blocked plan can continue. When no slice is provided, Tao approves the current or next pending slice for the plan.",
 	examples: "  tao approve my-plan\n" +
-		"  tao approve --slice 003-review --by Seth my-plan",
+		"  tao approve --slice 003-review --by Seth my-plan\n" +
+		"  tao approve --by Seth --via \"orchestrator run-42\" my-plan",
 	registerFlags: registerApproveFlags,
 	completion: completionContext{
 		positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs},
@@ -32,6 +34,7 @@ var approveCommand = commandMetadata{
 func registerApproveFlags(fs *flag.FlagSet) {
 	fs.String("slice", "", "slice id to approve")
 	fs.String("by", "", "approver name")
+	fs.String("via", "", "optional provenance label for a relayed approval (e.g. orchestrator name and run id); never approval authority")
 }
 
 type approvalRepository interface {
@@ -43,10 +46,14 @@ func (a App) approve(ctx context.Context, repo approvalRepository, args []string
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao approve [--slice ID] [--by NAME] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao approve [--slice ID] [--by NAME] [--via LABEL] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	input := positional[0]
+	via, err := intervention.ParseVia(flagStringValue(fs, "via"))
+	if err != nil {
+		return fmt.Errorf("--via: %w", err)
+	}
 
 	record, err := repo.ResolvePlanRecord(ctx, input)
 	if err != nil {
@@ -75,7 +82,7 @@ func (a App) approve(ctx context.Context, repo approvalRepository, args []string
 	if slice := findSlice(detail, targetID); slice != nil && slice.Approval != nil {
 		alreadyApproved = slice.Approval.Approved
 	}
-	if err := record.ApproveSlice(targetID, approver, a.now().UTC()); err != nil {
+	if err := record.ApproveSliceVia(targetID, approver, via, a.now().UTC()); err != nil {
 		return err
 	}
 

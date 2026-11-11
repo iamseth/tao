@@ -25,6 +25,11 @@ type Request struct {
 	Input string
 	RecoveryMode
 	ResolvedRunOptions
+	// Via is an optional bounded provenance label naming who or what relayed
+	// an operator decision (currently only review --run). It is provenance
+	// only, never authority, and is not a recovery flag: ForNextRound leaves
+	// it unchanged and nothing clears it.
+	Via string
 }
 
 // ForNextRound returns a copy with recovery entry modes cleared: they are

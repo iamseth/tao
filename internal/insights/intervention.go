@@ -16,6 +16,7 @@ import (
 type interventionProjection struct {
 	planID                                         string
 	marker, invalid, created, runContext, operator bool
+	direct, relayed                                bool
 	execution                                      bool
 	mechanicalPairs                                map[[32]byte]int
 }
@@ -92,9 +93,36 @@ func (p *interventionProjection) consume(event plan.Event) {
 	}
 	if actor == "operator" {
 		p.operator = true
+		switch label, err := intervention.ParseVia(event.Via); {
+		case err != nil:
+			// An out-of-bound label is neither a clean direct nor relayed claim.
+			p.direct, p.relayed = true, true
+		case label != "":
+			p.relayed = true
+		default:
+			p.direct = true
+		}
 	}
 	if event.Type == plan.EventTypeRunContext {
 		p.runContext = true
+	}
+}
+
+// provenance classifies observed operator intervention from the self-declared
+// via label on accepted operator events: "" without any, "direct" when every
+// action lacked a label, "relayed" when every action carried one, and "mixed"
+// otherwise (including invalid labels). It is diagnostic only: the label is a
+// relaying claim, not proof of who acted, and never authority.
+func (p interventionProjection) provenance() string {
+	switch {
+	case !p.operator:
+		return ""
+	case p.direct && !p.relayed:
+		return "direct"
+	case p.relayed && !p.direct:
+		return "relayed"
+	default:
+		return "mixed"
 	}
 }
 

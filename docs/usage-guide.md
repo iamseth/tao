@@ -563,6 +563,17 @@ Unknown-attribution counts and shares are shown for all plans and matured plans,
 globally and in each displayed cohort/stratum. An empty population has no applicable
 share. Compare coverage before comparing rates.
 
+The **observed operator provenance** row splits plans with observed operator
+intervention into direct, relayed, and mixed counts, shown next to the
+unknown-attribution rows for coverage and for each displayed cohort/stratum. The split derives from the
+`via` label recorded by `tao approve --via` and `tao merge --force --via`: a plan
+is relayed when every observed operator action carried a label, direct when none
+did, and mixed when it has both or an invalid label. `tao review --run --via` is
+recorded on the review for the audit trail but a review is not an operator
+intervention, so it is not counted here. The label is a self-declared claim made
+by whatever invoked the command; it has no authority, changes no rate, and is not
+proof of who actually decided.
+
 Explicit admitted edits, approvals, and recovery choices count as operator actions
 even when `/fix-plan` or another external agent invokes the commands. Ordinary
 run/merge invocation alone does not count. Tao-owned automatic transport retries,
@@ -805,7 +816,7 @@ inspect reported paths and preserve intentional work before retrying.
 
 | Durable condition | Action | Why this action |
 | --- | --- | --- |
-| An approval-gated pending slice is not approved | `tao approve [--slice ID] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. |
+| An approval-gated pending slice is not approved | `tao approve [--slice ID] [--via LABEL] <plan-id>`, then `tao run <plan-id>` | Approval satisfies the gate; it is not blocker recovery. `--via LABEL` is an optional bounded provenance label (at most 128 bytes, single line) for an orchestrator relaying an owner decision through `tao approve`, `tao review --run`, or `tao merge --force`; it never changes any gate, and absent `via` means a direct action. |
 | `tao show` reports `amend_scope` for rework outside declared scope | Accept with the shown `tao edit amend --allow-file` command, then `tao run <plan-id>`; reject with `tao edit remove <plan-id> <slice-id>` or `tao edit skip` | This pre-session runnable gate does not mark the plan blocked. Any `expected_files` amendment lifts it for that slice; rejection may be re-raised on review. |
 | The plan records an ordinary blocker and you have resolved its stated cause | `tao run --continue <plan-id>` | `--continue` explicitly clears blocker lifecycle state. Tao does not infer resolution. |
 | A gate contradicts its own slice contract | `tao edit amend <plan-id> <slice-id> --reason-file FILE --replace-verification-command OLD --with NEW`, then `tao run --continue <plan-id>` | Replacement is one-for-one and visible to the reviewer with the reason and old/new pair; it does not clear the blocker or bypass approval. Generated repair commands stay frozen. |
@@ -1466,6 +1477,12 @@ subject to the ordinary merge gates.
 including an ejected candidate, because cleanup deletes the pinned branch.
 It is allowed for plans outside the batch, subject to its ordinary safeguards;
 `--force` does not bypass the candidate refusal.
+
+`--force --via LABEL` records an optional bounded provenance label on the
+`merge_force` intervention observation when an orchestrator relays an owner's
+forced merge, matching `--via` on `tao approve` and `tao review --run`. The
+label never changes any gate or grants merge authority; it requires `--force`,
+is rejected with `--all`, and absent `via` means a direct action.
 
 **When to use:** after `tao run` has completed every slice and its broad final
 verification, and you've read the persisted review with `tao review <plan>`.

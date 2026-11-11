@@ -333,6 +333,7 @@ func cloneApproval(approval *Approval) *Approval {
 	}
 	clone := *approval
 	clone.ApprovedBy = cloneStringPtr(approval.ApprovedBy)
+	clone.Via = cloneStringPtr(approval.Via)
 	clone.ApprovedAt = cloneStringPtr(approval.ApprovedAt)
 	return &clone
 }

@@ -656,6 +656,26 @@ func TestScorecardInversionMetricSelection(t *testing.T) {
 	}
 }
 
+func TestScorecardOperatorProvenanceCounts(t *testing.T) {
+	observations := []planObservation{
+		{treatment: NormalizePlannerLabel("pi"), class: observationTerminal, matured: true, provenance: "direct"},
+		{treatment: NormalizePlannerLabel("pi"), class: observationTerminal, matured: true, provenance: "relayed"},
+		{treatment: NormalizePlannerLabel("pi"), class: observationActive, provenance: "relayed"},
+		{treatment: NormalizePlannerLabel("pi"), class: observationTerminal, matured: true, provenance: "mixed"},
+		{treatment: NormalizePlannerLabel("pi"), class: observationTerminal, matured: true},
+	}
+	cohort := buildCohortOutcomes(observations)
+	coverage := scorecardCoverage(observations)
+	for name, got := range map[string][3]int{
+		"cohort":   {cohort.OperatorDirectPlans, cohort.OperatorRelayedPlans, cohort.OperatorMixedPlans},
+		"coverage": {coverage.OperatorDirectPlans, coverage.OperatorRelayedPlans, coverage.OperatorMixedPlans},
+	} {
+		if got != [3]int{1, 2, 1} {
+			t.Fatalf("%s provenance counts = %v, want [1 2 1]", name, got)
+		}
+	}
+}
+
 func TestScorecardExistingPlansMarshalAndSourceIDs(t *testing.T) {
 	lister := fixtureLister{summaries: []plan.PlanSummary{{ID: "alpha", Dir: "testdata/plan-alpha"}, {ID: "beta", Dir: "testdata/plan-beta"}}}
 	report, err := Aggregate(context.Background(), lister)
@@ -667,6 +687,24 @@ func TestScorecardExistingPlansMarshalAndSourceIDs(t *testing.T) {
 	}
 	if report.Scorecard.Coverage.Plans != report.PlansScanned || report.PlansScanned != 2 {
 		t.Fatalf("coverage = %+v", report.Scorecard.Coverage)
+	}
+	encoded, err := json.Marshal(report.Scorecard.Coverage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"operator_direct_plans":`, `"operator_relayed_plans":`, `"operator_mixed_plans":`} {
+		if !strings.Contains(string(encoded), key) {
+			t.Fatalf("coverage JSON missing %s: %s", key, encoded)
+		}
+	}
+	cohortJSON, err := json.Marshal(CohortOutcomes{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"operator_direct_plans":0`, `"operator_relayed_plans":0`, `"operator_mixed_plans":0`} {
+		if !strings.Contains(string(cohortJSON), key) {
+			t.Fatalf("cohort JSON missing %s: %s", key, cohortJSON)
+		}
 	}
 	multi, err := AggregateSourcesWithOptions(context.Background(), fixtureSourceLister{sources: []RepositorySource{
 		{ID: "repo-z", Name: "same name", Plans: fixtureLister{summaries: scorecardFixtures()}},
@@ -725,7 +763,11 @@ func TestScorecardMechanicalScope(t *testing.T) {
 	if a.Quality.Unattended.Numerator != 1 || b.Quality.Unattended.Numerator != 0 || a.Quality.Unattended.Denominator != 1 || b.Quality.Unattended.Denominator != 1 {
 		t.Fatalf("mechanical=%+v judgement=%+v", a, b)
 	}
+	if a.OperatorDirectPlans != 0 || b.OperatorDirectPlans != 1 || b.OperatorRelayedPlans != 0 || b.OperatorMixedPlans != 0 {
+		t.Fatalf("provenance mechanical=%+v judgement=%+v", a, b)
+	}
 	a.Quality.Unattended = b.Quality.Unattended
+	a.OperatorDirectPlans = b.OperatorDirectPlans
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("classification changed unrelated outcomes")
 	}

@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/iamseth/tao/internal/intervention"
 )
 
 // lifecycleCheck carries one executable-slice decision and the reason it failed.
@@ -745,8 +747,11 @@ func refreshCompletedWorkspaceBoundary(detail *PlanDetail, slice *Slice, outcome
 	detail.State.Workspace.HeadSHA = outcome.CommitSHA
 }
 
-// markSliceApproved records human approval for an approval-gated slice.
-func markSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, now time.Time) (Event, bool, error) {
+// markSliceApproved records human approval for an approval-gated slice. The
+// optional via label is provenance only: a first approval stores it next to
+// approved_by, a repeated approval preserves the existing metadata, and no
+// lifecycle decision reads it.
+func markSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, via string, now time.Time) (Event, bool, error) {
 	if detail == nil {
 		return Event{}, false, fmt.Errorf("plan detail is nil")
 	}
@@ -771,12 +776,15 @@ func markSliceApproved(detail *PlanDetail, sliceID string, approvedBy string, no
 	slice.Approval.Approved = true
 	slice.Approval.ApprovedBy = new(strings.TrimSpace(approvedBy))
 	slice.Approval.ApprovedAt = new(approvedAt)
+	if label, err := intervention.ParseVia(via); err == nil && label != "" {
+		slice.Approval.Via = new(label)
+	}
 	detail.State.UpdatedAt = now
 	detail.State.Plan.Timing.LastActivityAt = new(now)
 	slice.Timing.UpdatedAt = now
 	slice.Timing.LastActivityAt = new(now)
 
-	event := WithInterventionAttribution(Event{Type: EventTypeSliceApproved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Slice approved"}, "operator", "approve")
+	event := WithVia(WithInterventionAttribution(Event{Type: EventTypeSliceApproved, Timestamp: now, PlanID: detail.State.Plan.ID, SliceID: sliceID, Message: "Slice approved"}, "operator", "approve"), via)
 	return event, !hasSliceApprovedEvent(detail.Events, sliceID), nil
 }
 

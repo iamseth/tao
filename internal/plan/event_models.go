@@ -50,6 +50,7 @@ type Event struct {
 	Actor                        string                           `json:"actor,omitempty"`
 	Trigger                      string                           `json:"trigger,omitempty"`
 	AttributionVersion           int                              `json:"attribution_version,omitempty"`
+	Via                          string                           `json:"via,omitempty"`
 	Type                         string                           `json:"type"`
 	Timestamp                    time.Time                        `json:"timestamp"`
 	PlanID                       string                           `json:"plan_id"`

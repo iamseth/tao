@@ -325,3 +325,45 @@ func TestMechanicalScopeProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestInterventionProvenance(t *testing.T) {
+	approved := func(via string) plan.Event {
+		return plan.WithVia(plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypeSliceApproved, PlanID: "p", SliceID: "s"}, "operator", "approve"), via)
+	}
+	invalid := approved("")
+	invalid.Via = strings.Repeat("x", intervention.MaxViaBytes+1)
+	control := approved("")
+	control.Via = "line\nbreak"
+	forced := plan.WithVia(plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypeInterventionObserved, PlanID: "p"}, "operator", "merge_force"), "orchestrator")
+	for _, tc := range []struct {
+		name   string
+		events []plan.Event
+		want   string
+	}{
+		{"none", nil, ""},
+		{"relayed", []plan.Event{approved("orchestrator")}, "relayed"},
+		{"direct", []plan.Event{approved("")}, "direct"},
+		{"mixed", []plan.Event{approved("orchestrator"), approved("")}, "mixed"},
+		{"merge force relayed", []plan.Event{forced}, "relayed"},
+		{"oversized label", []plan.Event{invalid}, "mixed"},
+		{"control character label", []plan.Event{control}, "mixed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := interventionProjection{planID: "p"}
+			for _, e := range tc.events {
+				p.consume(e)
+			}
+			if p.operator != (tc.want != "") {
+				t.Fatalf("operator = %v, want %v", p.operator, tc.want != "")
+			}
+			if got := p.provenance(); got != tc.want {
+				t.Fatalf("provenance = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	reviewed := interventionProjection{planID: "p"}
+	reviewed.consume(plan.Event{Type: plan.EventTypePlanReviewed, PlanID: "p", Review: &plan.PlanReview{Verdict: "approve", Via: "orchestrator"}})
+	if reviewed.operator || reviewed.invalid || reviewed.provenance() != "" {
+		t.Fatalf("plan_reviewed via must stay audit-only: %+v", reviewed)
+	}
+}

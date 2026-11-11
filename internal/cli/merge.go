@@ -11,6 +11,7 @@ import (
 
 	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/gitops"
+	"github.com/iamseth/tao/internal/intervention"
 	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/promptcapture"
@@ -25,7 +26,7 @@ var mergeCommand = commandMetadata{
 	name:      "merge",
 	minPrefix: "m",
 	usageLines: []string{
-		"merge (m) [--model NAME] [--effort NAME] [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>",
+		"merge (m) [--model NAME] [--effort NAME] [--force [--via LABEL]] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>",
 		"merge (m) --restart <plan-id-or-slug-or-path>",
 		"merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]",
 	},
@@ -38,7 +39,8 @@ var mergeCommand = commandMetadata{
 		"  tao merge --all --dry-run\n" +
 		"  tao merge --verify-command \"go test ./...\" my-plan\n" +
 		"  tao merge --no-verify 20260628-1618-kubectl-style-help\n" +
-		"  tao merge --force my-plan",
+		"  tao merge --force my-plan\n" +
+		"  tao merge --force --via \"orchestrator run-42\" my-plan",
 	registerFlags: registerMergeFlags,
 	completion: completionContext{
 		flagValues: map[string]completionFlagValue{
@@ -58,6 +60,7 @@ func registerMergeFlags(fs *flag.FlagSet) {
 	fs.Bool("restart", false, "discard an eligible stale single-plan merge intent and stop; with --all remove pre-landing batch recovery and start again, or only list removals with --dry-run")
 	fs.Bool("auto-eject", false, "automatically eject an attributed non-converging plan and reland the rest")
 	fs.Bool("force", false, "bypass pre-merge approval, review-base, and dirty-worktree gates, not conflict-resolution safety or independent review (single-plan only)")
+	fs.String("via", "", "optional provenance label for a relayed forced merge (--force only, single plan); never merge authority")
 	fs.Bool("record-only", false, "record an external merge and run cleanup (single-plan only)")
 	fs.Bool("no-squash", false, "preserve plan commits with rebase-plus-fast-forward; conflicts remain manual (single-plan only)")
 	fs.Bool("no-verify", false, "skip post-merge command verification, not structural validation or independent review (single-plan only)")
@@ -127,6 +130,9 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 				return fmt.Errorf("--all cannot be combined with --%s", incompatible)
 			}
 		}
+		if flagWasProvided(fs, "via") {
+			return errors.New("--all cannot be combined with --via")
+		}
 		batchRepo, ok := repo.(mergepkg.BatchPlanRepository)
 		if !ok {
 			return errors.New("merge --all requires a repository that can list and resolve plans")
@@ -153,7 +159,14 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 	if restart && flagBoolValue(fs, "force") {
 		return errors.New("--restart cannot be combined with --force")
 	}
-	usage := "usage: tao merge [--model NAME] [--effort NAME] [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>"
+	if flagWasProvided(fs, "via") && !flagBoolValue(fs, "force") {
+		return errors.New("--via requires --force")
+	}
+	via, err := intervention.ParseVia(flagStringValue(fs, "via"))
+	if err != nil {
+		return fmt.Errorf("--via: %w", err)
+	}
+	usage := "usage: tao merge [--model NAME] [--effort NAME] [--force [--via LABEL]] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD] <plan-id-or-slug-or-path>"
 	if restart {
 		usage = "usage: tao merge --restart <plan-id-or-slug-or-path>"
 	}
@@ -167,6 +180,7 @@ func (a App) merge(ctx context.Context, repo plan.Resolver, args []string) error
 		VerifyCommand: flagStringValue(fs, "verify-command"),
 		RecordOnly:    flagBoolValue(fs, "record-only"),
 		NoSquash:      flagBoolValue(fs, "no-squash"),
+		Via:           via,
 	}
 	return mergepkg.WithSingleOwnedPlan(ctx, repo, positional[0], mergepkg.SingleOwnedPlanOptions{
 		StartedAt: a.now().UTC(), RepositoryAdmission: a.RepositoryAdmission,

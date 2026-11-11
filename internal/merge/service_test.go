@@ -1990,7 +1990,8 @@ func TestMergeForceEvidence(t *testing.T) {
 			events := &fakeEventAppender{}
 			generator := &fakeMergeProposalGenerator{proposal: generatedMergeProposal()}
 			service := newTestService(Service{RepositoryAdmission: testRepositoryAdmission, Git: git, Cleaner: successfulCleanup(), Events: events, ProposalGenerator: generator})
-			if err := service.Merge(context.Background(), detail, Options{Force: true, RecordOnly: tc.recordOnly, NoVerify: true}); err != nil {
+			const via = "claude-code-workflow wf_43dba409-ce8"
+			if err := service.Merge(context.Background(), detail, Options{Force: true, RecordOnly: tc.recordOnly, NoVerify: true, Via: via}); err != nil {
 				t.Fatal(err)
 			}
 			events.requireSingle(t, plan.EventTypePlanMerged)
@@ -2006,6 +2007,14 @@ func TestMergeForceEvidence(t *testing.T) {
 				}
 				if event.Trigger != tc.want || event.Actor != actor || event.AttributionVersion != 1 {
 					t.Fatalf("observation: %#v", event)
+				}
+				if event.Via != via {
+					t.Fatalf("observation via = %q, want %q: %#v", event.Via, via, event)
+				}
+			}
+			for _, event := range events.events {
+				if event.Type != plan.EventTypeInterventionObserved && event.Via != "" {
+					t.Fatalf("via leaked onto %s: %#v", event.Type, event)
 				}
 			}
 		})

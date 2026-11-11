@@ -132,10 +132,10 @@ func TestScorecardInterventionPresentation(t *testing.T) {
 		{"sparse", 2, 1, 1, 0, 1, "1/2 (50.0%)", "1.000 [0.207, 1.000] n=1 sparse"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			o := insights.CohortOutcomes{Plans: tc.plans, Matured: tc.matured, UnknownAttributionPlans: tc.unknown, MaturedUnknownAttributionPlans: tc.maturedUnknown, Quality: insights.QualityOutcomes{Unattended: insights.EstimateRate(tc.successes, tc.matured, 5)}}
+			o := insights.CohortOutcomes{Plans: tc.plans, Matured: tc.matured, UnknownAttributionPlans: tc.unknown, MaturedUnknownAttributionPlans: tc.maturedUnknown, OperatorDirectPlans: 1, OperatorRelayedPlans: 2, OperatorMixedPlans: 3, Quality: insights.QualityOutcomes{Unattended: insights.EstimateRate(tc.successes, tc.matured, 5)}}
 			cohort := insights.TreatmentCohort{Key: "pi", Outcomes: o}
 			report := insights.Report{Scorecard: insights.Scorecard{
-				Coverage: insights.ScorecardCoverage{Plans: tc.plans, Matured: tc.matured, UnknownAttributionPlans: tc.unknown, MaturedUnknownAttributionPlans: tc.maturedUnknown},
+				Coverage: insights.ScorecardCoverage{Plans: tc.plans, Matured: tc.matured, UnknownAttributionPlans: tc.unknown, MaturedUnknownAttributionPlans: tc.maturedUnknown, OperatorDirectPlans: 4, OperatorRelayedPlans: 5, OperatorMixedPlans: 6},
 				Cohorts:  []insights.TreatmentCohort{cohort},
 				Strata:   []insights.StratumBreakdown{{Stratum: "repository", Key: "repo", Cohorts: []insights.TreatmentCohort{cohort}}},
 			}}
@@ -155,6 +155,15 @@ func TestScorecardInterventionPresentation(t *testing.T) {
 					if !strings.Contains(out.String(), want) {
 						t.Errorf("missing %q:\n%s", want, out.String())
 					}
+				}
+				if got := strings.Count(out.String(), "- observed operator provenance: direct=4; relayed=5; mixed=6\n"); got != 1 {
+					t.Errorf("coverage provenance rows=%d, want 1:\n%s", got, out.String())
+				}
+				if got := strings.Count(out.String(), "- observed operator provenance: direct=1; relayed=2; mixed=3\n"); got != count-1 {
+					t.Errorf("cohort provenance rows=%d, want %d:\n%s", got, count-1, out.String())
+				}
+				if !strings.Contains(out.String(), "Relayed counts plans whose observed operator actions all carried a via label") {
+					t.Errorf("missing provenance explanation:\n%s", out.String())
 				}
 			}
 		})

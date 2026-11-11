@@ -309,8 +309,16 @@ func (r *PlanRecord) CompleteSliceWithOutcome(sliceID string, notes string, veri
 	return r.apply(completeSliceWithOutcomeMutation(sliceID, notes, verificationResults, &outcome, now))
 }
 
+// ApproveSlice records a direct approval without a provenance label.
 func (r *PlanRecord) ApproveSlice(sliceID string, approvedBy string, now time.Time) error {
-	return r.apply(approveSliceMutation(sliceID, approvedBy, now))
+	return r.ApproveSliceVia(sliceID, approvedBy, "", now)
+}
+
+// ApproveSliceVia records approval together with an optional bounded via
+// label naming who or what relayed the decision. The label is provenance
+// only; approval still requires approvedBy and grants no further authority.
+func (r *PlanRecord) ApproveSliceVia(sliceID string, approvedBy string, via string, now time.Time) error {
+	return r.apply(approveSliceMutation(sliceID, approvedBy, via, now))
 }
 
 // BlockSlice records an exceptional stop without discarding execution-boundary metadata.

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/iamseth/tao/internal/intervention"
 	"github.com/iamseth/tao/internal/plan"
 	runpkg "github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
@@ -17,7 +19,7 @@ import (
 var reviewCommand = commandMetadata{
 	name:                  "review",
 	minPrefix:             "rev",
-	usageLines:            []string{"review (rev) [--run [--review-agent pi|claude] [--model NAME] [--effort NAME]] <plan-id-or-slug-or-path>"},
+	usageLines:            []string{"review (rev) [--run [--review-agent pi|claude] [--model NAME] [--effort NAME] [--via LABEL]] <plan-id-or-slug-or-path>"},
 	completionDescription: "Show or refresh the persisted plan review",
 	long:                  "Show the persisted LLM review for a plan, or run a fresh review and display its metadata. Reviews are stored with Tao plan metadata, not in the worktree.",
 	examples: "  tao review my-plan\n" +
@@ -60,6 +62,22 @@ func registerReviewFlags(fs *flag.FlagSet) {
 	fs.Bool("run", false, "run a fresh review before displaying the result")
 	fs.String("model", "", "override the agent model for a fresh review (--run)")
 	fs.String("effort", "", "override reasoning effort for a fresh review (--run)")
+	fs.String("via", "", "optional provenance label for a relayed review decision (--run only); never review authority")
+}
+
+// reviewViaFlagValue parses --via before any mutation; it requires --run.
+func reviewViaFlagValue(fs *flag.FlagSet) (string, error) {
+	if !flagWasProvided(fs, "via") {
+		return "", nil
+	}
+	if !flagBoolValue(fs, "run") {
+		return "", errors.New("--via requires --run")
+	}
+	via, err := intervention.ParseVia(flagStringValue(fs, "via"))
+	if err != nil {
+		return "", fmt.Errorf("--via: %w", err)
+	}
+	return via, nil
 }
 
 func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) error {
@@ -67,7 +85,7 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 	if err != nil {
 		return err
 	}
-	if err := requirePositionals(positional, 1, "usage: tao review [--run [--review-agent pi|claude] [--model NAME] [--effort NAME]] <plan-id-or-slug-or-path>"); err != nil {
+	if err := requirePositionals(positional, 1, "usage: tao review [--run [--review-agent pi|claude] [--model NAME] [--effort NAME] [--via LABEL]] <plan-id-or-slug-or-path>"); err != nil {
 		return err
 	}
 	if _, err := effortFlagValue(fs); err != nil {
@@ -77,6 +95,10 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 		return err
 	}
 	_, err = reviewAgentFlagValue(fs, true)
+	if err != nil {
+		return err
+	}
+	via, err := reviewViaFlagValue(fs)
 	if err != nil {
 		return err
 	}
@@ -96,7 +118,7 @@ func (a App) review(ctx context.Context, repo runpkg.Repository, args []string) 
 		if err != nil {
 			return err
 		}
-		return a.runPlanReviewWithOptions(ctx, repo, positional[0], options)
+		return a.runPlanReviewWithOptions(ctx, repo, positional[0], options, via)
 	}
 	detail, err := repo.ResolvePlan(ctx, positional[0])
 	if err != nil {
@@ -126,11 +148,11 @@ func (a App) runPlanReview(ctx context.Context, repo runpkg.Repository, input st
 	if err != nil {
 		return err
 	}
-	return a.runPlanReviewWithOptions(ctx, repo, input, options)
+	return a.runPlanReviewWithOptions(ctx, repo, input, options, "")
 }
 
-func (a App) runPlanReviewWithOptions(ctx context.Context, repo runpkg.Repository, input string, options runtimeconfig.CommandOptions) error {
-	request := runpkg.Request{Input: input, ResolvedRunOptions: options.RunOptions}
+func (a App) runPlanReviewWithOptions(ctx context.Context, repo runpkg.Repository, input string, options runtimeconfig.CommandOptions, via string) error {
+	request := runpkg.Request{Input: input, ResolvedRunOptions: options.RunOptions, Via: via}
 	snapshot := a.envSnapshot()
 	runner := runpkg.NewService(repo, a.Out, runpkg.Options{
 		ExecutionConfig: runpkg.ExecutionConfig{RuntimeEnv: &snapshot, SkipPermissions: options.SkipPermissions},

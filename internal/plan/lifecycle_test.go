@@ -521,7 +521,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 		{
 			name: "approve not required",
 			mutate: func() error {
-				_, _, err := markSliceApproved(startSliceDetail(""), "001-a", "Seth", editTime())
+				_, _, err := markSliceApproved(startSliceDetail(""), "001-a", "Seth", "", editTime())
 				return err
 			},
 			want: "does not require approval",
@@ -531,7 +531,7 @@ func TestLifecycleMutationHelpersRejectInvalidMutations(t *testing.T) {
 			mutate: func() error {
 				detail := startSliceDetail("")
 				detail.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "approval"}
-				_, _, err := markSliceApproved(detail, "001-a", "  ", editTime())
+				_, _, err := markSliceApproved(detail, "001-a", "  ", "", editTime())
 				return err
 			},
 			want: "approved_by is required",
@@ -708,7 +708,7 @@ func TestLifecycleMutationEventIdempotencyDecisions(t *testing.T) {
 		detail.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "approval"}
 		detail.Events = []Event{{Type: EventTypeSliceApproved, Timestamp: first, PlanID: "plan-a", SliceID: "001-a"}}
 
-		_, appendEvent, err := markSliceApproved(detail, "001-a", "Seth", second)
+		_, appendEvent, err := markSliceApproved(detail, "001-a", "Seth", "", second)
 		if err != nil {
 			t.Fatal(err)
 		}

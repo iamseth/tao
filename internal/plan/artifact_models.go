@@ -152,6 +152,7 @@ type Approval struct {
 	Reason     string  `json:"reason"`
 	Approved   bool    `json:"approved"`
 	ApprovedBy *string `json:"approved_by,omitempty"`
+	Via        *string `json:"via,omitempty"`
 	ApprovedAt *string `json:"approved_at,omitempty"`
 }
 

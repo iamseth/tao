@@ -1544,7 +1544,7 @@ func TestMergeCommandHelpDocumentsVerifyCommand(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"merge", "--help"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--all", "--dry-run", "an interrupted dry run removes its disposable integration worktree before exiting", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--model NAME] [--effort NAME] [--force] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
+	for _, want := range []string{"--all", "--dry-run", "an interrupted dry run removes its disposable integration worktree before exiting", "preview batch candidates and order without durable changes or verification", "verifies the staged aggregate once", "attributes an aggregate verification failure to one candidate", "--restart", "--auto-eject", "eject-and-reland", "--verify-command", "override the post-merge build/test verification command", "one automatic resolver attempt", "independent fresh-session review", "--force cannot bypass these safety and review gates", "--no-verify skips only command verification", "--no-squash rebase conflicts remain manual", "bounded agent resolution", "aggregate approval before one fast-forward", "For one plan, --restart safely discards only an eligible stale pre-landing merge intent", "--all --restart discards only pre-landing batch recovery", "Batch mode rejects --force, --record-only, --no-squash, and --no-verify", "single-plan only", "Usage:\n  tao merge (m) [--model NAME] [--effort NAME] [--force [--via LABEL]] [--record-only] [--no-squash] [--no-verify] [--verify-command CMD]", "merge (m) --restart <plan-id-or-slug-or-path>", "merge (m) --all [--model NAME] [--effort NAME] [--dry-run] [--restart] [--auto-eject] [--verify-command CMD]"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expected help to contain %q, got %q", want, out.String())
 		}
@@ -1729,5 +1729,56 @@ func newCLIMergeGitRunner(t *testing.T, repoRoot string) CommandRunner {
 			t.Fatalf("unexpected git command %q", command)
 			return nil
 		}
+	}
+}
+
+func TestMergeCommandRejectsInvalidViaBeforeDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "without force", args: []string{"merge", "--via", "orchestrator", "plan-a"}, want: "--via requires --force"},
+		{name: "with all", args: []string{"merge", "--all", "--via", "orchestrator"}, want: "--all cannot be combined with --via"},
+		{name: "oversized", args: []string{"merge", "--force", "--via", strings.Repeat("x", 129), "plan-a"}, want: "--via:"},
+		{name: "control character", args: []string{"merge", "--force", "--via", "bad\nlabel", "plan-a"}, want: "--via:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constructed := false
+			original := newMergeServiceRunner
+			newMergeServiceRunner = func(context.Context, App, *plan.PlanDetail, string, ...string) (mergeServiceRunner, error) {
+				constructed = true
+				return &fakeCLIMergeService{}, nil
+			}
+			t.Cleanup(func() { newMergeServiceRunner = original })
+			var out bytes.Buffer
+			app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(string) Repository {
+				return fakeRepository{}
+			}})
+			err := app.Run(context.Background(), tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("merge error = %v, want %q", err, tc.want)
+			}
+			if constructed {
+				t.Fatal("invalid --via constructed the merge service")
+			}
+		})
+	}
+}
+
+func TestMergeCommandPassesViaWithForce(t *testing.T) {
+	detail := cliMergeDetail(t)
+	service := &fakeCLIMergeService{}
+	stubMergeServiceRunner(t, service)
+	var out bytes.Buffer
+	app := newTestApp(App{RepositoryAdmission: testRepositoryAdmission, Out: &out, Err: &out, Repository: func(plansDir string) Repository {
+		return fakeRepository{details: map[string]*plan.PlanDetail{"plan-a": detail}}
+	}})
+	const label = "claude-code-workflow wf_43dba409-ce8"
+	if err := app.Run(context.Background(), []string{"merge", "--force", "--via", " " + label + " ", "plan-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if !service.options.Force || service.options.Via != label {
+		t.Fatalf("expected force with trimmed via %q, got %#v", label, service.options)
 	}
 }

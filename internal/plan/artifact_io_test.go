@@ -1333,6 +1333,77 @@ func TestApproveSliceWritesApprovalAndEvent(t *testing.T) {
 	}
 }
 
+func TestApproveSliceViaRecordsProvenanceLabel(t *testing.T) {
+	testenv.SkipIfShort(t)
+	t.Parallel()
+	dir := t.TempDir()
+	now := time.Date(2026, 5, 24, 23, 1, 2, 0, time.UTC)
+	detail := startSliceDetail(dir)
+	detail.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "human approval"}
+	writeStartSliceArtifacts(t, dir, detail)
+	record := testRecord(dir, detail)
+
+	if err := record.ApproveSliceVia("001-a", "Seth", "claude-code-workflow wf_43dba409-ce8", now); err != nil {
+		t.Fatal(err)
+	}
+
+	slices := readSlicesFile(t, dir)
+	approval := slices.Slices[0].Approval
+	if approval == nil || !approval.Approved || approval.ApprovedBy == nil || *approval.ApprovedBy != "Seth" {
+		t.Fatalf("unexpected approval after approve: %#v", approval)
+	}
+	if approval.Via == nil || *approval.Via != "claude-code-workflow wf_43dba409-ce8" {
+		t.Fatalf("expected approval.via to be persisted, got %#v", approval)
+	}
+	if got := readSlicesRaw(t, dir); !strings.Contains(got, `"via": "claude-code-workflow wf_43dba409-ce8"`) {
+		t.Fatalf("expected via in slices.json, got %s", got)
+	}
+	var approved *Event
+	for i := range detail.Events {
+		if detail.Events[i].Type == EventTypeSliceApproved {
+			approved = &detail.Events[i]
+		}
+	}
+	if approved == nil {
+		t.Fatalf("expected slice_approved event: %#v", detail.Events)
+	}
+	if approved.Via != "claude-code-workflow wf_43dba409-ce8" || approved.Actor != "operator" || approved.Trigger != "approve" || approved.AttributionVersion != 1 {
+		t.Fatalf("unexpected approval event: %+v", approved)
+	}
+	if got := readEventsFile(t, dir); !strings.Contains(got, `"via":"claude-code-workflow wf_43dba409-ce8"`) {
+		t.Fatalf("expected via in events.jsonl, got %s", got)
+	}
+
+	if err := record.ApproveSliceVia("001-a", "Other", "different-relay", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	approval = readSlicesFile(t, dir).Slices[0].Approval
+	if approval.Via == nil || *approval.Via != "claude-code-workflow wf_43dba409-ce8" || *approval.ApprovedBy != "Seth" {
+		t.Fatalf("repeated approval changed stored provenance: %#v", approval)
+	}
+}
+
+func TestApproveSliceWithoutViaOmitsField(t *testing.T) {
+	testenv.SkipIfShort(t)
+	t.Parallel()
+	dir := t.TempDir()
+	now := time.Date(2026, 5, 24, 23, 1, 2, 0, time.UTC)
+	detail := startSliceDetail(dir)
+	detail.Slices.Slices[0].Approval = &Approval{Required: true, Reason: "human approval"}
+	writeStartSliceArtifacts(t, dir, detail)
+
+	if err := testRecord(dir, detail).ApproveSlice("001-a", "Seth", now); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readSlicesRaw(t, dir); strings.Contains(got, `"via"`) {
+		t.Fatalf("direct approval must not write via to slices.json: %s", got)
+	}
+	if got := readEventsFile(t, dir); strings.Contains(got, `"via"`) {
+		t.Fatalf("direct approval must not write via to events.jsonl: %s", got)
+	}
+}
+
 func TestApproveSliceIsIdempotentAndPreservesMetadata(t *testing.T) {
 	testenv.SkipIfShort(t)
 	t.Parallel()
@@ -3458,6 +3529,15 @@ func readJSONFile(t *testing.T, path string, out any) {
 	if err := json.Unmarshal(data, out); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func readSlicesRaw(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "slices.json")) // #nosec G304 -- test path is internally constructed
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func readEventsFile(t *testing.T, dir string) string {

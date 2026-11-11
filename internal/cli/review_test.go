@@ -604,3 +604,72 @@ func TestUnchangedReviewNoticeGuidanceAndSafeMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewRejectsInvalidViaFlags(t *testing.T) {
+	app := newTestApp(App{Out: io.Discard, Err: io.Discard})
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--via", "orchestrator", "plan-a"}, want: "--via requires --run"},
+		{args: []string{"--run", "--via", strings.Repeat("x", 129), "plan-a"}, want: "--via:"},
+		{args: []string{"--run", "--via", "bad\nlabel", "plan-a"}, want: "--via:"},
+	} {
+		if err := app.review(context.Background(), fakeRepository{}, tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%v: %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestReviewRunPassesViaToRequest(t *testing.T) {
+	testenv.SkipIfShort(t)
+	clearTaoEnv(t)
+	t.Setenv(runtimeconfig.EnvAgent, "pi")
+	t.Setenv(runtimeconfig.EnvCommitPolicy, "none")
+	t.Setenv(runtimeconfig.EnvExecutionMode, "current")
+	const label = "claude-code-workflow wf_43dba409-ce8"
+	fixture := newRunPlanFixture(t, plan.StatusCompleted, nil, []string{"001-a"}, "001-a", plan.StatusCompleted)
+	reviewOutput := "Fresh review\n```tao-review-json\n{\"verdict\":\"comment\",\"summary\":\"ready\",\"findings\":[]}\n```"
+	var out bytes.Buffer
+	app := newTestApp(App{Out: &out, Err: &out, CommandRunner: func(ctx context.Context, cwd string, name string, args []string, stdout io.Writer, stderr io.Writer) error {
+		if name != "git" {
+			t.Fatalf("unexpected command %s %v", name, args)
+		}
+		switch reviewCommandKey(args) {
+		case "status --porcelain --no-renames -z":
+		case "rev-parse HEAD":
+			_, _ = io.WriteString(stdout, "head123\n")
+		default:
+			t.Fatalf("unexpected git command %v", args)
+		}
+		return nil
+	}, ProcessStarter: fakeCLIProcessStarter(t, reviewOutput, func(string) {})})
+	snapshot := runtimeconfig.RuntimeEnv()
+	app.RuntimeEnv = &snapshot
+	if err := app.review(context.Background(), plan.NewFileRepository(fixture.root), []string{"--run", "--via", label, fixture.id}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := plan.ReadState(fixture.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Plan.Review == nil || state.Plan.Review.Verdict != "comment" || state.Plan.Review.Via != label {
+		t.Fatalf("persisted review = %#v, want via %q", state.Plan.Review, label)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(readText(t, filepath.Join(fixture.dir, "events.jsonl"))), "\n") {
+		var event plan.Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == plan.EventTypePlanReviewed {
+			found = true
+			if event.Review == nil || event.Review.Via != label {
+				t.Fatalf("plan_reviewed event = %+v, want review via %q", event, label)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected plan_reviewed event")
+	}
+}

@@ -5,6 +5,7 @@
 - matured: 6; censored: 4
 - unknown attribution (all plans): 6/10 (60.0%)
 - unknown attribution (matured plans): 2/6 (33.3%)
+- observed operator provenance: direct=0; relayed=0; mixed=0
 - treatment confidence: high=6; low=2; ambiguous=1; missing=1
 - planning-metrics coverage: 0/10 plans
 - role attribution: 6 attributed; 2 unattributed sessions
@@ -24,7 +25,7 @@
 
 Observational evidence, not a causal ranking. Runtime-only labels do not establish provider or model.
 Outcome rates use matured plans; active plans inside the maturity window are censored, not failures. Started is coverage across all plans. Rate intervals are Wilson 95%.
-Unattended (observed) counts matured plans that reached merge with sufficient attribution coverage and no observed operator intervention over their lifetime; not proof of no human involvement. Unknown coverage stays in the denominator and contributes no success. External-agent operator commands count; Tao-owned automatic recovery alone does not. Manual edits and silent log loss may be undetectable.
+Unattended (observed) counts matured plans that reached merge with sufficient attribution coverage and no observed operator intervention over their lifetime; not proof of no human involvement. Unknown coverage stays in the denominator and contributes no success. External-agent operator commands count; Tao-owned automatic recovery alone does not. Manual edits and silent log loss may be undetectable. Relayed counts plans whose observed operator actions all carried a via label; mixed counts plans with both labeled and unlabeled actions or invalid labels; the label is a self-declared provenance claim, not proof.
 
 ## Cohorts
 
@@ -33,6 +34,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
 - n plans=2; matured=1; censored=1; never started=1
 - unknown attribution (all plans): 2/2 (100.0%)
 - unknown attribution (matured plans): 1/1 (100.0%)
+- observed operator provenance: direct=0; relayed=0; mixed=0
 - quality rates:
   - started (all plans): 0.500 [0.095, 0.905] n=2 sparse
   - first review approved: 0.000 [0.000, 0.793] n=1 sparse
@@ -95,6 +97,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
 - n plans=6; matured=5; censored=1; never started=1
 - unknown attribution (all plans): 2/6 (33.3%)
 - unknown attribution (matured plans): 1/5 (20.0%)
+- observed operator provenance: direct=0; relayed=0; mixed=0
 - quality rates:
   - started (all plans): 0.833 [0.436, 0.970] n=6
   - first review approved: 0.800 [0.376, 0.964] n=5
@@ -161,6 +164,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
 - n plans=6; matured=5; censored=1; never started=1
 - unknown attribution (all plans): 2/6 (33.3%)
 - unknown attribution (matured plans): 1/5 (20.0%)
+- observed operator provenance: direct=0; relayed=0; mixed=0
 - quality rates:
   - started (all plans): 0.833 [0.436, 0.970] n=6
   - first review approved: 0.800 [0.376, 0.964] n=5
@@ -225,6 +229,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
 - n plans=2; matured=1; censored=1; never started=1
 - unknown attribution (all plans): 2/2 (100.0%)
 - unknown attribution (matured plans): 1/1 (100.0%)
+- observed operator provenance: direct=0; relayed=0; mixed=0
 - quality rates:
   - started (all plans): 0.500 [0.095, 0.905] n=2 sparse
   - first review approved: 0.000 [0.000, 0.793] n=1 sparse
@@ -287,6 +292,7 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
 - n plans=6; matured=5; censored=1; never started=1
 - unknown attribution (all plans): 2/6 (33.3%)
 - unknown attribution (matured plans): 1/5 (20.0%)
+- observed operator provenance: direct=0; relayed=0; mixed=0
 - quality rates:
   - started (all plans): 0.833 [0.436, 0.970] n=6
   - first review approved: 0.800 [0.376, 0.964] n=5

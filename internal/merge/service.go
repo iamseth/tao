@@ -50,6 +50,10 @@ type Options struct {
 	VerifyCommand string
 	RecordOnly    bool
 	NoSquash      bool
+	// Via is an optional bounded provenance label naming who or what relayed
+	// a forced merge; it is recorded on merge_force intervention observations
+	// only and is never merge authority.
+	Via string
 
 	allowNonAncestralCleanup bool
 }
@@ -475,7 +479,7 @@ func (s Service) merge(ctx context.Context, detail *plan.PlanDetail, options Opt
 			forceEvidence = mergeForceReviewEvidence(ctx, git, detail, mergeSnapshot, options.NoSquash, priorIntent != nil && priorIntent == detail.State.Plan.MergeCommitIntent)
 		}
 		if forceEvidence != "" {
-			s.observeMergeIntervention(detail, forceEvidence)
+			s.observeMergeIntervention(detail, forceEvidence, options.Via)
 		}
 	}
 	s.reportPhase(runstatus.PhaseMergeIntegrating)
@@ -513,7 +517,7 @@ func (s Service) resumeSingleResolutionMerge(ctx context.Context, git GitClient,
 			return err
 		}
 		if inspectSingleResolutionRollbackBoundary(ctx, git, *intent, planBranch) == nil {
-			s.observeMergeIntervention(detail, "merge_resolution_resume")
+			s.observeMergeIntervention(detail, "merge_resolution_resume", "")
 			return s.rollbackAndSettleSingleResolution(ctx, git, detail, *intent, planBranch, plan.SingleMergeResolutionRollbackRecoveredInterruption, ErrSingleResolutionRolledBack)
 		}
 	}
@@ -573,7 +577,7 @@ func (s Service) resolveAndFinishSingleMerge(ctx context.Context, git GitClient,
 	// A resolver refusal is not a successful resumption. Observe the accepted
 	// recovery before downstream verification/review can fail.
 	if err == nil && prepared == nil {
-		s.observeMergeIntervention(detail, "merge_resolution_resume")
+		s.observeMergeIntervention(detail, "merge_resolution_resume", "")
 	}
 	if err != nil {
 		if errors.Is(err, ErrSingleResolutionPreflight) {
@@ -1138,7 +1142,7 @@ func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, deta
 			evidence = "merge_force"
 		}
 		if evidence != "" {
-			s.observeMergeIntervention(detail, evidence)
+			s.observeMergeIntervention(detail, evidence, options.Via)
 		}
 	}
 	switch {
@@ -1770,13 +1774,13 @@ func mergeForceReviewEvidence(ctx context.Context, git GitClient, detail *plan.P
 	return ""
 }
 
-func (s Service) observeMergeIntervention(detail *plan.PlanDetail, trigger string) {
+func (s Service) observeMergeIntervention(detail *plan.PlanDetail, trigger, via string) {
 	if s.Events == nil || detail == nil {
 		return
 	}
-	event := plan.WithInterventionAttribution(plan.Event{
+	event := plan.WithVia(plan.WithInterventionAttribution(plan.Event{
 		Type: plan.EventTypeInterventionObserved, Timestamp: s.now().UTC(), PlanID: detail.State.Plan.ID,
-	}, "operator", trigger)
+	}, "operator", trigger), via)
 	if err := s.Events.AppendEvent(detail.Dir, event); err != nil {
 		s.logf("append merge intervention observation: %v", err)
 	}

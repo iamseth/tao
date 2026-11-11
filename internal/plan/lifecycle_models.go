@@ -490,7 +490,10 @@ type PlanReview struct {
 	Base          string               `json:"base,omitempty"`
 	Head          string               `json:"head,omitempty"`
 	Agent         string               `json:"agent,omitempty"`
-	ReviewedAt    time.Time            `json:"reviewed_at,omitempty,omitzero"`
+	// Via is an optional bounded provenance label naming who or what relayed
+	// the review; it is provenance only, never approval or merge authority.
+	Via        string    `json:"via,omitempty"`
+	ReviewedAt time.Time `json:"reviewed_at,omitempty,omitzero"`
 }
 
 func (r *PlanReview) IsApproved() bool {
