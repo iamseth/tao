@@ -10,7 +10,38 @@ import (
 
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/selfupdate"
+	"github.com/iamseth/tao/internal/testenv"
 )
+
+func TestNoteRunUsageIsCommandLocal(t *testing.T) {
+	testenv.SkipIfShort(t)
+	clearTaoEnv(t)
+	for _, command := range []string{"note", "n"} {
+		for _, subcommand := range []string{"run", "r"} {
+			for _, rest := range [][]string{
+				nil, {"one", "two"}, {"one", "--unknown"}, {"one", "--max-slices=-1"},
+				{"one", "--max-slices=bad"}, {"one", "--agent=unknown"}, {"one", "--session-timeout=bad"},
+				{"one", "--commit-policy=bad"}, {"one", "--execution-mode=bad"},
+				{"one", "--planner-routing=bad"}, {"one", "--planner-arm=bad"},
+				{"one", "--no-review=bad"}, {"one", "--continue"},
+			} {
+				app := newTestApp(App{Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
+				args := append([]string{command, subcommand}, rest...)
+				err := app.Run(context.Background(), args)
+				var outcome *NoteRunOutcome
+				if ExitCode(err) != 2 || !errors.As(err, &outcome) {
+					t.Fatalf("%v: %v (%d)", args, err, ExitCode(err))
+				}
+			}
+		}
+	}
+	for _, args := range [][]string{{"run", "--max-slices=bad"}, {"note", "show"}, {"note", "create", "--unknown"}} {
+		app := newTestApp(App{Out: new(bytes.Buffer), Err: new(bytes.Buffer)})
+		if err := app.Run(context.Background(), args); ExitCode(err) != 1 {
+			t.Fatalf("unrelated %v: %v", args, err)
+		}
+	}
+}
 
 func TestCommandRegistryOrder(t *testing.T) {
 	want := []struct {

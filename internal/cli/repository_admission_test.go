@@ -287,6 +287,7 @@ func TestRepositoryAdmissionRefusesPromotedExecution(t *testing.T) {
 	if err := record.PersistArtifacts(); err != nil {
 		t.Fatal(err)
 	}
+	alignNoteRunFixture(t, app, fixture.dir)
 	app.Repository = func(string) Repository { return repo }
 	app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
 		return &planning.GeneratePlanResult{Allocation: planning.PlanAllocation{ID: fixture.id, Dir: fixture.dir}, Validation: planning.ValidationResult{OK: true}}, nil

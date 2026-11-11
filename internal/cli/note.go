@@ -18,7 +18,9 @@ import (
 	"github.com/iamseth/tao/internal/agent"
 	"github.com/iamseth/tao/internal/note"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/plannerroute"
 	"github.com/iamseth/tao/internal/planning"
+	"github.com/iamseth/tao/internal/run"
 	"github.com/iamseth/tao/internal/runtimeconfig"
 	"github.com/iamseth/tao/internal/taodata"
 	"github.com/iamseth/tao/internal/term"
@@ -40,7 +42,7 @@ var noteCommand = commandMetadata{
 		{name: "edit", aliases: []commandSubcommandAlias{"e"}, description: "Edit a note's text and optional tags", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "archive", aliases: []commandSubcommandAlias{"a"}, description: "Archive an open note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 		{name: "reopen", description: "Reopen an archived note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
-		{name: "run", aliases: []commandSubcommandAlias{"r"}, description: "Generate and run a plan for a clear note", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
+		{name: "run", aliases: []commandSubcommandAlias{"r"}, description: "Generate or resume and run a note's linked plan", completion: completionContext{positional: completionPositional{index: 1, label: "note", completer: completeNoteIDs}}},
 	},
 	registerFlags:        registerNoteFlags,
 	registerRuntimeFlags: App.registerNoteFlags,
@@ -99,7 +101,11 @@ func (a App) registerNoteFlags(fs *flag.FlagSet) {
 
 func (a App) note(ctx context.Context, args []string) error {
 	fs, positional, err := a.parseArgs("note", boundNoteTextArgs(args), a.registerNoteFlags)
+	isRun := len(positional) > 0 && normalizeNoteSubcommand(positional[0]) == "run"
 	if err != nil {
+		if isRun && !errors.Is(err, flag.ErrHelp) {
+			return noteRunOutcome(NoteRunUsage, err)
+		}
 		return err
 	}
 	subcommand := "list"
@@ -111,7 +117,36 @@ func (a App) note(ctx context.Context, args []string) error {
 		positional = positional[1:]
 	}
 	if err := validateNoteFlags(fs, subcommand); err != nil {
+		if isRun {
+			return noteRunOutcome(NoteRunUsage, err)
+		}
 		return err
+	}
+	if isRun {
+		if len(positional) != 1 {
+			return noteRunOutcome(NoteRunUsage, errors.New("usage: tao note run <note-id> [options]"))
+		}
+		if flagWasProvided(fs, "planner-routing") {
+			if _, err := plannerroute.ParseMode(strings.TrimSpace(flagStringValue(fs, "planner-routing"))); err != nil {
+				return noteRunOutcome(NoteRunUsage, err)
+			}
+		}
+		if flagWasProvided(fs, "planner-arm") {
+			value := strings.TrimSpace(flagStringValue(fs, "planner-arm"))
+			if value == "" {
+				return noteRunOutcome(NoteRunUsage, errors.New("--planner-arm requires a runtime"))
+			}
+			if _, err := runtimeconfig.ParseAgentKind(value); err != nil {
+				return noteRunOutcome(NoteRunUsage, err)
+			}
+		}
+		flags, err := runRequestFlagOverrides(fs)
+		if err != nil {
+			return noteRunOutcome(NoteRunUsage, err)
+		}
+		if _, err := runtimeconfig.ResolveCommandOptions(runtimeconfig.CommandOptionsInput{Profile: runtimeconfig.CommandRun, Flags: flags}); err != nil {
+			return noteRunOutcome(NoteRunUsage, err)
+		}
 	}
 	registered, err := a.resolveNoteRepo(ctx, flagStringValue(fs, "repo"))
 	if err != nil {
@@ -609,9 +644,9 @@ type notePromotion struct {
 
 // promoteOpenNote owns the serialized direct-run promotion protocol: gate on
 // status, lock, re-read under the lock, re-gate, promote, release. It returns
-// false without error when the note was already promoted and that outcome has
-// been rendered.
-func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo NoteRepository, item note.Note, p notePromotion) (note.Note, bool, error) {
+// false when a terminal note was handled by a callback. Callbacks must not
+// execute a plan: the lock is released only after they return.
+func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo NoteRepository, item note.Note, p notePromotion) (result note.Note, promotedOK bool, resultErr error) {
 	if item.Status == note.StatusPromoted {
 		return note.Note{}, false, p.alreadyPromoted(item)
 	}
@@ -625,7 +660,7 @@ func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo 
 	locked := true
 	defer func() {
 		if locked {
-			_ = release()
+			resultErr = errors.Join(resultErr, release())
 		}
 	}()
 
@@ -644,16 +679,17 @@ func (a App) promoteOpenNote(ctx context.Context, registered taodata.Repo, repo 
 	if err != nil {
 		return note.Note{}, false, err
 	}
+	locked = false
 	if err := release(); err != nil {
 		return note.Note{}, false, fmt.Errorf("note %s was linked to %s, but its promotion lock could not be released: %w; recover with %s", promoted.ID, destination, err, recovery)
 	}
-	locked = false
 	return promoted, true, nil
 }
 
-func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) error {
+func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepository, fs *flag.FlagSet, args []string) (resultErr error) {
+	defer func() { resultErr = classifyNoteRunError(resultErr) }()
 	if len(args) != 1 {
-		return errors.New("usage: tao note run <note-id> [--repo REPO] [--agent pi|claude] [--session-timeout DURATION] [--max-slices N] [--commit-policy slice|none] [--execution-mode isolated|current] [--pull-request] [--no-review] [--dangerously-skip-permissions]")
+		return noteRunOutcome(NoteRunUsage, errors.New("usage: tao note run <note-id> [options]"))
 	}
 	a, err := a.settingsForRepository(ctx, registered)
 	if err != nil {
@@ -678,13 +714,16 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 		return fmt.Errorf("run note: %w", err)
 	}
 	var generated *planning.GeneratePlanResult
+	var linked note.Note
+	resolveExisting := func(item note.Note) error {
+		linked = item
+		return nil
+	}
 	promoted, ok, err := a.promoteOpenNote(ctx, registered, repo, item, notePromotion{
 		owner:           "note run",
 		purpose:         "direct planning",
-		alreadyPromoted: a.printExistingNotePromotion,
-		notOpen: func(item note.Note) error {
-			return fmt.Errorf("note %s is %s; reopen it before running", item.ID, item.Status)
-		},
+		alreadyPromoted: resolveExisting,
+		notOpen:         resolveExisting,
 		promote: func(ctx context.Context, item note.Note) (note.Note, string, string, error) {
 			now := a.now().UTC()
 			source := &planning.SourceEnvelope{Type: "note", Note: &planning.SourceNoteSnapshot{
@@ -733,14 +772,73 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 			return promoted, "plan " + generated.Allocation.ID, "tao run " + generated.Allocation.ID, nil
 		},
 	})
-	if !ok || err != nil {
+	if err != nil {
 		return err
 	}
-	if err := writef(a.Out, "Promoted note %s to plan %s\n", promoted.ID, generated.Allocation.ID); err != nil {
+	if ok {
+		linked = promoted
+		if err := writef(a.Out, "Promoted note %s to plan %s\n", promoted.ID, generated.Allocation.ID); err != nil {
+			return err
+		}
+	}
+	return a.runLinkedNote(ctx, registered, linked, options)
+}
+
+// runLinkedNote treats persisted links only as locators. Validation precedes the
+// ordinary run path and never rewrites the terminal note's provenance.
+func (a App) runLinkedNote(ctx context.Context, registered taodata.Repo, item note.Note, options runtimeconfig.CommandOptions) error {
+	var link *note.PlanLink
+	if item.Status == note.StatusArchived && item.Archive != nil {
+		link = item.Archive.Plan
+	} else if item.Status == note.StatusPromoted && item.Promotion != nil {
+		link = item.Promotion.Plan
+	}
+	if link == nil {
+		if item.Status == note.StatusPromoted && item.Promotion != nil && item.Promotion.PlanningSession != nil {
+			if err := a.printExistingNotePromotion(item); err != nil {
+				return err
+			}
+		}
+		if item.Status == note.StatusArchived || item.Promotion != nil && item.Promotion.PlanningSession != nil {
+			return noteRunOutcome(NoteRunNothingToDo, fmt.Errorf("note %s has no runnable plan; use /tao-plan note:%s for supervised planning", item.ID, item.ID))
+		}
+		return fmt.Errorf("note %s is promoted but has no destination", item.ID)
+	}
+	if link.ID == "" || link.Dir == "" || !filepath.IsAbs(link.Dir) || filepath.Base(filepath.Clean(link.Dir)) != link.ID {
+		return fmt.Errorf("note %s has an invalid plan path or ID", item.ID)
+	}
+	loader := plan.NewFileRepository(filepath.Dir(link.Dir))
+	detail, err := loader.GetPlanExact(ctx, link.ID)
+	if err != nil {
+		return fmt.Errorf("load linked plan %s at %s: %w", link.ID, link.Dir, err)
+	}
+	if err := validateNoteArchivePlan(detail, registered, a.registry().PlansDir(registered)); err != nil {
+		return fmt.Errorf("invalid linked plan %s: %w", link.ID, err)
+	}
+	if detail.State.Plan.ID != link.ID {
+		return fmt.Errorf("linked plan ID %q does not match destination %q", link.ID, detail.State.Plan.ID)
+	}
+	if plan.PlanLifecycleStatus(detail) == plan.StatusCompleted {
+		return projectNoteRunOutcome(detail, true)
+	}
+	planRepo := a.repository(filepath.Dir(link.Dir))
+	if err := a.executeCommandRun(ctx, planRepo, link.ID, options); err != nil {
+		if errors.Is(err, run.ErrCannotStart) {
+			if current, loadErr := loader.GetPlanExact(ctx, link.ID); loadErr == nil {
+				code := ExitCode(projectNoteRunOutcome(current, false))
+				if code == NoteRunBlocked || code == NoteRunDecision {
+					return noteRunOutcome(code, err)
+				}
+			}
+			return noteRunOutcome(NoteRunInfrastructure, err)
+		}
 		return err
 	}
-	planRepo := a.repository(filepath.Dir(generated.Allocation.Dir))
-	return a.executeCommandRun(ctx, planRepo, generated.Allocation.ID, options)
+	detail, err = loader.GetPlanExact(ctx, link.ID)
+	if err != nil {
+		return fmt.Errorf("load note-run outcome: %w", err)
+	}
+	return projectNoteRunOutcome(detail, false)
 }
 
 func (a App) planGenerator(options runtimeconfig.ResolvedRunOptions) PlanGenerator {

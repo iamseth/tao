@@ -1220,11 +1220,12 @@ func TestNoteRunInheritsCapturedReworkSettings(t *testing.T) {
 			now := time.Now()
 			const planID = "generated-note-plan"
 			detail, _ := autoReworkTestDetail(planID, now)
-			detail.Dir = t.TempDir()
+			detail.Dir = writeRunPlan(t, t.TempDir(), planID, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
 			repo := newRecordingAutoReworkRepository(planID, detail)
 			meta := taodata.Repo{ID: "note-repo", Name: "note", Root: "/repo", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Run: "repository-implementation"}}}
 			other := taodata.Repo{ID: "other-repo", Name: "other", Root: "/other", RunDefaults: &taodata.RepoRunDefaults{Models: &taodata.RepoModelDefaults{Run: "wrong-repository"}}}
 			app, _, _ := noteTestApp(t, strings.NewReader(""), other, meta)
+			alignNoteRunFixture(t, app, detail.Dir)
 			t.Setenv("TERM", "xterm-256color")
 			terminal := newFakeRunHeaderTerminalWriter(term.Size{Width: 100, Height: 24})
 			app.Out = terminal
@@ -1266,7 +1267,7 @@ func TestNoteRunInheritsCapturedReworkSettings(t *testing.T) {
 				t.Fatal(err)
 			}
 			args := append([]string{"note", "run", "--repo", meta.ID, item.ID}, tc.args...)
-			if err := app.Run(context.Background(), args); err != nil {
+			if err := app.Run(context.Background(), args); ExitCode(err) != NoteRunNothingToDo {
 				t.Fatal(err)
 			}
 			if calls != tc.wantCalls {

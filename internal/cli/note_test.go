@@ -28,9 +28,10 @@ import (
 )
 
 type fakeNoteRegistry struct {
-	current taodata.Repo
-	repos   []taodata.Repo
-	dir     string
+	current  taodata.Repo
+	repos    []taodata.Repo
+	dir      string
+	plansDir string
 }
 
 func (r *fakeNoteRegistry) Current(context.Context) (taodata.Repo, error) { return r.current, nil }
@@ -49,6 +50,9 @@ func (r *fakeNoteRegistry) NotesDir(repo taodata.Repo) string {
 	return filepath.Join(r.dir, repo.ID, "notes")
 }
 func (r *fakeNoteRegistry) PlansDir(repo taodata.Repo) string {
+	if r.plansDir != "" {
+		return r.plansDir
+	}
 	return filepath.Join(r.dir, repo.ID, "plans")
 }
 
@@ -65,6 +69,7 @@ func noteTestApp(t *testing.T, in any, repos ...taodata.Repo) (App, *bytes.Buffe
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	registry := &fakeNoteRegistry{current: repos[0], repos: repos, dir: t.TempDir()}
 	home := t.TempDir()
+	registry.plansDir = (taodata.Registry{DataHome: home}).PlansDir(repos[0])
 	t.Setenv("TAO_DATA_HOME", home)
 	for _, repo := range repos {
 		repo.Schema = "tao.repo.v1"
@@ -91,6 +96,21 @@ func noteTestApp(t *testing.T, in any, repos ...taodata.Repo) (App, *bytes.Buffe
 		app.In = reader
 	}
 	return app, out, errOut
+}
+
+// alignNoteRunFixture makes the injected allocation belong to the selected repository.
+func alignNoteRunFixture(t *testing.T, app App, dir string) {
+	t.Helper()
+	state, err := plan.ReadState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := app.registry().(*fakeNoteRegistry)
+	registry.plansDir = filepath.Dir(dir)
+	registry.current.Root = state.Repo.Root
+	for i := range registry.repos {
+		registry.repos[i].Root = state.Repo.Root
+	}
 }
 
 func noteArchiveTestApp(t *testing.T, registered taodata.Repo) (App, *bytes.Buffer, *fakeNoteRegistry) {
@@ -478,6 +498,7 @@ func TestNoteRunRejectsConcurrentSourceMutations(t *testing.T) {
 			continueGeneration := make(chan struct{})
 			var sourceText string
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			alignNoteRunFixture(t, app, fixture.dir)
 			app.Repository = func(string) Repository { return plan.NewFileRepository(filepath.Dir(fixture.dir)) }
 			app.PlanGenerator = planGeneratorFunc(func(_ context.Context, request planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
 				sourceText = request.Session.Source.Note.Text
@@ -595,6 +616,7 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	repoMeta := taodata.Repo{ID: "tao-123", Name: "tao", Root: "/repo", Branch: "main", RunDefaults: &taodata.RepoRunDefaults{Extra: configtypes.SettingsValues{"session_timeout": []byte(`"3m"`), "dangerously_skip_permissions": []byte(`true`), "review_agent": []byte(`"claude"`)}}}
 	app, out, errOut := noteTestApp(t, strings.NewReader(""), repoMeta)
 	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	alignNoteRunFixture(t, app, fixture.dir)
 	app.RepoHealthCheck = func(context.Context, taodata.Repo) taodata.RepoHealth {
 		return taodata.RepoHealth{Status: taodata.RepoHealthOK}
 	}
@@ -657,14 +679,236 @@ func TestNoteRunGeneratesLinksThenUsesNormalRun(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := app.Run(context.Background(), []string{"note", "r", id}); err != nil {
-		t.Fatal(err)
+	if err := app.Run(context.Background(), []string{"note", "r", id}); ExitCode(err) != NoteRunNothingToDo {
+		t.Fatalf("already completed outcome: %v", err)
 	}
-	if generated != 1 || !strings.Contains(out.String(), "Run it with: tao run "+fixture.id) {
+	if generated != 1 {
 		t.Fatalf("duplicate invocation generated=%d output=%q", generated, out.String())
 	}
 	if executeCalls != 1 {
 		t.Fatalf("shared run entry calls = %d, want one Service.Execute handoff", executeCalls)
+	}
+}
+
+func TestNoteRunResumesLinkedPlans(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, kind := range []string{"promoted", "archived", "open", "race-promoted", "race-archived", "race-release-error"} {
+		t.Run(kind, func(t *testing.T) {
+			clearTaoEnv(t)
+			root := initTestGitRepo(t)
+			meta := taodata.Repo{ID: "resume-repo", Name: "resume", Root: root, Branch: "main"}
+			app, _, _ := noteTestApp(t, strings.NewReader(""), meta)
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			detail, err := plan.NewFileRepository(fixture.root).GetPlanExact(context.Background(), fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail.State.Repo.Root = root
+			record, err := plan.NewPlanRecord(fixture.dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			alignNoteRunFixture(t, app, fixture.dir)
+			repo := app.noteRepository(meta)
+			item, err := repo.Create(context.Background(), "resume this task", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			link := note.PlanLink{ID: fixture.id, Dir: fixture.dir, Mode: "run"}
+			linkNote := func() {
+				var err error
+				if strings.Contains(kind, "archived") {
+					item, err = repo.ArchiveToPlan(context.Background(), item.ID, link)
+				} else {
+					item, err = repo.PromoteToPlan(context.Background(), item.ID, link)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "promoted" || kind == "archived" {
+				linkNote()
+			}
+			locks, generations, executions := 0, 0, 0
+			locked := false
+			app.AcquireNotePromotionLock = func(context.Context, string, string, string) (func() error, error) {
+				locks++
+				locked = true
+				if strings.HasPrefix(kind, "race-") {
+					linkNote()
+				}
+				return func() error {
+					locked = false
+					if kind == "race-release-error" {
+						return errors.New("release failed")
+					}
+					return nil
+				}, nil
+			}
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				generations++
+				if !locked {
+					t.Fatal("generation without promotion lock")
+				}
+				return &planning.GeneratePlanResult{Allocation: planning.PlanAllocation{ID: fixture.id, Dir: fixture.dir}}, nil
+			})
+			old := executeSinglePlan
+			executeSinglePlan = func(_ run.Service, _ context.Context, request run.Request) error {
+				executions++
+				if locked {
+					t.Fatal("promotion lock held across execution")
+				}
+				if request.MaxSlices != 1 || request.ReviewEnabled || request.RecoveryMode != (run.RecoveryMode{}) {
+					t.Fatalf("lost ordinary flags: %+v", request)
+				}
+				return nil
+			}
+			t.Cleanup(func() { executeSinglePlan = old })
+			err = app.Run(context.Background(), []string{"n", "r", item.ID, "--max-slices=1", "--no-review"})
+			wantCode, wantExecutions := NoteRunNothingToDo, 1
+			if kind == "race-release-error" {
+				wantCode, wantExecutions = NoteRunInfrastructure, 0
+			}
+			if ExitCode(err) != wantCode || executions != wantExecutions {
+				t.Fatalf("outcome=%v executions=%d", err, executions)
+			}
+			wantGeneration, wantLock := 0, 0
+			if kind == "open" {
+				wantGeneration = 1
+			}
+			if kind == "open" || strings.HasPrefix(kind, "race-") {
+				wantLock = 1
+			}
+			if generations != wantGeneration || locks != wantLock {
+				t.Fatalf("generations=%d locks=%d", generations, locks)
+			}
+			stored, err := repo.Get(context.Background(), item.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind != "open" && !reflect.DeepEqual(item, stored) {
+				t.Fatalf("terminal provenance changed: before=%+v after=%+v", item, stored)
+			}
+		})
+	}
+}
+
+func TestNoteRunLinkedAdmissionOutcomes(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, tc := range []struct {
+		name    string
+		blocked bool
+		code    int
+	}{
+		{"blocked", true, NoteRunBlocked},
+		{"approval", false, NoteRunDecision},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearTaoEnv(t)
+			ctx := context.Background()
+			root := initTestGitRepo(t)
+			meta := taodata.Repo{ID: "admission-repo", Name: "admission", Root: root, Branch: "main"}
+			app, _, _ := noteTestApp(t, strings.NewReader(""), meta)
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			detail, err := plan.NewFileRepository(fixture.root).GetPlanExact(ctx, fixture.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			detail.State.Repo.Root = root
+			if tc.blocked {
+				detail.State.Status = plan.StatusBlocked
+				detail.Slices.Slices[0].Status = plan.StatusBlocked
+			} else {
+				detail.Slices.Slices[0].Approval = &plan.Approval{Required: true, Reason: "operator decision"}
+			}
+			record, err := plan.NewPlanRecord(fixture.dir, detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := record.PersistArtifacts(); err != nil {
+				t.Fatal(err)
+			}
+			alignNoteRunFixture(t, app, fixture.dir)
+			repo := app.noteRepository(meta)
+			item, err := repo.Create(ctx, "resume gated task", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repo.PromoteToPlan(ctx, item.ID, note.PlanLink{ID: fixture.id, Dir: fixture.dir, Mode: "run"}); err != nil {
+				t.Fatal(err)
+			}
+			app.ProcessStarter = func(context.Context, string, string, []string) (run.Process, error) {
+				t.Fatal("admission refusal must not start a process")
+				return nil, errors.New("unexpected process start")
+			}
+			err = app.Run(ctx, []string{"note", "run", item.ID, "--no-review"})
+			if !errors.Is(err, run.ErrCannotStart) {
+				t.Fatalf("error = %v, want preserved cannot-start cause", err)
+			}
+			if got := ExitCode(err); got != tc.code {
+				t.Fatalf("ExitCode = %d, want %d: %v", got, tc.code, err)
+			}
+		})
+	}
+}
+
+func TestNoteRunRefusesInvalidLinkedDestinations(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, kind := range []string{"missing", "mismatched-id", "foreign-root", "foreign-directory", "malformed", "unhealthy"} {
+		t.Run(kind, func(t *testing.T) {
+			clearTaoEnv(t)
+			root := initTestGitRepo(t)
+			meta := taodata.Repo{ID: "resume-repo", Name: "resume", Root: root}
+			app, _, _ := noteTestApp(t, strings.NewReader(""), meta)
+			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			alignNoteRunFixture(t, app, fixture.dir)
+			link := note.PlanLink{ID: fixture.id, Dir: fixture.dir, Mode: "run"}
+			switch kind {
+			case "missing":
+				link.Dir = filepath.Join(t.TempDir(), fixture.id)
+			case "mismatched-id":
+				link.ID = "different-plan"
+			case "foreign-root":
+				app.registry().(*fakeNoteRegistry).current.Root = root
+				app.registry().(*fakeNoteRegistry).repos[0].Root = root
+			case "foreign-directory":
+				app.registry().(*fakeNoteRegistry).plansDir = t.TempDir()
+			case "malformed":
+				if err := os.WriteFile(filepath.Join(fixture.dir, "state.json"), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "unhealthy":
+				app.RepoHealthCheck = func(context.Context, taodata.Repo) taodata.RepoHealth {
+					return taodata.RepoHealth{Error: true, Message: "missing repository"}
+				}
+			}
+			repo := app.noteRepository(meta)
+			item, err := repo.Create(context.Background(), "resume", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item, err = repo.PromoteToPlan(context.Background(), item.ID, link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				t.Fatal("regenerated linked note")
+				return nil, nil
+			})
+			old := executeSinglePlan
+			executeSinglePlan = func(run.Service, context.Context, run.Request) error { t.Fatal("executed invalid link"); return nil }
+			t.Cleanup(func() { executeSinglePlan = old })
+			if err := app.Run(context.Background(), []string{"note", "run", item.ID}); ExitCode(err) != NoteRunInfrastructure {
+				t.Fatalf("outcome: %v", err)
+			}
+			stored, err := repo.Get(context.Background(), item.ID)
+			if err != nil || !reflect.DeepEqual(item, stored) {
+				t.Fatalf("mutated link: %+v, %v", stored, err)
+			}
+		})
 	}
 }
 
@@ -1055,13 +1299,27 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 		return app, id, out
 	}
 
+	t.Run("nil generation result is infrastructure and leaves note open", func(t *testing.T) {
+		app, id, _ := newOpenNote(t)
+		app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+			return nil, nil
+		})
+		if err := app.Run(context.Background(), []string{"note", "run", id}); ExitCode(err) != NoteRunInfrastructure {
+			t.Fatalf("nil generator outcome: %v", err)
+		}
+		stored, err := app.noteRepository(repoMeta).Get(context.Background(), id)
+		if err != nil || stored.Status != note.StatusOpen {
+			t.Fatalf("nil generator linked note: %+v, %v", stored, err)
+		}
+	})
+
 	t.Run("generation failure leaves note open and recommends supervised planning", func(t *testing.T) {
 		app, id, _ := newOpenNote(t)
 		app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
 			return nil, &planning.GenerationError{Stage: planning.GenerationStageOpenQuestions, Err: errors.New("questions remain")}
 		})
 		err := app.Run(context.Background(), []string{"note", "run", id})
-		if err == nil || !strings.Contains(err.Error(), "supervised clarification") || !strings.Contains(err.Error(), "/tao-plan note:"+id) {
+		if ExitCode(err) != NoteRunPlanningRefusal || !strings.Contains(err.Error(), "supervised clarification") || !strings.Contains(err.Error(), "/tao-plan note:"+id) {
 			t.Fatalf("generation error = %v", err)
 		}
 		stored, _ := app.noteRepository(repoMeta).Get(context.Background(), id)
@@ -1073,6 +1331,7 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 	t.Run("warning output failure retains promotion and prevents regeneration", func(t *testing.T) {
 		app, id, out := newOpenNote(t)
 		fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+		alignNoteRunFixture(t, app, fixture.dir)
 		generated := 0
 		app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
 			generated++
@@ -1093,10 +1352,14 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 		}
 
 		app.Err = new(bytes.Buffer)
-		if err := app.Run(context.Background(), []string{"note", "run", id}); err != nil {
+		executions := 0
+		old := executeSinglePlan
+		executeSinglePlan = func(run.Service, context.Context, run.Request) error { executions++; return nil }
+		t.Cleanup(func() { executeSinglePlan = old })
+		if err := app.Run(context.Background(), []string{"note", "run", id}); ExitCode(err) != NoteRunNothingToDo {
 			t.Fatal(err)
 		}
-		if generated != 1 || !strings.Contains(out.String(), "Note already promoted to plan "+fixture.id) {
+		if generated != 1 || executions != 1 {
 			t.Fatalf("retry generated=%d output=%q", generated, out.String())
 		}
 	})
@@ -1104,6 +1367,7 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 	t.Run("link failure reports durable plan and never runs", func(t *testing.T) {
 		app, id, _ := newOpenNote(t)
 		fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+		alignNoteRunFixture(t, app, fixture.dir)
 		baseFactory := app.NoteRepository
 		app.NoteRepository = func(dir string, ref note.RepoReference) NoteRepository {
 			return &failingPlanPromotionRepository{Repository: baseFactory(dir, ref).(*note.Repository), err: errors.New("link failed")}
@@ -1125,6 +1389,7 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 	t.Run("approval stop retains promotion and normal remediation", func(t *testing.T) {
 		app, id, _ := newOpenNote(t)
 		fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+		alignNoteRunFixture(t, app, fixture.dir)
 		addApprovalGate(t, fixture.dir, "human approval")
 		app.Repository = func(string) Repository { return plan.NewFileRepository(filepath.Dir(fixture.dir)) }
 		app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
@@ -1191,7 +1456,7 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 			return nil, nil
 		})
 		err := app.Run(context.Background(), []string{"note", "run", id})
-		if err == nil || !strings.Contains(err.Error(), "reopen") || generated != 0 {
+		if ExitCode(err) != NoteRunNothingToDo || !strings.Contains(err.Error(), "/tao-plan") || generated != 0 {
 			t.Fatalf("archived error=%v generated=%d", err, generated)
 		}
 		app.RepoHealthCheck = func(context.Context, taodata.Repo) taodata.RepoHealth {
@@ -1317,6 +1582,7 @@ func TestNoteRunPlannerRouting(t *testing.T) {
 			app, meta, id, out, _ := noteRoutingTestApp(t)
 			t.Setenv("TAO_PLANNER_ROUTING", tc.mode)
 			fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+			alignNoteRunFixture(t, app, fixture.dir)
 			app.Repository = func(string) Repository { return plan.NewFileRepository(filepath.Dir(fixture.dir)) }
 			var planningKind runtimeconfig.AgentKind
 			app.PlanGenerator = planGeneratorFunc(func(_ context.Context, req planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
@@ -1345,8 +1611,8 @@ func TestNoteRunPlannerRouting(t *testing.T) {
 			if tc.override != "" {
 				args = append(args, "--planner-arm", tc.override)
 			}
-			if err := app.Run(context.Background(), args); err != nil {
-				t.Fatal(err)
+			if err := app.Run(context.Background(), args); ExitCode(err) != NoteRunNothingToDo {
+				t.Fatalf("nonterminal handoff outcome: %v", err)
 			}
 			records := noteRoutingRecords(t, app, meta)
 			if len(records) != 1 {
@@ -1482,6 +1748,7 @@ func TestNoteRunPlannerRoutingPostPlanFailure(t *testing.T) {
 			t.Run(mode+"/"+failure, func(t *testing.T) {
 				app, meta, id, _, errOut := noteRoutingTestApp(t)
 				fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+				alignNoteRunFixture(t, app, fixture.dir)
 				app.Repository = func(string) Repository { return plan.NewFileRepository(filepath.Dir(fixture.dir)) }
 				var routeID string
 				app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
@@ -1517,7 +1784,7 @@ func TestNoteRunPlannerRoutingPostPlanFailure(t *testing.T) {
 					if err == nil || !strings.Contains(err.Error(), "recover with tao route link "+routeID+" "+fixture.id) || !strings.Contains(err.Error(), fixture.dir) || executions != 0 {
 						t.Fatalf("error=%v executions=%d", err, executions)
 					}
-				} else if err != nil || executions != 1 || !strings.Contains(errOut.String(), "warning: planner routing ledger unavailable:") {
+				} else if ExitCode(err) != NoteRunNothingToDo || executions != 1 || !strings.Contains(errOut.String(), "warning: planner routing ledger unavailable:") {
 					t.Fatalf("error=%v executions=%d warnings=%s", err, executions, errOut)
 				}
 				if failure == "held lock" {

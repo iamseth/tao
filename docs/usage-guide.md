@@ -77,11 +77,51 @@ New notes are open. A plain `tao note` or `tao note list` shows open notes newes
 Choose the handoff based on ambiguity, not size alone:
 
 - **`/tao-plan note:<id> [optional context]`** is the default for anything that needs questions, tradeoffs, or scope decisions. Planning reads the open note as untrusted context without mutating it. When the work is clear, `/tao-slice` creates and validates a normal plan in the same registered repository, then archives the note with that plan link. A plan-linked archive is terminal and cannot be edited, reopened, or linked to another plan.
-- **`tao note run <id>`** is the unchanged explicit shortcut for a note that already states a complete, unambiguous change. Tao first generates and validates a normal plan and rejects unresolved open questions. Only then does it mark the note promoted and invoke the ordinary run lifecycle.
+- **`tao note run <id>`** generates a normal plan for an open note that already states a complete, unambiguous change. Tao validates the plan and rejects unresolved open questions before linking the note and invoking the ordinary run lifecycle. Repeating the command resumes an existing archived or legacy promoted plan link without regenerating, reopening, or changing its provenance. Missing, malformed, mismatched, or foreign-repository destinations are refused, never replaced or searched for in another repository.
 
-Historical notes promoted to planning sessions remain readable and are accepted by note-aware planning. Their planning-session provenance is preserved when validation links and archives them; Tao does not create new planning-session records. If linked archival fails after validation, retain the normal plan and use the exact recovery command reported by `/tao-slice`. Once direct generation produced and linked a valid plan, any approval stop, blocked slice, failed verification, review result, or later recovery belongs to that plan; resume it with the normal plan commands.
+Historical notes promoted to planning sessions remain readable and are accepted by note-aware planning. Their planning-session provenance is preserved when validation links and archives them; Tao does not create new planning-session records. If linked archival fails after validation, retain the normal plan and use the exact recovery command reported by `/tao-slice`. Once direct generation produced and linked a valid plan, any approval stop, blocked slice, failed verification, review result, or later recovery belongs to that plan; resume ordinary execution using the same note ID or the normal plan commands. Explicit recovery still requires the normal plan commands and their safety checks.
 
 Direct note execution is not a bypass. Generated slices still honor dependencies and approvals; execution still honors agent, permission, timeout, workspace, commit, and pull-request settings; and completed work still follows the normal review and merge safeguards. When in doubt, use `/tao-plan note:<id>`.
+
+### Note-run automation outcomes
+
+These exit codes apply **only to `tao note run`** (including `tao n r`):
+
+| Code | Outcome |
+| --- | --- |
+| 0 | Durable plan completion reached by this invocation |
+| 1 | Infrastructure or unclassified error |
+| 2 | Usage error |
+| 3 | Slice blocked |
+| 4 | Approval, review/merge, or scope decision required |
+| 5 | Planning refused: generated plan failed acceptance checks |
+| 6 | Nothing further to do; not a completion signal |
+
+Code 0 requires the existing durable completion evidence; a nil execution error,
+finishing slices, or `--no-review` is insufficient. Code 6 includes an
+already-completed destination, a manually archived note without a plan, a legacy
+planning-session-only note, and a nonterminal stop after `--max-slices` or no
+further executable work. **Code 6 can follow partial progress and is not
+completion.** Use `/tao-plan note:<id>` to continue supervised planning for notes
+without runnable links; malformed promoted provenance is an error instead.
+
+Planning rejection (5) leaves the note unlinked. Allocation, runtime transport,
+cancellation, and persistence failures remain errors (1). Actual execution
+errors take precedence over stale plan status; approval/scope decisions (4) take
+precedence over a generic blocker (3). Outcome inspection is read-only: it never
+authorizes recovery, marks completion, or bypasses admission, approval, review,
+or merge gates. Other commands retain their existing exit behavior.
+
+```sh
+rc=0
+tao note run "$note_id" --max-slices 1 || rc=$?
+case "$rc" in
+  0) echo 'Plan completed' ;;
+  3|4|5) echo 'Needs human attention' ;;
+  6) echo 'Inspect plan state; do not assume completion' ;;
+  *) echo "Invocation failed ($rc)" >&2 ;;
+esac
+```
 
 ### Planner routing for `tao note run`
 

@@ -17,9 +17,12 @@ func main() {
 
 func run(ctx context.Context, args []string, in io.Reader, out io.Writer, errOut io.Writer) int {
 	app := cli.App{In: in, Out: out, Err: errOut}
-	if err := app.Run(ctx, args); err != nil {
+	return reportExit(app.Run(ctx, args), errOut)
+}
+
+func reportExit(err error, errOut io.Writer) int {
+	if err != nil {
 		_, _ = fmt.Fprintln(errOut, err)
-		return 1
 	}
-	return 0
+	return cli.ExitCode(err)
 }

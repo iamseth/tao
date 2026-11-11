@@ -188,6 +188,44 @@ commands also accept the short unambiguous prefixes shown by help.
 | Settings | `config`, `completion`, `doctor`, `update` | Manage scoped preferences, configure shell support, diagnose setup, and update release binaries. |
 | Other | `version`, `slice-complete`, `slice-blocked` | Inspect the build or support Tao-managed agent lifecycle handoffs and compatibility. |
 
+### Repeatable note execution
+
+`tao note run <id>` generates and links a plan for an open note, or resumes its
+existing archived/promoted plan link without changing provenance. Missing,
+malformed, mismatched, or foreign-repository destinations are refused; Tao never
+searches another repository or generates a replacement. Ordinary run admission,
+approval, recovery, review, and merge safeguards remain unchanged.
+
+These exit codes apply **only to `tao note run`** (including `tao n r`):
+
+| Code | Outcome |
+| --- | --- |
+| 0 | Durable plan completion reached by this invocation |
+| 1 | Infrastructure or unclassified error |
+| 2 | Usage error |
+| 3 | Slice blocked |
+| 4 | Approval, review/merge, or scope decision required |
+| 5 | Planning refused: generated plan failed acceptance checks |
+| 6 | Nothing further to do; not a completion signal |
+
+Code 6 includes already-completed plans, unlinked archives, historical
+planning-session-only notes, and nonterminal stops such as `--max-slices`. It can
+follow partial progress. Finishing slices or using `--no-review` does not by itself
+mean completion. Exit reporting never authorizes recovery or marks completion.
+
+```sh
+rc=0
+tao note run "$note_id" --max-slices 1 || rc=$?
+case "$rc" in
+  0) echo 'Plan completed' ;;
+  3|4|5) echo 'Needs human attention' ;;
+  6) echo 'Inspect plan state; do not assume completion' ;;
+  *) echo "Invocation failed ($rc)" >&2 ;;
+esac
+```
+
+See the [note workflow](docs/usage-guide.md#decide-whether-to-capture-or-plan) for guidance.
+
 ### JSON discovery
 
 Use `tao list --active --json` or `tao note list --all --json` for read-only CLI
