@@ -1304,6 +1304,46 @@ func TestClientWaitsThroughCompactionBeforeAgentEnd(t *testing.T) {
 	}
 }
 
+func TestClientWaitsForContinuedRunBeyondSettledGrace(t *testing.T) {
+	for _, sendSettled := range []bool{true, false} {
+		name := "legacy grace"
+		if sendSettled {
+			name = "agent_settled"
+		}
+		t.Run(name, func(t *testing.T) {
+			const grace = 50 * time.Millisecond
+			proc := newFakeProcess(t)
+			go func() {
+				defer proc.finish()
+				_, _ = proc.readCommand()
+				proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[]}}`)
+				proc.writeEvent(`{"type":"agent_end","willRetry":false,"session_id":"previous"}`)
+				proc.writeEvent(`{"type":"agent_start"}`)
+				// A continuation is active longer than the previous run's grace.
+				time.Sleep(4 * grace)
+				proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"continued"}]}}`)
+				proc.writeEvent(`{"type":"agent_end","willRetry":false,"session_id":"continued-1"}`)
+				if sendSettled {
+					proc.writeEvent(`{"type":"agent_settled"}`)
+				}
+				// Without agent_settled, the new terminal end must reopen grace.
+				drainStdin(proc)
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			client := Client{SettledGrace: grace, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+			result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.FinalText != "continued" || result.SessionID != "continued-1" {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
+	}
+}
+
 func TestClientKeepsWaitingWhenAgentEndWillRetry(t *testing.T) {
 	proc := newFakeProcess(t)
 	go func() {

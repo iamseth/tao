@@ -124,7 +124,8 @@ func (s *session) queuedResult() Result {
 // (willRetry false, no queued steer) therefore opens a bounded settling wait:
 // agent_settled or a cleanly closed stdout ends it as success, a further
 // terminal agent_end restarts the grace, and expiry returns the agent_end
-// result so peers that never send agent_settled still terminate. Compaction
+// result so peers that never send agent_settled still terminate. A new
+// agent_start cancels the grace until that run's terminal agent_end. Compaction
 // suspends the grace until compaction_end reports that no retry is pending;
 // the session context continues to bound recovery.
 func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
@@ -196,6 +197,14 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 			result.FinalText = text
 		}
 		switch jsonmap.EventType(event) {
+		case "agent_start":
+			// Extensions and queued messages can continue after a terminal end.
+			// The previous run's grace must not settle active work.
+			settlingSuspended = false
+			if settling != nil {
+				settling.Stop()
+				settling = nil
+			}
 		case "compaction_start":
 			// Summarization can outlast the legacy-peer settling grace.
 			if settling != nil {
