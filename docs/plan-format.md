@@ -473,6 +473,26 @@ CLI commands accept exact plan IDs, unique ID prefixes, and unique slug or slug-
 
 ## Validation
 
+`slice_coupled_file_missing` is a warning-only finding from plan validation and
+selected-slice preflight. A deterministic built-in table links CLI Go files to
+completion fixtures, runtime-config Go files to configuration documentation,
+insights Go files to the nine insights fixtures, lifecycle/artifact models to
+clone maintenance, and artifact changesets to artifact-file lowering. Matches
+are conservative path hints, not proof of semantic necessity. Only concrete safe
+expected paths trigger proposals, and targets must be existing readable regular
+files confined to the effective validation root (escaping symlinks are rejected).
+Missing targets and repositories without those targets stay quiet. Current slice
+scope and applicable future-file allowances suppress suggestions; dependencies
+apply at both entrypoints, while serial-earlier allowances apply only to plan-wide
+validation. Unrelated slices do not suppress suggestions.
+
+Each affected slice receives one sorted, deduplicated proposal with one copyable
+`tao edit amend PLAN SLICE --allow-file PATH ... --mechanical REASON` command.
+Validation never executes it or changes artifacts. Explicit acceptance retains
+the existing amendment lock and may be refused while a run owns the plan lock.
+Warnings and their run-context counts are diagnostic only: they grant no scope,
+lifecycle, recovery, approval, or merge authority.
+
 Plan loading should validate consistency without making list views brittle:
 
 - `state.json` and `slices.json` are required.

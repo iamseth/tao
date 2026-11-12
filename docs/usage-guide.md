@@ -900,8 +900,16 @@ ordinary judgement amendment, retain `--reason-file FILE` and the appropriate
 contract-edit flags instead. Both forms preserve blocked status and blocker notes;
 resume explicitly when appropriate. Mechanical classification is diagnostic, not
 proof of correctness: review gates, run-side Plan-Owned Files policy, leak-guard
-attribution, verification, approval, and merge evidence remain unchanged. Tao does
-not automatically propose or add coupled files.
+attribution, verification, approval, and merge evidence remain unchanged.
+Validation and selected-slice preflight may warn with `slice_coupled_file_missing`
+and propose one `tao edit amend --allow-file ... --mechanical ...` command.
+These conservative path hints do not prove semantic necessity. Only existing,
+readable regular targets confined to the effective validation root are suggested;
+current scope and applicable dependency/serial future-file allowances suppress
+suggestions (serial-earlier allowances apply to plan validation, not preflight).
+Review the proposal and explicitly accept it through the existing lock-protected
+amendment command, which may refuse while a run owns the plan lock. Nothing is
+automatically added, and warnings grant no scope or lifecycle authority.
 
 **Supply later observations separately from approval.** Put facts in the slice
 contract or a concrete `required_inputs` file available in the execution worktree.

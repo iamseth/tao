@@ -86,6 +86,13 @@ If evidence or authorization is missing, report it and use `None` instead.
    `tao edit amend <plan> <slice> --reason-file FILE --allow-file PATH --add-task 'Owner ruling (<date>): ...'`
    using the exact authorized path, current date, and actual ruling. Do not
    fabricate authorization or silently weaken verification.
+   For an explicitly authorized, pure fixture or coupled documentation-table
+   scope addition, prefer `tao edit amend <plan> <slice> --allow-file PATH --mechanical 'REASON'`
+   (repeat `--allow-file` as needed), without `--reason-file` or task edits.
+   A `slice_coupled_file_missing` proposal is only a conservative, existence-gated
+   hint, not authorization; applicable scope allowances already suppress it.
+   Acceptance retains the plan lock and may refuse during a run. It grants no
+   automatic scope, lifecycle, leak-guard, review, or merge exception.
    Using `--replace-verification-command OLD --with NEW` requires a real owner ruling quoted in the reason file; the replacement must check the same behavior, and you must ask the operator when no ruling exists.
    When asking the operator for an owner ruling, quote the finding's scope-expansion decision block.
    Recommend: `tao run --continue <plan>`.

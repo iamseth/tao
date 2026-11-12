@@ -57,6 +57,7 @@ func ValidatePlanVerification(detail *PlanDetail) VerificationValidationResult {
 				}
 			}
 		}
+		result.Findings = append(result.Findings, validateCoupledFiles(detail, slice, detail.State.Repo.Root, allowances[slice.ID])...)
 		result.Findings = append(result.Findings, validateApprovalContract(slice)...)
 		result.Findings = append(result.Findings, validateCheckoutConfinement(slice)...)
 		result.Findings = append(result.Findings, validateRequiredInputs(detail, slice, detail.State.Repo.Root, false)...)
@@ -86,6 +87,7 @@ func ValidateSelectedSliceVerificationAtRoot(detail *PlanDetail, repoRoot string
 	allowances := futureFileAllowancesAtRoot(detail, false, validationRoot)
 	findings := validateRequiredInputs(detail, *lifecycle.NextSlice, validationRoot, true)
 	findings = append(findings, validateSliceVerification(validationRoot, *lifecycle.NextSlice, allowances[lifecycle.NextSlice.ID])...)
+	findings = append(findings, validateCoupledFiles(detail, *lifecycle.NextSlice, validationRoot, allowances[lifecycle.NextSlice.ID])...)
 	findings = append(findings, validateSelectedSliceGuardrails(detail)...)
 	return VerificationValidationResult{Findings: findings}
 }

@@ -15,6 +15,87 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 )
 
+func TestValidateCoupledFilesLeavesArtifactsUnchanged(t *testing.T) {
+	fixture := newRunPlanFixture(t, plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending)
+	root := t.TempDir()
+	target := filepath.Join(root, "docs/configuration.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var state plan.State
+	if err := json.Unmarshal([]byte(readText(t, filepath.Join(fixture.dir, "state.json"))), &state); err != nil {
+		t.Fatal(err)
+	}
+	state.Repo.Root = root
+	var file plan.SlicesFile
+	if err := json.Unmarshal([]byte(readText(t, filepath.Join(fixture.dir, "slices.json"))), &file); err != nil {
+		t.Fatal(err)
+	}
+	file.Slices[0].ExpectedFiles = []string{"internal/runtimeconfig/example.go"}
+	file.Slices[0].Verification.Commands = []string{"go version"}
+	for name, value := range map[string]any{"state.json": state, "slices.json": file} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fixture.dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := map[string]string{}
+	for _, name := range []string{"state.json", "slices.json", "events.jsonl"} {
+		before[name] = readText(t, filepath.Join(fixture.dir, name))
+	}
+	var out bytes.Buffer
+	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"--plans-dir", fixture.root, "validate", fixture.id}); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "--allow-file docs/configuration.md --mechanical") {
+		t.Fatal(out.String())
+	}
+	for name, content := range before {
+		if readText(t, filepath.Join(fixture.dir, name)) != content {
+			t.Fatalf("mutated %s", name)
+		}
+	}
+	if readText(t, target) != "unchanged" {
+		t.Fatal("mutated target")
+	}
+}
+
+func TestValidateCoupledFilesGolden(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "internal/cli/testdata/zsh_completion.golden")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detail := validatePlanDetail(root, []string{"go version"}, nil)
+	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/cli/example.go"}
+	before, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	repo := fakeRepository{details: map[string]*plan.PlanDetail{"example": detail}}
+	if err := (newTestApp(App{Out: &out, Err: &out, Repository: func(string) Repository { return repo }})).Run(context.Background(), []string{"validate", "example"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || readText(t, target) != "unchanged" {
+		t.Fatal("validation mutated artifacts")
+	}
+	assertGolden(t, "testdata/coupled_files_validation.golden", out.Bytes())
+}
+
 func TestValidateSliceTimingGolden(t *testing.T) {
 	for _, evidence := range []bool{false, true} {
 		t.Run(map[bool]string{false: "without evidence", true: "matching evidence"}[evidence], func(t *testing.T) {

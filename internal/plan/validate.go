@@ -3,12 +3,102 @@ package plan
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/iamseth/tao/internal/verifydetect"
 )
+
+// coupledFileRules are conservative path hints, not evidence of semantic necessity.
+var coupledFileRules = []struct {
+	pattern string
+	targets []string
+}{
+	{"internal/cli/*.go", []string{"internal/cli/testdata/zsh_completion.golden"}},
+	{"internal/runtimeconfig/*.go", []string{"docs/configuration.md"}},
+	{"internal/insights/*.go", coupledInsightsFixtures},
+	{"internal/cli/insights*.go", coupledInsightsFixtures},
+	{"internal/plan/lifecycle_models.go", []string{"internal/plan/clone.go"}},
+	{"internal/plan/artifact_models.go", []string{"internal/plan/clone.go"}},
+	{"internal/plan/artifact_changeset.go", []string{"internal/plan/artifact_files.go"}},
+}
+
+var coupledInsightsFixtures = []string{
+	"internal/cli/testdata/insights/all-repositories-digest.golden",
+	"internal/cli/testdata/insights/all-repositories-report.golden",
+	"internal/cli/testdata/insights/all-repositories-scorecard.golden",
+	"internal/cli/testdata/insights/all-repositories-trend.golden",
+	"internal/cli/testdata/insights/repository-digest.golden",
+	"internal/cli/testdata/insights/repository-report.golden",
+	"internal/cli/testdata/insights/repository-scorecard.golden",
+	"internal/cli/testdata/insights/repository-trend-json.golden",
+	"internal/cli/testdata/insights/repository-trend.golden",
+}
+
+func validateCoupledFiles(detail *PlanDetail, slice Slice, validationRoot string, allowances futureFileSet) []VerificationFinding {
+	if strings.TrimSpace(validationRoot) == "" {
+		return nil
+	}
+	root, err := filepath.EvalSymlinks(validationRoot)
+	if err != nil {
+		return nil
+	}
+	listed := make(futureFileSet)
+	addExpectedFutureFiles(listed, validationRoot, slice.ExpectedFiles)
+	var missing []string
+	for _, expected := range slice.ExpectedFiles {
+		if !concreteExpectedFutureFile(expected) || !safeCoupledPath(expected) {
+			continue
+		}
+		for _, rule := range coupledFileRules {
+			matched, _ := path.Match(rule.pattern, expected)
+			if !matched {
+				continue
+			}
+			for _, target := range rule.targets {
+				if listed.contains(validationRoot, target) || allowances.contains(validationRoot, target) {
+					continue
+				}
+				resolved, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(target)))
+				if err != nil {
+					continue
+				}
+				if _, safe := normalizePathUnderRepo(root, resolved); !safe {
+					continue
+				}
+				info, err := os.Stat(resolved)
+				if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o444 == 0 {
+					continue
+				}
+				file, err := os.Open(resolved)
+				if err != nil {
+					continue
+				}
+				_ = file.Close()
+				missing = append(missing, target)
+			}
+		}
+	}
+	slices.Sort(missing)
+	missing = slices.Compact(missing)
+	if len(missing) == 0 {
+		return nil
+	}
+	command := "tao edit amend " + shellQuoteActionArg(detail.State.Plan.ID) + " " + shellQuoteActionArg(slice.ID)
+	for _, target := range missing {
+		command += " --allow-file " + shellQuoteActionArg(target)
+	}
+	command += " --mechanical " + shellQuoteActionArg("Synchronize known coupled files")
+	return []VerificationFinding{{Severity: VerificationFindingWarning, SliceID: slice.ID, Code: "slice_coupled_file_missing",
+		Message: "Known coupled files missing from slice scope: " + strings.Join(missing, ", ") + ". Conservative path hints do not prove semantic necessity. No scope change is applied; explicit acceptance uses the lock-protected command (may be refused while a run owns the plan lock): " + command}}
+}
+
+func safeCoupledPath(value string) bool {
+	return !filepath.IsAbs(value) && path.Clean(value) == value && value != "." && value != ".." && !strings.HasPrefix(value, "../") && !strings.ContainsAny(value, "\\\x00\r\n")
+}
 
 // requiredPlanningBriefSections names only navigation-level sections; detailed plan
 // artifact schema remains documented in docs/plan-format.md.

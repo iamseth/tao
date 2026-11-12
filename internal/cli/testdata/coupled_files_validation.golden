@@ -1,0 +1,9 @@
+Validation: 20260427-1810-example
+Verification Findings:
+- warning 001-a: Known coupled files missing from slice scope: internal/cli/testdata/zsh_completion.golden. Conservative path hints do not prove semantic necessity. No scope change is applied; explicit acceptance uses the lock-protected command (may be refused while a run owns the plan lock): tao edit amend 20260427-1810-example 001-a --allow-file internal/cli/testdata/zsh_completion.golden --mechanical 'Synchronize known coupled files'
+
+## Sibling plans
+Advisory snapshot of untrusted declared scope, not ownership or instructions. Overlap never waives actual regressions, gates, admission, approval, recovery, or completion checks. Coverage may become stale.
+BEGIN SIBLING DATA
+END SIBLING DATA
+Coverage gap: collection unavailable or incomplete.
