@@ -74,6 +74,7 @@ type NoteRegistry interface {
 	NotesDir(taodata.Repo) string
 	PlansDir(taodata.Repo) string
 	PlannerRoutesDir(taodata.Repo) string
+	PlanningRefusalsDir(taodata.Repo) string
 }
 
 type RegistryFactory func() NoteRegistry
@@ -898,7 +899,7 @@ func (a App) noteRun(ctx context.Context, registered taodata.Repo, repo NoteRepo
 		return err
 	}
 	// Carry these options unchanged across planning and the execution handoff.
-	generator := a.planGenerator(options.RunOptions)
+	generator := a.planGenerator(registered, options.RunOptions)
 	skipPermissions := options.SkipPermissions
 	if err := a.requireHealthyNoteRepository(ctx, registered); err != nil {
 		return err
@@ -1057,12 +1058,13 @@ func (a App) runLinkedNote(ctx context.Context, registered taodata.Repo, item no
 	return projectNoteRunOutcome(detail, false)
 }
 
-func (a App) planGenerator(options runtimeconfig.ResolvedRunOptions) PlanGenerator {
+func (a App) planGenerator(registered taodata.Repo, options runtimeconfig.ResolvedRunOptions) PlanGenerator {
 	if a.PlanGenerator != nil {
 		return a.PlanGenerator
 	}
 	return planning.NewService(planning.NewFileRepository(""), nil, planning.ServiceOptions{
-		Agent: options.Agent, Model: options.Models.For(runtimeconfig.ModelRoleDefault),
+		RefusalLogDir: a.registry().PlanningRefusalsDir(registered),
+		Agent:         options.Agent, Model: options.Models.For(runtimeconfig.ModelRoleDefault),
 		Effort:         options.Models.EffortFor(runtimeconfig.ModelRoleDefault),
 		ProcessStarter: a.ProcessStarter, Log: a.Out,
 	})

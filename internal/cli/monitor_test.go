@@ -66,6 +66,7 @@ func (monitorRegistryStub) ReadRepo(string) (taodata.Repo, error)         { retu
 func (monitorRegistryStub) ListRepos() ([]taodata.Repo, error)            { return nil, nil }
 func (monitorRegistryStub) NotesDir(taodata.Repo) string                  { return "" }
 func (monitorRegistryStub) PlansDir(taodata.Repo) string                  { return "" }
+func (monitorRegistryStub) PlanningRefusalsDir(taodata.Repo) string       { return "" }
 func (monitorRegistryStub) PlannerRoutesDir(taodata.Repo) string          { return "" }
 
 func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {

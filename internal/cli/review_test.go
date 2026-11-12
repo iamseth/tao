@@ -475,7 +475,7 @@ func TestAuxiliaryGeneratorsInheritBaseModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generator := app.planGenerator(config.ResolvedOptions())
+	generator := app.planGenerator(taodata.Repo{}, config.ResolvedOptions())
 	if got := generator.(*planning.Service).Model; got != "provider/base" {
 		t.Fatalf("planning model = %q", got)
 	}

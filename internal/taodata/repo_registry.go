@@ -433,6 +433,12 @@ func (r Registry) PlansDir(repo Repo) string {
 	return filepath.Join(r.DataHome, "repos", repo.ID, "plans")
 }
 
+// PlanningRefusalsDir returns a local, bounded, diagnostic-only sibling of
+// plans, never read by plan loaders.
+func (r Registry) PlanningRefusalsDir(repo Repo) string {
+	return filepath.Join(r.DataHome, "repos", repo.ID, "planning-refusals")
+}
+
 // PlannerRoutesDir returns the repository-scoped routing ledger directory. It
 // is a sibling of plans and never a plan artifact.
 func (r Registry) PlannerRoutesDir(repo Repo) string {

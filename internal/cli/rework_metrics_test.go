@@ -257,6 +257,7 @@ func reworkMetricsProcessStarter(t *testing.T, provider, outcome string, provide
 			}
 			proc.writeEvent(`{"type":"message","role":"assistant","text":` + strconv.Quote(text) + `}`)
 			proc.writeEvent(`{"type":"agent_end","session_id":"triage-session"}`)
+			proc.writeEvent(`{"type":"agent_settled"}`)
 			if _, err := proc.readCommand(); err != nil {
 				return
 			}

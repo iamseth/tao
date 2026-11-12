@@ -359,7 +359,7 @@ func TestAdaptersMeasurementPresence(t *testing.T) {
 					if provider == "pi" {
 						_ = proc.readCommand()
 						if tt.name == "complete" || tt.name == "zero" {
-							proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","usage":{"input":99,"output":99,"totalTokens":198,"cost":{"total":9}}}}`)
+							proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}],"usage":{"input":99,"output":99,"totalTokens":198,"cost":{"total":9}}}}`)
 						}
 						proc.writeEvent(`{"type":"agent_end"}`)
 						_ = proc.readCommand()

@@ -9,6 +9,7 @@ import (
 )
 
 type ServiceOptions struct {
+	RefusalLogDir  string
 	EventAppender  plan.EventAppender
 	Agent          runtimeconfig.AgentKind
 	Model          string
@@ -18,6 +19,7 @@ type ServiceOptions struct {
 }
 
 type Service struct {
+	RefusalLogDir  string
 	EventAppender  plan.EventAppender
 	Repo           SliceRepository
 	Runtime        agent.Runtime
@@ -29,7 +31,7 @@ type Service struct {
 }
 
 func NewService(repo SliceRepository, runtime agent.Runtime, options ServiceOptions) *Service {
-	return &Service{Repo: repo, Runtime: runtime, AgentKind: options.Agent, Model: options.Model, Effort: options.Effort, ProcessStarter: options.ProcessStarter, Log: options.Log, EventAppender: options.EventAppender}
+	return &Service{RefusalLogDir: options.RefusalLogDir, Repo: repo, Runtime: runtime, AgentKind: options.Agent, Model: options.Model, Effort: options.Effort, ProcessStarter: options.ProcessStarter, Log: options.Log, EventAppender: options.EventAppender}
 }
 
 // runtimeFor prefers an injected Runtime, then the requested kind, then the

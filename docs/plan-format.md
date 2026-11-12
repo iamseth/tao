@@ -44,7 +44,8 @@ If none of those environment values is available, the final fallback is the rela
 <data-home>/
 └── repos/<repo-id>/
     ├── plans/<plan-id>/
-    └── planner-routes/<route-id>.json
+    ├── planner-routes/<route-id>.json
+    └── planning-refusals/<plan-id>.log
 ```
 
 Normal CLI commands default to the current repository's plan scope. `tao repo list`, `tao repo show <repo-id>`, and `tao repo doctor` inspect the centralized repository registry without mutating repositories. Runtime commands can still read plans from `--plans-dir DIR` or from an explicit plan path when a caller intentionally opts out of the default scope.
@@ -56,6 +57,8 @@ Plan loaders validate plan-directory artifacts and must not depend on unrelated 
 attempts, and exact plan links separately from plan artifacts. It is
 non-authoritative: never lifecycle or recovery evidence, never copied into plan
 state, plan events, or merge-batch telemetry. Plan loaders never read it.
+
+`planning-refusals/<plan-id>.log` preserves a refused planning session's bounded (4 MiB), local-only diagnostic log outside the deleted allocation; it is never lifecycle or recovery evidence and plan loaders never read it.
 
 ## File Contract
 

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/iamseth/tao/internal/agent/jsonmap"
 	"github.com/iamseth/tao/internal/agent/logrecord"
@@ -37,12 +38,20 @@ type session struct {
 	warningWriteDone       chan struct{}
 	warningWritten         chan struct{}
 	warningQueuePending    bool
+	settledGrace           time.Duration
+	// Last observed assistant message_end, recorded for diagnostics and for
+	// later classification of a settled run; never authority on its own.
+	lastAssistantStop      string
+	lastAssistantHasText   bool
+	lastAssistantToolCalls int
+	assistantTurnObserved  bool
 }
 
-func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificationCommands []string) *session {
+func newSession(proc Process, log io.Writer, noProgressToolLimit int, verificationCommands []string, settledGrace time.Duration) *session {
 	s := &session{
 		proc:                   proc,
 		stdin:                  proc.Stdin(),
+		settledGrace:           settledGrace,
 		events:                 make(chan readResult),
 		stopEvents:             make(chan struct{}),
 		readerDone:             make(chan struct{}),
@@ -89,6 +98,7 @@ func (s *session) queuedResult() Result {
 	var result Result
 	for _, event := range s.queuedEvents {
 		collectMessageMetrics(event, &result)
+		s.observeAgentEvent(event)
 		if err := s.logAgentEvent(event); err != nil {
 			s.logPiError(err)
 		}
@@ -108,11 +118,39 @@ func (s *session) queuedResult() Result {
 	return result
 }
 
+// waitForAgentEnd returns once the agent run has settled. Pi emits agent_end
+// after every low-level run, including one it will retry or compact away, and
+// agent_settled only after that recovery finishes. A terminal agent_end
+// (willRetry false, no queued steer) therefore opens a bounded settling wait:
+// agent_settled or a cleanly closed stdout ends it as success, a further
+// terminal agent_end restarts the grace, and expiry returns the agent_end
+// result so peers that never send agent_settled still terminate. Compaction
+// suspends the grace until compaction_end reports that no retry is pending;
+// the session context continues to bound recovery.
 func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 	defer s.finishWarning()
 	var result Result
+	var settling *time.Timer
+	var settlingSuspended bool
+	defer func() {
+		if settling != nil {
+			settling.Stop()
+		}
+	}()
 	for {
-		event, err := s.next(ctx)
+		var deadline <-chan time.Time
+		if settling != nil {
+			deadline = settling.C
+		}
+		event, expired, closed, err := s.nextSettling(ctx, deadline)
+		if expired {
+			s.logDiagnostic(fmt.Sprintf("tao pi: no agent_settled within %s of agent_end; treating the run as settled", s.settledGrace))
+			return s.settled(result)
+		}
+		if closed {
+			s.logDiagnostic("tao pi: stdout closed after agent_end; treating the run as settled")
+			return s.settled(result)
+		}
 		if err != nil {
 			return Result{Metrics: result.Metrics}, err
 		}
@@ -141,6 +179,7 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 		if err := s.handleUIRequest(ctx, event); err != nil {
 			return Result{Metrics: result.Metrics}, err
 		}
+		s.observeAgentEvent(event)
 		if err := agentEventError(event); err != nil {
 			s.logPiError(err)
 			return result, err
@@ -156,20 +195,166 @@ func (s *session) waitForAgentEnd(ctx context.Context) (Result, error) {
 			result.Output += text
 			result.FinalText = text
 		}
-		if jsonmap.EventType(event) == "agent_end" {
+		switch jsonmap.EventType(event) {
+		case "compaction_start":
+			// Summarization can outlast the legacy-peer settling grace.
+			if settling != nil {
+				settlingSuspended = true
+				settling.Stop()
+				settling = nil
+			}
+		case "compaction_end":
+			// Pre-turn compaction must not open a wait before agent_end.
+			if settlingSuspended && !boolField(event, "willRetry", "will_retry") && !s.warningQueuePending {
+				if settling == nil {
+					settling = time.NewTimer(s.settledGrace)
+				} else {
+					settling.Reset(s.settledGrace)
+				}
+			}
+			settlingSuspended = false
+		case "agent_end":
+			settlingSuspended = false
 			result.SessionID = jsonmap.String(event, "session_id")
 			result.State = event
-			// A queued steer can start another low-level run after agent_end.
-			// Wait only while the observed queue still has work; after delivery,
-			// the next agent_end suffices even for peers without agent_settled.
-			if !s.warningQueuePending {
-				return result, nil
+			// Pi may still retry this run, and a queued steer can start another
+			// low-level run after agent_end. Neither is terminal; otherwise open
+			// or restart the bounded settling wait.
+			if boolField(event, "willRetry", "will_retry") || s.warningQueuePending {
+				if settling != nil {
+					settling.Stop()
+					settling = nil
+				}
+				continue
 			}
-		}
-		if jsonmap.EventType(event) == "agent_settled" {
-			return result, nil
+			if settling == nil {
+				settling = time.NewTimer(s.settledGrace)
+			} else {
+				settling.Stop()
+				settling.Reset(s.settledGrace)
+			}
+		case "agent_settled":
+			return s.settled(result)
 		}
 	}
+}
+
+// settled finalizes a settled run: the Result keeps its metrics, session ID,
+// and state, and the returned error is the typed outcome of the final
+// assistant turn, if any. The classification is a session outcome only, never
+// lifecycle or recovery authority.
+func (s *session) settled(result Result) (Result, error) {
+	err := s.settledOutcomeError()
+	if err != nil {
+		s.logPiError(err)
+	}
+	return result, err
+}
+
+// settledOutcomeError classifies the last observed assistant turn of a settled
+// run. A turn that stopped with length or aborted, or that produced neither
+// text nor tool calls, means Pi settled without usable output; this is a
+// retryable session failure that reuses the transport-failure marker so the
+// run path's existing retry policy applies. Nothing is classified until an
+// assistant message_end was observed, so streams that only emit agent_end
+// (readiness probes and legacy fakes) still succeed.
+func (s *session) settledOutcomeError() error {
+	if !s.assistantTurnObserved {
+		return nil
+	}
+	truncated := s.lastAssistantStop == "length" || s.lastAssistantStop == "aborted"
+	empty := !s.lastAssistantHasText && s.lastAssistantToolCalls == 0
+	if !truncated && !empty {
+		return nil
+	}
+	stop := s.lastAssistantStop
+	if stop == "" || stop == "unknown" {
+		stop = "stop"
+	}
+	return retryableTransportError{err: fmt.Errorf("pi agent error: final assistant turn stopped with %s and produced no usable output", stop)}
+}
+
+// nextSettling is next with an optional settling deadline. Without a deadline
+// it is exactly next. With one, it reports expired when the deadline fires
+// before another event and closed when stdout ends (a peer that exits cleanly
+// after agent_end has nothing more to send). Already-observed events always
+// take precedence over the deadline so cancellation, errors, and terminal
+// events are never delayed by the grace, and a due warning is never sent
+// because a terminal agent_end leaves no run to steer.
+func (s *session) nextSettling(ctx context.Context, deadline <-chan time.Time) (ev event, expired bool, closed bool, err error) {
+	if deadline == nil || len(s.queuedEvents) > 0 {
+		ev, err = s.next(ctx)
+		return ev, false, false, err
+	}
+	for {
+		if ctx.Err() != nil {
+			return nil, false, false, s.abort(ctx.Err())
+		}
+		select {
+		case result, ok := <-s.events:
+			return settlingTransportResult(result, ok)
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false, false, s.abort(ctx.Err())
+		case result, ok := <-s.events:
+			return settlingTransportResult(result, ok)
+		case <-deadline:
+			return nil, true, false, nil
+		}
+	}
+}
+
+func settlingTransportResult(result readResult, ok bool) (event, bool, bool, error) {
+	if !ok {
+		return nil, false, true, nil
+	}
+	ev, err := transportResult(result, ok)
+	return ev, false, false, err
+}
+
+// observeAgentEvent records diagnostic facts about assistant turns and run
+// boundaries. It writes log records only; nothing here is lifecycle authority.
+func (s *session) observeAgentEvent(event event) {
+	switch jsonmap.EventType(event) {
+	case "message_end":
+		message, ok := event["message"].(map[string]any)
+		if !ok || jsonmap.String(message, "role") != "assistant" {
+			return
+		}
+		stop := jsonmap.FirstString(message, "stopReason", "stop_reason")
+		if stop == "" {
+			stop = "unknown"
+		}
+		text := contentText(message["content"])
+		calls := len(toolCalls(message["content"]))
+		s.assistantTurnObserved = true
+		s.lastAssistantStop = stop
+		s.lastAssistantHasText = text != ""
+		s.lastAssistantToolCalls = calls
+		s.logDiagnostic(fmt.Sprintf("tao pi: assistant message stopped with %s (text=%d chars, tool_calls=%d)", stop, len(text), calls))
+	case "agent_end":
+		s.logDiagnostic(fmt.Sprintf("tao pi: agent_end (willRetry=%t)", boolField(event, "willRetry", "will_retry")))
+	case "agent_settled":
+		s.logDiagnostic(fmt.Sprintf("tao pi: agent_settled (aborted=%t)", boolField(event, "aborted")))
+	}
+}
+
+func (s *session) logDiagnostic(content string) {
+	if s.log == nil {
+		return
+	}
+	_ = logrecord.Write(s.log, logrecord.Record{Type: logrecord.TypeDiagnostic, Content: content})
+}
+
+func boolField(values map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := values[key].(bool); ok {
+			return value
+		}
+	}
+	return false
 }
 
 func (s *session) logAgentEvent(event event) error {

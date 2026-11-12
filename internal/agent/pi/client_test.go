@@ -75,7 +75,8 @@ func TestClientRunsFreshSessionAndCollectsStateAndStats(t *testing.T) {
 
 	var log lockedBuffer
 	client := Client{
-		Log: &log,
+		Log:          &log,
+		SettledGrace: 50 * time.Millisecond,
 		ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
 			gotCwd = cwd
 			gotName = name
@@ -318,7 +319,7 @@ func TestClientSessionInfoBestEffortDoesNotFailCompletedSession(t *testing.T) {
 		_, _ = proc.readCommand()
 		proc.writeEvent(`{"id":"2","type":"response","command":"get_state","success":false,"error":"state unavailable"}`)
 	}()
-	client := Client{ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
+	client := Client{SettledGrace: 50 * time.Millisecond, ProcessStarter: func(ctx context.Context, cwd string, name string, args []string) (Process, error) {
 		return proc, nil
 	}}
 
@@ -1027,7 +1028,7 @@ func TestClientWarningWaitsForAcceptanceAndSkipsEarlyTerminal(t *testing.T) {
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+			client := Client{SettledGrace: 50 * time.Millisecond, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
 			result, err := client.RunAgentSession(ctx, Request{Prompt: "work", WarningMessages: warnings})
 			if server := <-serverErr; server != nil {
 				t.Fatal(server)
@@ -1114,7 +1115,7 @@ func TestClientWarningStalledStdinDoesNotBlockCancellationOrTerminal(t *testing.
 				}
 				<-proc.done
 			}()
-			client := Client{ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
+			client := Client{SettledGrace: 50 * time.Millisecond, ProcessStarter: func(context.Context, string, string, []string) (Process, error) {
 				return stoppingFakeProcess{proc}, nil
 			}}
 			done := make(chan error, 1)
@@ -1224,9 +1225,281 @@ func (p *fakeProcess) readCommand() (map[string]any, error) {
 	}
 }
 
+// drainStdin consumes commands until the client closes stdin, so a fake can
+// keep stdout open without deadlocking against its own deferred finish.
+func drainStdin(p *fakeProcess) {
+	for {
+		if _, err := p.readCommand(); err != nil {
+			return
+		}
+	}
+}
+
 func (p *fakeProcess) writeEvent(line string) {
 	p.t.Helper()
 	if _, err := io.WriteString(p.stdoutWriter, line+"\n"); err != nil {
 		p.t.Fatal(err)
+	}
+}
+
+func TestClientWaitsForAgentSettledThroughCompactionRecovery(t *testing.T) {
+	proc := newFakeProcess(t)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[]}}`)
+		proc.writeEvent(`{"type":"agent_end","willRetry":false}`)
+		proc.writeEvent(`{"type":"compaction_start"}`)
+		time.Sleep(200 * time.Millisecond)
+		proc.writeEvent(`{"type":"compaction_end","willRetry":false}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"recovered"}]}}`)
+		proc.writeEvent(`{"type":"agent_end","session_id":"session-1"}`)
+		proc.writeEvent(`{"type":"agent_settled","aborted":false}`)
+		// Hold stdout open until the client closes stdin: agent_settled alone
+		// must terminate the wait.
+		drainStdin(proc)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var log lockedBuffer
+	client := Client{Log: &log, SettledGrace: 50 * time.Millisecond, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "recovered" || result.SessionID != "session-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	for _, want := range []string{"stopped with length (text=0 chars, tool_calls=0)", "stopped with stop (text=9 chars, tool_calls=0)", "agent_settled", "agent_end"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("expected %q in log, got %q", want, log.String())
+		}
+	}
+}
+
+func TestClientWaitsThroughCompactionBeforeAgentEnd(t *testing.T) {
+	proc := newFakeProcess(t)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"compaction_start"}`)
+		proc.writeEvent(`{"type":"compaction_end","willRetry":false}`)
+		time.Sleep(200 * time.Millisecond)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"final turn"}]}}`)
+		proc.writeEvent(`{"type":"agent_end","session_id":"session-1"}`)
+		proc.writeEvent(`{"type":"agent_settled"}`)
+		drainStdin(proc)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client := Client{SettledGrace: 50 * time.Millisecond, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "final turn" || result.SessionID != "session-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestClientKeepsWaitingWhenAgentEndWillRetry(t *testing.T) {
+	proc := newFakeProcess(t)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","content":[]}}`)
+		proc.writeEvent(`{"type":"agent_end","willRetry":true}`)
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"second turn"}]}}`)
+		proc.writeEvent(`{"type":"agent_end","willRetry":false}`)
+		proc.writeEvent(`{"type":"agent_settled"}`)
+		drainStdin(proc)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// A long grace proves that willRetry, not the timer, keeps the wait alive
+	// and that agent_settled, not the timer, ends it.
+	client := Client{SettledGrace: time.Minute, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "second turn" {
+		t.Fatalf("expected second turn text, got %+v", result)
+	}
+}
+
+func TestClientSettledGraceTerminatesPeersWithoutAgentSettled(t *testing.T) {
+	proc := newFakeProcess(t)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"legacy"}]}}`)
+		proc.writeEvent(`{"type":"agent_end","session_id":"legacy-1"}`)
+		// Keep stdout open without ever sending agent_settled.
+		drainStdin(proc)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client := Client{SettledGrace: 50 * time.Millisecond, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	start := time.Now()
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Fatalf("grace expiry took %v", elapsed)
+	}
+	if result.FinalText != "legacy" || result.SessionID != "legacy-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestClientClosedStdoutAfterAgentEndSettlesWithoutGrace(t *testing.T) {
+	proc := newFakeProcess(t)
+	go func() {
+		defer proc.finish()
+		_, _ = proc.readCommand()
+		proc.writeEvent(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"closed"}]}}`)
+		proc.writeEvent(`{"type":"agent_end","session_id":"closed-1"}`)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// The default grace is far longer than the test deadline, so success proves
+	// the closed stream, not the timer, settled the session.
+	client := Client{SettledGrace: time.Minute, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+	result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "closed" || result.SessionID != "closed-1" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestClientClassifiesSettledFinalTurnOutcome(t *testing.T) {
+	const usage = `"usage":{"input":11,"output":7,"totalTokens":18}`
+	cases := []struct {
+		name       string
+		events     []string
+		wantErr    string
+		wantOutput string
+	}{
+		{
+			name: "length stop with empty content is retryable",
+			events: []string{
+				`{"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[],` + usage + `}}`,
+				`{"type":"agent_end","session_id":"s-length"}`,
+				`{"type":"agent_settled"}`,
+			},
+			wantErr: "final assistant turn stopped with length and produced no usable output",
+		},
+		{
+			name: "aborted stop is retryable",
+			events: []string{
+				`{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","content":[],` + usage + `}}`,
+				`{"type":"agent_end","session_id":"s-aborted"}`,
+				`{"type":"agent_settled"}`,
+			},
+			wantErr: "final assistant turn stopped with aborted and produced no usable output",
+		},
+		{
+			name: "stop with no text and no tool calls is retryable",
+			events: []string{
+				`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[],` + usage + `}}`,
+				`{"type":"agent_end","session_id":"s-empty"}`,
+				`{"type":"agent_settled"}`,
+			},
+			wantErr: "final assistant turn stopped with stop and produced no usable output",
+		},
+		{
+			name: "stop with text succeeds",
+			events: []string{
+				`{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}],` + usage + `}}`,
+				`{"type":"agent_end","session_id":"s-text"}`,
+				`{"type":"agent_settled"}`,
+			},
+			wantOutput: "done",
+		},
+		{
+			name: "agent_end without any assistant message_end succeeds",
+			events: []string{
+				`{"type":"agent_end","session_id":"s-bare"}`,
+				`{"type":"agent_settled"}`,
+			},
+		},
+		{
+			name: "transport error keeps the existing classification",
+			events: []string{
+				`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"WebSocket closed 1006","diagnostics":[{"type":"provider_transport_failure","error":{"message":"WebSocket closed 1006"}}]}}`,
+			},
+			wantErr: "WebSocket closed 1006",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newFakeProcess(t)
+			go func() {
+				defer proc.finish()
+				_, _ = proc.readCommand()
+				for _, line := range tc.events {
+					proc.writeEvent(line)
+				}
+				drainStdin(proc)
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			var log lockedBuffer
+			client := Client{Log: &log, SettledGrace: time.Minute, ProcessStarter: func(context.Context, string, string, []string) (Process, error) { return proc, nil }}
+
+			result, err := client.RunAgentSession(ctx, Request{Prompt: "work"})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if result.FinalText != tc.wantOutput {
+					t.Fatalf("FinalText = %q, want %q", result.FinalText, tc.wantOutput)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, tc.wantErr)
+			}
+			var marker interface{ RetryableTransportFailure() }
+			if !errors.As(err, &marker) {
+				t.Fatalf("expected retryable classification, got %T: %v", err, err)
+			}
+			if !strings.Contains(log.String(), "tao pi error: pi agent error") {
+				t.Fatalf("expected diagnostic error line in log, got %q", log.String())
+			}
+			if !proc.killed {
+				t.Fatal("expected failed session to stop the Pi RPC process")
+			}
+			if strings.Contains(tc.name, "transport") {
+				return
+			}
+			if cause := errors.Unwrap(err); cause == nil || !strings.Contains(cause.Error(), tc.wantErr) {
+				t.Fatalf("expected descriptive unwrapped cause, got %v", cause)
+			}
+			if result.SessionID == "" {
+				t.Fatal("expected session ID to be preserved on the failed result")
+			}
+			if !strings.Contains(log.String(), tc.wantErr) {
+				t.Fatalf("expected outcome diagnostic in log, got %q", log.String())
+			}
+			if !strings.Contains(log.String(), "assistant message stopped with") {
+				t.Fatalf("expected stop-reason diagnostic in log, got %q", log.String())
+			}
+			if !result.Metrics.OutputTokensPresent || result.Metrics.OutputTokens != 7 || result.Metrics.TotalTokens != 18 {
+				t.Fatalf("expected metrics collected before the failure to be preserved, got %+v", result.Metrics)
+			}
+			if result.State == nil {
+				t.Fatal("expected agent_end state to be preserved on the failed result")
+			}
+		})
 	}
 }

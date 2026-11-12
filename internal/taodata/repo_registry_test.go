@@ -470,6 +470,9 @@ func TestListRepoPlanSourcesRetainsCatalogStoresWithoutRootsOrMetadata(t *testin
 	}
 	for _, source := range sources {
 		want := filepath.Join(dataHome, "repos", source.ID, "planner-routes")
+		if got, want := registry.PlanningRefusalsDir(Repo{ID: source.ID}), filepath.Join(registry.DataHome, "repos", source.ID, "planning-refusals"); got != want {
+			t.Fatalf("PlanningRefusalsDir = %q, want %q", got, want)
+		}
 		if got := registry.PlannerRoutesDir(Repo{ID: source.ID}); got != want {
 			t.Fatalf("PlannerRoutesDir = %q, want %q", got, want)
 		}

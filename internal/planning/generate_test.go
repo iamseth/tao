@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,225 @@ import (
 
 	"github.com/iamseth/tao/internal/testenv"
 )
+
+type planningRetryableError struct{}
+
+func (planningRetryableError) Error() string              { return "retryable planning failure" }
+func (planningRetryableError) RetryableTransportFailure() {}
+
+func TestGeneratePlanSingleRetry(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, mode := range []string{"success", "exhausted", "partial", "plain", "canceled", "timeout"} {
+		t.Run(mode, func(t *testing.T) {
+			meta, store := newPlanningServiceTestRepo(t)
+			session, err := NewSession("retry-test", "Retry", "Implement work", meta, nil, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			var firstPrompt string
+			var progress strings.Builder
+			stub := &sliceAgentStub{run: func(s agent.Session) (agent.SessionResult, error) {
+				calls++
+				if calls == 1 {
+					firstPrompt = s.Prompt
+				} else if s.Prompt != firstPrompt {
+					t.Fatal("retry changed prompt")
+				}
+				_, _ = s.Log.Write([]byte("attempt " + strconv.Itoa(calls) + "\n"))
+				dir := noteSlicePlanDirFromPrompt(t, s.Prompt)
+				if mode == "success" && calls == 2 {
+					writeGeneratedPlan(t, dir, filepath.Base(dir), meta.Root, false)
+					return agent.SessionResult{FinalText: "retried successfully"}, nil
+				}
+				if mode == "partial" {
+					if err := os.WriteFile(filepath.Join(dir, "partial.md"), []byte("partial"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "plain" {
+					return agent.SessionResult{}, errors.New("plain failure")
+				}
+				if mode == "timeout" {
+					return agent.SessionResult{}, context.DeadlineExceeded
+				}
+				if mode == "canceled" {
+					cancel()
+				}
+				return agent.SessionResult{}, planningRetryableError{}
+			}}
+			result, err := NewService(store, stub, ServiceOptions{Log: &progress, RefusalLogDir: filepath.Join(t.TempDir(), "refusals")}).GeneratePlan(ctx, GeneratePlanRequest{Session: session})
+			wantCalls := 1
+			if mode == "success" || mode == "exhausted" {
+				wantCalls = 2
+			}
+			if calls != wantCalls {
+				t.Fatalf("calls = %d, want %d; err = %v", calls, wantCalls, err)
+			}
+			if mode == "success" {
+				if err != nil || result == nil || !result.Validation.OK || result.Summary != "retried successfully" {
+					t.Fatalf("result = %#v, err = %v", result, err)
+				}
+			} else {
+				var ge *GenerationError
+				if !errors.As(err, &ge) || ge.Stage != GenerationStageRuntime {
+					t.Fatalf("error = %v", err)
+				}
+				if mode == "exhausted" {
+					data, readErr := os.ReadFile(ge.LogPath) // #nosec G304 -- test-owned refusal path under t.TempDir.
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+					for _, want := range []string{"attempt 1", "attempt 2", "tao planning: retrying the planning session once after a retryable agent failure:"} {
+						if !strings.Contains(string(data), want) {
+							t.Fatalf("log missing %q: %s", want, data)
+						}
+					}
+				}
+			}
+			if strings.Contains(progress.String(), "retrying") != (wantCalls == 2) {
+				t.Fatalf("progress = %q", progress.String())
+			}
+		})
+	}
+}
+
+func TestAllocationUntouched(t *testing.T) {
+	dir := t.TempDir()
+	if ok, err := allocationUntouched(dir, nil); !ok || err != nil {
+		t.Fatalf("empty: %v, %v", ok, err)
+	}
+	path := filepath.Join(dir, "baseline")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := allocationUntouched(dir, []string{"baseline"}); !ok || err != nil {
+		t.Fatalf("baseline: %v, %v", ok, err)
+	}
+	if ok, err := allocationUntouched(dir, nil); ok || err != nil {
+		t.Fatalf("added: %v, %v", ok, err)
+	}
+	if ok, err := allocationUntouched(dir, []string{"different"}); ok || err != nil {
+		t.Fatalf("replaced: %v, %v", ok, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := allocationUntouched(dir, []string{"baseline"}); ok || err != nil {
+		t.Fatalf("removed: %v, %v", ok, err)
+	}
+	if ok, err := allocationUntouched(filepath.Join(dir, "missing"), nil); ok || err == nil {
+		t.Fatalf("unreadable: %v, %v", ok, err)
+	}
+}
+
+func TestGeneratePlanRefusalLogs(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, mode := range []string{"runtime", "no-artifacts", "disabled", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			meta, store := newPlanningServiceTestRepo(t)
+			session, err := NewSession("log-test", "Log", "Implement work", meta, nil, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(t.TempDir(), "planning-refusals")
+			configured := dir
+			if mode == "disabled" {
+				configured = ""
+			}
+			const record = "@tao-agent-log-v1 diagnostic record\n"
+			var allocation string
+			failure := errors.New("runtime failed")
+			stub := &sliceAgentStub{run: func(s agent.Session) (agent.SessionResult, error) {
+				allocation = noteSlicePlanDirFromPrompt(t, s.Prompt)
+				if s.Log == nil {
+					t.Fatal("missing log sink")
+				}
+				if _, err := s.Log.Write([]byte(record)); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "success" {
+					writeGeneratedPlan(t, allocation, filepath.Base(allocation), meta.Root, false)
+					return agent.SessionResult{}, nil
+				}
+				if mode == "no-artifacts" {
+					return agent.SessionResult{}, nil
+				}
+				return agent.SessionResult{}, failure
+			}}
+			_, err = NewService(store, stub, ServiceOptions{RefusalLogDir: configured}).GeneratePlan(context.Background(), GeneratePlanRequest{Session: session})
+			if mode == "success" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var ge *GenerationError
+				if !errors.As(err, &ge) {
+					t.Fatalf("error = %v", err)
+				}
+				if _, err := os.Stat(allocation); !os.IsNotExist(err) {
+					t.Fatalf("allocation remains: %v", err)
+				}
+				if mode != "disabled" {
+					want := filepath.Join(dir, filepath.Base(allocation)+".log")
+					if ge.LogPath != want || !strings.Contains(ge.Error(), "planning log: "+want) {
+						t.Fatalf("error = %v", ge)
+					}
+					data, err := os.ReadFile(want) // #nosec G304 -- test-owned path under t.TempDir.
+					if err != nil || string(data) != record {
+						t.Fatalf("log = %q, %v", data, err)
+					}
+					info, err := os.Stat(want)
+					if err != nil || info.Mode().Perm() != 0o600 {
+						t.Fatalf("log permissions: %v, %v", info, err)
+					}
+				} else if ge.LogPath != "" {
+					t.Fatalf("unexpected log: %s", ge.LogPath)
+				}
+			}
+			if mode == "success" || mode == "disabled" {
+				if _, err := os.Stat(dir); !os.IsNotExist(err) {
+					t.Fatalf("unexpected sidecar: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanningLogBufferConcurrentWrites(t *testing.T) {
+	var buffer planningLogBuffer
+	const workers, writes = 8, 1000
+	data := []byte("planning log record\n")
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for range writes {
+				if n, err := buffer.Write(data); n != len(data) || err != nil {
+					t.Errorf("write = %d, %v", n, err)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if got, want := len(buffer.Bytes()), workers*writes*len(data); got != want {
+		t.Fatalf("retained length = %d, want %d", got, want)
+	}
+}
+
+func TestPlanningLogBufferBound(t *testing.T) {
+	var buffer planningLogBuffer
+	data := []byte(strings.Repeat("x", planningLogLimit+100))
+	if n, err := buffer.Write(data); n != len(data) || err != nil {
+		t.Fatalf("write = %d, %v", n, err)
+	}
+	_, _ = buffer.Write([]byte("more"))
+	got := string(buffer.Bytes())
+	if len(got) > planningLogLimit || !strings.HasPrefix(got, "xxxx") || !strings.HasSuffix(got, planningLogTruncated) || strings.Count(got, planningLogTruncated) != 1 {
+		t.Fatalf("invalid truncated log: size %d", len(got))
+	}
+}
 
 func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.T) {
 	repoMeta, store := newPlanningServiceTestRepo(t)
@@ -42,7 +262,7 @@ func TestGeneratePlanPropagatesCallerPolicyAndReturnsValidatedDetail(t *testing.
 		if !got.CollectMetrics {
 			t.Fatal("generation did not request metrics")
 		}
-		if got.Log != nil || got.Progress == nil {
+		if got.Log == nil || got.Progress == nil {
 			t.Fatalf("note planning log sinks = durable %#v, progress %#v", got.Log, got.Progress)
 		}
 		_, _ = got.Progress.Write([]byte("assistant: planning\n"))

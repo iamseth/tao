@@ -348,6 +348,34 @@ func TestMergeServiceProposalUsesPlanObserver(t *testing.T) {
 }
 
 // Exercise the real provider adapters without live providers or filesystem edits.
+func TestMergeMetricsPiKillUnblocksWait(t *testing.T) {
+	calls := 0
+	proc, err := mergeMetricsStarter(t, "pi", "reported", nil, &calls)(context.Background(), "", "pi", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = proc.Stdin().Close() }()
+	if err := proc.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = proc.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Pi fixture Wait remained blocked after Kill")
+	}
+}
+
+type mergeMetricsPiProcess struct {
+	*fakeCLIPiProcess
+}
+
+func (p mergeMetricsPiProcess) Kill() error {
+	p.finish()
+	return nil
+}
+
 func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr error, calls *int) runpkg.ProcessStarter {
 	t.Helper()
 	return func(ctx context.Context, _ string, name string, args []string) (runpkg.Process, error) {
@@ -434,6 +462,7 @@ func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr err
 			}
 			proc.writeEvent(`{"type":"message","role":"assistant","text":` + strconv.Quote(text) + `}`)
 			proc.writeEvent(`{"type":"agent_end","session_id":"merge-session"}`)
+			proc.writeEvent(`{"type":"agent_settled"}`)
 			if _, err := proc.readCommand(); err != nil {
 				return
 			}
@@ -450,7 +479,7 @@ func mergeMetricsStarter(t *testing.T, provider, outcome string, providerErr err
 			}
 			proc.writeEvent(stats + "}")
 		}()
-		return proc, nil
+		return mergeMetricsPiProcess{proc}, nil
 	}
 }
 

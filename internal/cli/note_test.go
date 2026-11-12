@@ -57,6 +57,10 @@ func (r *fakeNoteRegistry) PlansDir(repo taodata.Repo) string {
 	return filepath.Join(r.dir, repo.ID, "plans")
 }
 
+func (r *fakeNoteRegistry) PlanningRefusalsDir(repo taodata.Repo) string {
+	return filepath.Join(r.dir, repo.ID, "planning-refusals")
+}
+
 func (r *fakeNoteRegistry) PlannerRoutesDir(repo taodata.Repo) string {
 	return filepath.Join(r.dir, repo.ID, "planner-routes")
 }
@@ -1431,10 +1435,10 @@ func TestNoteRunFailureBoundaries(t *testing.T) {
 	t.Run("generation failure leaves note open and recommends supervised planning", func(t *testing.T) {
 		app, id, _ := newOpenNote(t)
 		app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
-			return nil, &planning.GenerationError{Stage: planning.GenerationStageOpenQuestions, Err: errors.New("questions remain")}
+			return nil, &planning.GenerationError{Stage: planning.GenerationStageOpenQuestions, Err: errors.New("questions remain"), LogPath: "/diagnostics/planning-refusals/test.log"}
 		})
 		err := app.Run(context.Background(), []string{"note", "run", id})
-		if ExitCode(err) != NoteRunPlanningRefusal || !strings.Contains(err.Error(), "supervised clarification") || !strings.Contains(err.Error(), "/tao-plan note:"+id) {
+		if ExitCode(err) != NoteRunPlanningRefusal || !strings.Contains(err.Error(), "planning log: /diagnostics/planning-refusals/test.log") || !strings.Contains(err.Error(), "supervised clarification") || !strings.Contains(err.Error(), "/tao-plan note:"+id) {
 			t.Fatalf("generation error = %v", err)
 		}
 		stored, _ := app.noteRepository(repoMeta).Get(context.Background(), id)

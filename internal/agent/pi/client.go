@@ -15,6 +15,10 @@ import (
 type Client struct {
 	ProcessStarter ProcessStarter
 	Log            io.Writer
+	// SettledGrace bounds how long a session waits for agent_settled after a
+	// terminal agent_end from a peer that may never send it. Zero selects
+	// defaultSettledGrace.
+	SettledGrace time.Duration
 }
 
 type Request struct {
@@ -52,7 +56,15 @@ const (
 	readinessStateID           = "tao-readiness-state"
 	readinessModelsID          = "tao-readiness-models"
 	promptID                   = "tao-prompt"
+	defaultSettledGrace        = 5 * time.Second
 )
+
+func (c Client) settledGrace() time.Duration {
+	if c.SettledGrace <= 0 {
+		return defaultSettledGrace
+	}
+	return c.SettledGrace
+}
 
 // CheckReadiness starts a disposable RPC process, verifies that Pi selected a
 // locally available model, and stops it without sending a prompt. Callers use
@@ -66,7 +78,7 @@ func (c Client) CheckReadiness(ctx context.Context, repoRoot, model, effort stri
 	if err != nil {
 		return err
 	}
-	session := newSession(proc, c.Log, 0, nil)
+	session := newSession(proc, c.Log, 0, nil, c.settledGrace())
 	readyCtx, cancelReady := context.WithTimeout(ctx, readinessTimeout)
 	err = session.verifyReadiness(readyCtx)
 	cancelReady()
@@ -89,7 +101,7 @@ func (c Client) RunAgentSession(ctx context.Context, request Request) (Result, e
 		result.PromptAcceptance = lifecycle.PromptAcceptanceNotTransmitted
 		return result, err
 	}
-	session := newSession(proc, c.Log, request.NoProgressToolLimit, request.VerificationCommands)
+	session := newSession(proc, c.Log, request.NoProgressToolLimit, request.VerificationCommands, c.settledGrace())
 	defer session.close()
 
 	readyCtx, cancelReady := context.WithTimeout(ctx, readinessTimeout)
