@@ -89,7 +89,7 @@ func noteRunErrorCode(err error) int {
 			return NoteRunInfrastructure
 		}
 		switch e.Stage {
-		case planning.GenerationStageRequiredArtifact, planning.GenerationStagePlanID, planning.GenerationStageVerification, planning.GenerationStageOpenQuestions, planning.GenerationStageValidation:
+		case planning.GenerationStageWroteElsewhere, planning.GenerationStageRequiredArtifact, planning.GenerationStagePlanID, planning.GenerationStageVerification, planning.GenerationStageOpenQuestions, planning.GenerationStageValidation:
 			return NoteRunPlanningRefusal
 		}
 		return NoteRunInfrastructure

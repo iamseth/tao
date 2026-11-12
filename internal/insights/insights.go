@@ -69,6 +69,8 @@ type Report struct {
 // PlannerRoutingReport joins advisory assignments to current summary status.
 // LinkedPlans counts resolvable links; missing links are reported separately.
 type PlannerRoutingReport struct {
+	// AttemptCounts describes retained diagnostic entries, not a historical census.
+	AttemptCounts       []RoutingAttemptCount `json:"attempt_counts,omitempty"`
 	Records             int                   `json:"records"`
 	Shadow              int                   `json:"shadow"`
 	Randomized          int                   `json:"randomized"`
@@ -80,6 +82,38 @@ type PlannerRoutingReport struct {
 	Matured             int                   `json:"matured"`
 	Policies            []RoutingPolicyCohort `json:"policies"`
 	Warnings            []string              `json:"warnings,omitempty"`
+}
+
+// RoutingAttemptCount counts retained attempts with bounded stage/outcome labels.
+// It is independent of the per-record AttemptsWithoutPlan metric.
+type RoutingAttemptCount struct {
+	Stage   string `json:"stage"`
+	Outcome string `json:"outcome"`
+	Count   int    `json:"count"`
+}
+
+// RoutingStageLabel never exposes arbitrary ledger text.
+func RoutingStageLabel(stage string) string {
+	switch stage {
+	case "":
+		return "unspecified"
+	case "unspecified", "planning", "slice_allocation", "slice_prompt", "slice_agent",
+		"slice_required_artifacts", "slice_plan_id", "slice_verification",
+		"slice_open_questions", "slice_validation", "slice_empty_session", "slice_wrote_elsewhere":
+		return stage
+	default:
+		return "unknown"
+	}
+}
+
+// RoutingOutcomeLabel never exposes arbitrary ledger text.
+func RoutingOutcomeLabel(outcome string) string {
+	switch outcome {
+	case "plan_created", "failed", "interrupted":
+		return outcome
+	default:
+		return "unknown"
+	}
 }
 
 type RoutingPolicyCohort struct {
@@ -477,6 +511,23 @@ func aggregateRoutes(ctx context.Context, report *PlannerRoutingReport, cohorts 
 			addRoutingWarning(report, "planner route "+record.ID+": invalid selected-arm probability; weight omitted")
 		}
 		arm.WeightSum += weight
+		for _, entry := range record.Entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if entry.Kind != plannerroute.EntryAttempt || entry.Attempt == nil {
+				continue
+			}
+			stage, outcome := RoutingStageLabel(entry.Attempt.Stage), RoutingOutcomeLabel(entry.Attempt.Outcome)
+			i := slices.IndexFunc(report.AttemptCounts, func(count RoutingAttemptCount) bool {
+				return count.Stage == stage && count.Outcome == outcome
+			})
+			if i < 0 {
+				report.AttemptCounts = append(report.AttemptCounts, RoutingAttemptCount{Stage: stage, Outcome: outcome, Count: 1})
+			} else {
+				report.AttemptCounts[i].Count++
+			}
+		}
 		id := record.LinkedPlanID()
 		if id == "" {
 			for _, entry := range record.Entries {
@@ -545,6 +596,9 @@ func addRoutingWarning(report *PlannerRoutingReport, warning string) {
 }
 
 func finalizeRoutes(report *PlannerRoutingReport, cohorts map[routingCohortKey]*routingAccumulator) {
+	slices.SortFunc(report.AttemptCounts, func(a, b RoutingAttemptCount) int {
+		return cmp.Or(cmp.Compare(a.Stage, b.Stage), cmp.Compare(a.Outcome, b.Outcome))
+	})
 	keys := make([]routingCohortKey, 0, len(cohorts))
 	for key := range cohorts {
 		keys = append(keys, key)

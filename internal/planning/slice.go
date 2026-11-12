@@ -33,6 +33,7 @@ func (s *Service) sliceRepository() (SliceRepository, error) {
 func renderNoteSlicePrompt(session *Session, extra string, allocation PlanAllocation, unsupervised bool) (string, error) {
 	return prompts.Render(prompts.PromptNoteSlice, prompts.Data{
 		PlanDir:            allocation.Dir,
+		PlanID:             allocation.ID,
 		Arguments:          strings.TrimSpace(extra),
 		SessionID:          session.ID,
 		Title:              valueOrPlaceholder(session.Title),

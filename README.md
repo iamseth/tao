@@ -204,12 +204,18 @@ These exit codes apply **only to `tao note run`** (including `tao n r`):
 | Code | Outcome |
 | --- | --- |
 | 0 | Durable plan completion reached by this invocation |
-| 1 | Infrastructure or unclassified error |
+| 1 | Infrastructure, empty planner session, or unclassified error |
 | 2 | Usage error |
 | 3 | Slice blocked |
 | 4 | Approval, review/merge, or scope decision required |
-| 5 | Planning refused: generated plan failed acceptance checks |
+| 5 | Planning refused: failed acceptance checks or possible sibling candidate |
 | 6 | Nothing further to do; not a completion signal |
+
+If the planner wrote nothing, retry planning; an operator or orchestrator may
+choose the other agent once. Tao does not automatically switch agents. If the
+planner wrote elsewhere, manually inspect the reported possible recovery
+candidates: timestamp-prefix matching is not session provenance. Tao never
+automatically adopts, links, runs, or deletes those siblings.
 
 Code 6 includes already-completed plans, unlinked archives, historical
 planning-session-only notes, and nonterminal stops such as `--max-slices`. It can

@@ -284,6 +284,11 @@ func TestRenderPlannerRouting(t *testing.T) {
 		for _, format := range []InsightsFormat{InsightsFormatReport, InsightsFormatDigest} {
 			report := insights.Report{PlannerRouting: insights.PlannerRoutingReport{
 				Records: 4, Randomized: 4, LinkedPlans: 3, Matured: 2, Censored: 1, AttemptsWithoutPlan: 1,
+				AttemptCounts: []insights.RoutingAttemptCount{
+					{Stage: "slice_empty_session", Outcome: "failed", Count: 2},
+					{Stage: "slice_wrote_elsewhere", Outcome: "failed", Count: 1},
+					{Stage: "secret\nraw", Outcome: "unsafe\x1b", Count: 3},
+				},
 				Policies: []insights.RoutingPolicyCohort{{PolicyVersion: "v1", Mode: "randomized", Arms: []insights.RoutingArmCohort{
 					{ArmKey: "pi", Assigned: 4, Linked: 3, Matured: 2, Completed: 1, Abandoned: 1, WeightSum: 8, WeightedCompletionRate: &rate},
 					{ArmKey: "claude", Assigned: 1, Overrides: 1},
@@ -294,10 +299,13 @@ func TestRenderPlannerRouting(t *testing.T) {
 			if err := RenderInsights(&out, report, options); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"Planner routing", "4 records", "v1/randomized", "pi: assigned=4 overrides=0 linked=3 matured=2 censored=1", "weight sum=8.00", "weighted completion=66.7%", "weighted completion=n/a"} {
+			for _, want := range []string{"Planner routing", "4 records", "v1/randomized", "pi: assigned=4 overrides=0 linked=3 matured=2 censored=1", "weight sum=8.00", "weighted completion=66.7%", "weighted completion=n/a", "Retained diagnostic attempts", "slice_empty_session/failed: 2", "slice_wrote_elsewhere/failed: 1", "unknown/unknown: 3"} {
 				if !strings.Contains(out.String(), want) {
 					t.Fatalf("%+v missing %q:\n%s", options, want, &out)
 				}
+			}
+			if strings.Contains(out.String(), "secret") || strings.Contains(out.String(), "unsafe") {
+				t.Fatal("raw attempt label rendered")
 			}
 			if strings.Index(out.String(), "Planner routing") < strings.Index(out.String(), "Session telemetry") {
 				t.Fatal("routing precedes telemetry")
@@ -305,6 +313,9 @@ func TestRenderPlannerRouting(t *testing.T) {
 			out.Reset()
 			if err := RenderInsights(&out, insights.Report{PlansScanned: 1}, options); err != nil {
 				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), "Retained diagnostic attempts") {
+				t.Fatal("empty routing gained attempt output")
 			}
 			if !strings.Contains(out.String(), "- No planner routing records.") {
 				t.Fatalf("empty routing output = %s", &out)

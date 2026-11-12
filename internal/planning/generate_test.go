@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -454,6 +455,210 @@ func TestGeneratePlanRejectsOpenQuestionsAndCleansAllocation(t *testing.T) {
 	}
 }
 
+func TestGeneratePlanAllocationDiagnostics(t *testing.T) {
+	for _, mode := range []string{"silent valid", "partial", "malformed", "one", "multiple", "foreign", "unrelated", "symlink", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			repoMeta, store := newPlanningServiceTestRepo(t)
+			session, err := NewSession("diagnostics", "Diagnostics", "work", repoMeta, nil, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var siblings []string
+			stub := &sliceAgentStub{run: func(got agent.Session) (agent.SessionResult, error) {
+				dir := noteSlicePlanDirFromPrompt(t, got.Prompt)
+				id := filepath.Base(dir)
+				if !strings.Contains(got.Prompt, "exactly the allocated plan ID `"+id+"`") {
+					t.Fatal("allocated ID absent")
+				}
+				switch mode {
+				case "silent valid":
+					writeGeneratedPlan(t, dir, id, repoMeta.Root, false)
+				case "partial", "malformed":
+					name := "slices.json"
+					if mode == "malformed" {
+						name = "state.json"
+					}
+					if err := os.WriteFile(filepath.Join(dir, name), []byte("{"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "cancel":
+					cancel()
+				default:
+					count := 1
+					if mode == "multiple" {
+						count = 2
+					}
+					for i := range count {
+						name := fmt.Sprintf("%scandidate-%d", id[:16], i)
+						if mode == "unrelated" {
+							name = "20000101-000000-candidate"
+						}
+						candidate := filepath.Join(filepath.Dir(dir), name)
+						root := repoMeta.Root
+						if mode == "foreign" {
+							root = t.TempDir()
+						}
+						if mode == "symlink" {
+							target := t.TempDir()
+							writeGeneratedPlan(t, target, name, root, false)
+							if err := os.Symlink(target, candidate); err != nil {
+								t.Fatal(err)
+							}
+						} else {
+							if err := os.MkdirAll(candidate, 0o700); err != nil {
+								t.Fatal(err)
+							}
+							writeGeneratedPlan(t, candidate, name, root, false)
+						}
+						siblings = append(siblings, candidate)
+					}
+				}
+				return agent.SessionResult{}, nil
+			}}
+			result, err := NewService(store, stub, ServiceOptions{}).GeneratePlan(ctx, GeneratePlanRequest{Session: session})
+			if mode == "silent valid" {
+				if err != nil || result == nil {
+					t.Fatalf("silent plan rejected: %v", err)
+				}
+				return
+			}
+			var ge *GenerationError
+			if !errors.As(err, &ge) {
+				t.Fatalf("error = %v", err)
+			}
+			want := GenerationStageEmptySession
+			switch mode {
+			case "one", "multiple":
+				want = GenerationStageWroteElsewhere
+			case "partial", "malformed":
+				want = GenerationStageRequiredArtifact
+			case "cancel":
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation lost: %v", err)
+				}
+				want = GenerationStageValidation
+			}
+			if ge.Stage != want {
+				t.Fatalf("stage=%s want=%s: %v", ge.Stage, want, err)
+			}
+			if _, err := os.Stat(ge.Allocation.Dir); !os.IsNotExist(err) {
+				t.Fatalf("allocation survived: %v", err)
+			}
+			for _, sibling := range siblings {
+				if _, err := os.Lstat(sibling); err != nil {
+					t.Fatalf("sibling removed: %v", err)
+				}
+				if want == GenerationStageWroteElsewhere && !strings.Contains(ge.Error(), fmt.Sprintf("%q", sibling)) {
+					t.Fatalf("candidate absent: %v", ge)
+				}
+			}
+		})
+	}
+}
+
+func TestSiblingCandidatesReadOnlyAndBounded(t *testing.T) {
+	testenv.SkipIfShort(t)
+	parent, root := t.TempDir(), t.TempDir()
+	allocation := PlanAllocation{ID: "20261112-194023-allocated", Dir: filepath.Join(parent, "20261112-194023-allocated")}
+	for i := range 12 {
+		id := fmt.Sprintf("20261112-194023-candidate-%02d", i)
+		dir := filepath.Join(parent, id)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeGeneratedPlan(t, dir, id, root, false)
+	}
+	for _, mode := range []string{"malformed", "mismatched", "invalid"} {
+		id := "20261112-194023-a-" + mode
+		dir := filepath.Join(parent, id)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		planID := id
+		if mode == "mismatched" {
+			planID = "another-id"
+		}
+		writeGeneratedPlan(t, dir, planID, root, false)
+		if mode != "mismatched" {
+			path := filepath.Join(dir, "state.json")
+			data := []byte("{")
+			if mode == "invalid" {
+				var err error
+				data, err = os.ReadFile(path) //nolint:gosec // G304: artifact path constructed entirely within t.TempDir
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = []byte(strings.Replace(string(data), `"change_type": "feat"`, `"change_type": "invalid"`, 1))
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // G703: malformed fixture written only within t.TempDir
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err := siblingCandidates(context.Background(), allocation, root)
+	if err != nil || len(got) != 10 {
+		t.Fatalf("candidates=%v err=%v", got, err)
+	}
+	for i, path := range got {
+		want := fmt.Sprintf("%q", filepath.Join(parent, fmt.Sprintf("20261112-194023-candidate-%02d", i)))
+		if path != want {
+			t.Fatalf("candidate=%s want=%s", path, want)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := siblingCandidates(ctx, allocation, root); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel=%v", err)
+	}
+	for _, id := range []string{"bad", "20261399-194023-plan", "20261112-194023-"} {
+		if got, err := siblingCandidates(context.Background(), PlanAllocation{ID: id, Dir: allocation.Dir}, root); err != nil || len(got) != 0 {
+			t.Fatalf("invalid ID scanned: %v %v", got, err)
+		}
+	}
+}
+
+func TestMissingAllocationUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permissions")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "20261112-194023-plan")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	validation := ValidationResult{Findings: []ValidationFinding{{Severity: "error", Path: dir, Message: "original diagnostic"}}}
+	allocation := PlanAllocation{ID: filepath.Base(dir), Dir: dir}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // restore private temporary directory for cleanup
+	stage, _ := classifyMissingAllocation(context.Background(), allocation, parent, nil, agent.SessionResult{}, validation)
+	if stage != GenerationStageRequiredArtifact {
+		t.Fatalf("unreadable allocation stage=%s", stage)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: restore private temporary directory traversal
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) }) //nolint:gosec // restore private temporary directory for cleanup
+	if _, err := siblingCandidates(context.Background(), allocation, parent); err == nil {
+		t.Fatal("scan failure hidden")
+	}
+}
+
+func TestSiblingCandidateScanFailure(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing", "20261112-194023-plan")
+	validation := ValidationResult{Findings: []ValidationFinding{{Severity: "error", Path: dir, Message: "original diagnostic"}}}
+	stage, err := classifyMissingAllocation(context.Background(), PlanAllocation{ID: filepath.Base(dir), Dir: dir}, t.TempDir(), nil, agent.SessionResult{}, validation)
+	if stage != GenerationStageRequiredArtifact || !strings.Contains(err.Error(), "scan failed") || !strings.Contains(err.Error(), "original diagnostic") {
+		t.Fatalf("%s: %v", stage, err)
+	}
+}
+
 func TestGeneratePlanCleansRuntimeAndNoArtifactFailures(t *testing.T) {
 	testenv.SkipIfShort(t)
 	for _, tc := range []struct {
@@ -461,6 +666,12 @@ func TestGeneratePlanCleansRuntimeAndNoArtifactFailures(t *testing.T) {
 		run   func(agent.Session) (agent.SessionResult, error)
 		stage GenerationStage
 	}{
+		{name: "empty", run: func(agent.Session) (agent.SessionResult, error) {
+			return agent.SessionResult{}, nil
+		}, stage: GenerationStage("slice_empty_session")},
+		{name: "whitespace", run: func(agent.Session) (agent.SessionResult, error) {
+			return agent.SessionResult{Output: " \n", FinalText: "\t"}, nil
+		}, stage: GenerationStage("slice_empty_session")},
 		{name: "runtime", run: func(agent.Session) (agent.SessionResult, error) {
 			return agent.SessionResult{}, errors.New("runtime stopped")
 		}, stage: GenerationStageRuntime},
@@ -595,7 +806,7 @@ func TestGeneratePlanTelemetry(t *testing.T) {
 func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
 	testenv.SkipIfShort(t)
 	original := errors.New("runtime failed")
-	for _, stage := range []GenerationStage{GenerationStageRuntime, GenerationStageRequiredArtifact, GenerationStageOpenQuestions} {
+	for _, stage := range []GenerationStage{GenerationStageRuntime, GenerationStageEmptySession, GenerationStageOpenQuestions} {
 		t.Run(string(stage), func(t *testing.T) {
 			repoMeta, store := newPlanningServiceTestRepo(t)
 			session, err := NewSession("note-failure", "Failure", "work", repoMeta, nil, time.Now())
@@ -606,7 +817,7 @@ func TestGeneratePlanFailuresNeverAppendTelemetry(t *testing.T) {
 			stub := &sliceAgentStub{run: func(got agent.Session) (agent.SessionResult, error) {
 				calls++
 				dir := noteSlicePlanDirFromPrompt(t, got.Prompt)
-				if stage != GenerationStageRequiredArtifact {
+				if stage != GenerationStageEmptySession {
 					writeGeneratedPlan(t, dir, filepath.Base(dir), repoMeta.Root, false)
 				}
 				if stage == GenerationStageOpenQuestions {

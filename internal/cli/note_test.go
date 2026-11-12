@@ -1763,6 +1763,55 @@ func TestNoteRunPlannerRouting(t *testing.T) {
 	}
 }
 
+func TestNoteRunAllocationRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		stage   planning.GenerationStage
+		message string
+		code    int
+	}{
+		{planning.GenerationStageEmptySession, "planner wrote nothing; retry planning", NoteRunInfrastructure},
+		{planning.GenerationStageWroteElsewhere, "planner wrote elsewhere; possible recovery candidate; manually inspect; never auto-link", NoteRunPlanningRefusal},
+	} {
+		t.Run(string(tc.stage), func(t *testing.T) {
+			app, meta, id, _, _ := noteRoutingTestApp(t)
+			calls := 0
+			app.CommandRunner = func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				t.Fatal("refused plan executed")
+				return nil
+			}
+			app.PlanGenerator = planGeneratorFunc(func(context.Context, planning.GeneratePlanRequest) (*planning.GeneratePlanResult, error) {
+				calls++
+				return nil, &planning.GenerationError{Stage: tc.stage, Err: errors.New(tc.message), LogPath: "/diagnostics/refusal.log"}
+			})
+			err := app.Run(context.Background(), []string{"note", "run", "--planner-routing=randomized", id})
+			if ExitCode(err) != tc.code || !strings.Contains(err.Error(), tc.message) || !strings.Contains(err.Error(), "/diagnostics/refusal.log") || calls != 1 {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+			stored, err := app.noteRepository(meta).Get(context.Background(), id)
+			if err != nil || stored.Status != note.StatusOpen {
+				t.Fatalf("note=%#v err=%v", stored, err)
+			}
+			found := false
+			for _, record := range noteRoutingRecords(t, app, meta) {
+				if record.LinkedPlanID() != "" {
+					t.Fatal("refusal linked")
+				}
+				for _, entry := range record.Entries {
+					if entry.Kind == plannerroute.EntryAttempt {
+						found = true
+						if entry.Attempt.Stage != string(tc.stage) || entry.Attempt.Outcome != "failed" {
+							t.Fatalf("attempt=%#v", entry.Attempt)
+						}
+					}
+				}
+			}
+			if !found {
+				t.Fatal("attempt not recorded")
+			}
+		})
+	}
+}
+
 func TestNoteRunPlannerRoutingFailures(t *testing.T) {
 	for _, mode := range []string{"shadow", "randomized"} {
 		t.Run(mode+" ledger unavailable", func(t *testing.T) {

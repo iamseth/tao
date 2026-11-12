@@ -23,6 +23,8 @@ import (
 type GenerationStage string
 
 const (
+	GenerationStageEmptySession     GenerationStage = "slice_empty_session"
+	GenerationStageWroteElsewhere   GenerationStage = "slice_wrote_elsewhere"
 	GenerationStageAllocation       GenerationStage = "slice_allocation"
 	GenerationStagePrompt           GenerationStage = "slice_prompt"
 	GenerationStageRuntime          GenerationStage = "slice_agent"
@@ -194,7 +196,8 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 	}
 	if !validation.OK {
 		failedValidation = &validation
-		return fail(validationFailureStage(validation), validationError(validation))
+		stage, cause := classifyMissingAllocation(ctx, allocation, request.Session.Repo.Root, baseline, result, validation)
+		return fail(stage, cause)
 	}
 	if request.RejectOpenQuestions && detail != nil && len(nonEmptyStrings(detail.State.OpenQuestions)) > 0 {
 		return fail(GenerationStageOpenQuestions, fmt.Errorf("generated plan has unresolved open questions: %s", strings.Join(nonEmptyStrings(detail.State.OpenQuestions), "; ")))
@@ -223,6 +226,108 @@ func (s *Service) GeneratePlan(ctx context.Context, request GeneratePlanRequest)
 		Allocation: allocation, Detail: detail, Validation: validation, Treatment: *treatment,
 		Agent: AgentSummary{Output: result.Output, FinalText: result.FinalText}, Summary: summary,
 	}, nil
+}
+
+// classifyMissingAllocation only refines unsuccessful acceptance after a successful
+// runtime. Candidate names are diagnostic hints, never session provenance.
+func classifyMissingAllocation(ctx context.Context, allocation PlanAllocation, repoRoot string, baseline []string, result agent.SessionResult, validation ValidationResult) (GenerationStage, error) {
+	stage, cause := validationFailureStage(validation), validationError(validation)
+	if err := ctx.Err(); err != nil {
+		return stage, errors.Join(cause, err)
+	}
+	if _, err := os.Lstat(filepath.Join(allocation.Dir, "state.json")); !errors.Is(err, os.ErrNotExist) {
+		return stage, cause
+	}
+	candidates, scanErr := siblingCandidates(ctx, allocation, repoRoot)
+	if err := ctx.Err(); err != nil {
+		return stage, errors.Join(cause, err)
+	}
+	if scanErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("possible recovery candidate scan failed: %w", scanErr))
+	}
+	if len(candidates) > 0 {
+		return GenerationStageWroteElsewhere, fmt.Errorf("planner wrote elsewhere: possible recovery candidate paths (at most 10 shown) %s; timestamp prefix matching is not session provenance; manually inspect candidates, never auto-link or run them: %w", strings.Join(candidates, ", "), cause)
+	}
+	if scanErr != nil || strings.TrimSpace(result.Output) != "" || strings.TrimSpace(result.FinalText) != "" {
+		return stage, cause
+	}
+	for _, name := range []string{"state.json", "slices.json", "plan.md", "planning-brief.md", "events.jsonl", "handoff.md"} {
+		if _, err := os.Lstat(filepath.Join(allocation.Dir, name)); !errors.Is(err, os.ErrNotExist) {
+			return stage, cause
+		}
+	}
+	if untouched, err := allocationUntouched(allocation.Dir, baseline); err == nil && untouched {
+		return GenerationStageEmptySession, fmt.Errorf("planner wrote nothing; retry planning (an operator may choose the other agent once): %w", cause)
+	}
+	return stage, cause
+}
+
+// siblingCandidates loads only direct, non-symlink timestamp siblings. Loading and
+// validation are read-only; none of these paths may become an accepted allocation.
+func siblingCandidates(ctx context.Context, allocation PlanAllocation, repoRoot string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(allocation.ID) <= 16 || allocation.ID[15] != '-' || filepath.Base(allocation.ID) != allocation.ID {
+		return nil, nil
+	}
+	if _, err := time.Parse("20060102-150405", allocation.ID[:15]); err != nil {
+		return nil, nil //nolint:nilerr // malformed allocation IDs disable diagnostic sibling discovery
+	}
+	entries, err := os.ReadDir(filepath.Dir(allocation.Dir))
+	if err != nil {
+		return nil, err
+	}
+	var candidates []string
+	var scanErr error
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return candidates, err
+		}
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || entry.Name() == allocation.ID || !strings.HasPrefix(entry.Name(), allocation.ID[:16]) {
+			continue
+		}
+		dir := filepath.Join(filepath.Dir(allocation.Dir), entry.Name())
+		readable := true
+		for _, name := range []string{"state.json", "slices.json"} {
+			path := filepath.Join(dir, name)
+			info, err := os.Lstat(path)
+			if err == nil && !info.Mode().IsRegular() {
+				readable = false
+				break
+			}
+			if err == nil {
+				var file *os.File
+				file, err = os.Open(path) //nolint:gosec // G304: fixed artifact name in a direct timestamp-matching sibling, opened read-only
+				if err == nil {
+					_ = file.Close()
+				}
+			}
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) && scanErr == nil {
+					scanErr = fmt.Errorf("read candidate %q: %w", dir, err)
+				}
+				readable = false
+				break
+			}
+		}
+		if !readable {
+			continue
+		}
+		detail, validation, err := (&FileRepository{}).ValidateAllocatedPlan(ctx, PlanAllocation{ID: entry.Name(), Dir: dir})
+		if err != nil {
+			if scanErr == nil {
+				scanErr = err
+			}
+			continue
+		}
+		if validation.OK && detail != nil && detail.State.Repo.Root != "" && filepath.Clean(detail.State.Repo.Root) == filepath.Clean(repoRoot) {
+			if len(candidates) < 10 {
+				candidates = append(candidates, fmt.Sprintf("%q", dir))
+			}
+		}
+	}
+	return candidates, scanErr
 }
 
 const planningRetryLimit = 1

@@ -31,6 +31,12 @@
 
 ## Planner routing
 - 3 records; shadow=0 randomized=3 overrides=0 attempts without plan=1 linked=2 missing linked=0 matured=1 censored=1
+- Retained diagnostic attempts (advisory; bounded ledger, not a complete history or plan-quality rate):
+  - slice_agent/interrupted: 1
+  - slice_empty_session/failed: 2
+  - slice_required_artifacts/failed: 1
+  - slice_wrote_elsewhere/failed: 1
+  - unspecified/plan_created: 2
 - policy-v1/randomized pi|inherited|inherited|inherited|prompt-v1|default: assigned=3 overrides=0 linked=2 matured=1 censored=1 weight sum=6.00 weighted completion=100.0%
 
 ## Outlier plans

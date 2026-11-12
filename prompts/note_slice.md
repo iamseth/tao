@@ -8,7 +8,8 @@ Convert the durable planning transcript below into executable Tao plan artifacts
 
 - Never write a task that requires reading, editing, or running commands in any checkout other than the plan workspace, including the control or owning checkout; Git branches, tags, and other refs are shared by every worktree of the repository, so phrase branch and ref operations as commands run from the workspace root and refer to 'the plan workspace' rather than naming another checkout. Working-tree and index status are checkout-specific, not shared-ref operations: do not require another checkout's status or cleanliness, and never substitute workspace status for another checkout's status.
 - Write artifacts only inside this preallocated plan directory: `{{.PlanDir}}`
-- Do not create another plan directory and do not run `tao init`.
+- Use exactly the allocated plan ID `{{.PlanID}}` in plan artifacts.
+- Do not create another plan directory by any tool and do not run `tao init`.
 - Do not edit application source files or repository metadata outside the plan directory.
 - Use the full transcript as slicing context; do not ask follow-up questions unless the transcript is impossible to slice.
 - Select exactly one plan-level `change_type` from the supported Conventional Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`.

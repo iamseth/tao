@@ -595,6 +595,16 @@ func (p insightsProjection) renderPlannerRouting(out io.Writer) error {
 		if err := writef(out, "- %d records; shadow=%d randomized=%d overrides=%d attempts without plan=%d linked=%d missing linked=%d matured=%d censored=%d\n", r.Records, r.Shadow, r.Randomized, r.Overrides, r.AttemptsWithoutPlan, r.LinkedPlans, r.MissingLinkedPlans, r.Matured, r.Censored); err != nil {
 			return err
 		}
+		if len(r.AttemptCounts) > 0 {
+			if err := writeln(out, "- Retained diagnostic attempts (advisory; bounded ledger, not a complete history or plan-quality rate):"); err != nil {
+				return err
+			}
+			for _, count := range r.AttemptCounts {
+				if err := writef(out, "  - %s/%s: %d\n", insights.RoutingStageLabel(count.Stage), insights.RoutingOutcomeLabel(count.Outcome), count.Count); err != nil {
+					return err
+				}
+			}
+		}
 		for _, policy := range r.Policies {
 			for _, arm := range policy.Arms {
 				rate := "n/a"

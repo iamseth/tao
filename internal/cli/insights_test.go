@@ -285,6 +285,20 @@ func TestInsightsCatalogRoutes(t *testing.T) {
 	}
 }
 
+func TestInsightsRetainedAttemptLabels(t *testing.T) {
+	for _, render := range []func(*bytes.Buffer, insights.Report) error{renderInsightsReport, renderInsightsDigest, renderAllInsightsReport, renderAllInsightsDigest} {
+		var out bytes.Buffer
+		if err := render(&out, representativeInsightsReport()); err != nil {
+			t.Fatal(err)
+		}
+		for _, label := range []string{"slice_agent/interrupted: 1", "slice_empty_session/failed: 2", "slice_required_artifacts/failed: 1", "slice_wrote_elsewhere/failed: 1", "Retained diagnostic attempts"} {
+			if !strings.Contains(out.String(), label) {
+				t.Fatalf("missing %q", label)
+			}
+		}
+	}
+}
+
 func TestInsightsRenderersGolden(t *testing.T) {
 	report := representativeInsightsReport()
 	report.Trend = new(representativeTrend())
@@ -415,6 +429,13 @@ func representativeInsightsReport() insights.Report {
 		PlansSkipped: 2,
 		PlannerRouting: insights.PlannerRoutingReport{
 			Records: 3, Randomized: 3, LinkedPlans: 2, Matured: 1, Censored: 1, AttemptsWithoutPlan: 1,
+			AttemptCounts: []insights.RoutingAttemptCount{
+				{Stage: "slice_agent", Outcome: "interrupted", Count: 1},
+				{Stage: "slice_empty_session", Outcome: "failed", Count: 2},
+				{Stage: "slice_required_artifacts", Outcome: "failed", Count: 1},
+				{Stage: "slice_wrote_elsewhere", Outcome: "failed", Count: 1},
+				{Stage: "unspecified", Outcome: "plan_created", Count: 2},
+			},
 			Policies: []insights.RoutingPolicyCohort{{PolicyVersion: "policy-v1", Mode: "randomized", Arms: []insights.RoutingArmCohort{
 				{ArmKey: "pi|inherited|inherited|inherited|prompt-v1|default", Assigned: 3, Linked: 2, Matured: 1, Completed: 1, WeightSum: 6, WeightedCompletionRate: new(float64(1))},
 			}}},

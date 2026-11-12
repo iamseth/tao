@@ -262,6 +262,62 @@ func TestAggregatePlannerRouting(t *testing.T) {
 	}
 }
 
+func TestAggregatePlannerRoutingAttemptCounts(t *testing.T) {
+	attempt := func(stage, outcome string) plannerroute.Entry {
+		return plannerroute.Entry{Kind: plannerroute.EntryAttempt, Attempt: &plannerroute.Attempt{Stage: stage, Outcome: outcome}}
+	}
+	records := []plannerroute.Record{
+		{ID: "linked", Entries: []plannerroute.Entry{
+			attempt("slice_empty_session", "failed"), attempt("slice_empty_session", "failed"),
+			attempt("", "plan_created"),
+			{Kind: plannerroute.EntryLinked, Link: &plannerroute.Link{PlanID: "done"}},
+		}},
+		{ID: "unlinked", Entries: []plannerroute.Entry{
+			attempt("slice_wrote_elsewhere", "failed"), attempt("slice_agent", "interrupted"),
+			attempt("planning", "failed"), attempt("password=secret\n", "arbitrary"),
+			attempt("", ""), {Kind: plannerroute.EntryAttempt},
+			{Kind: plannerroute.EntryTreated, Attempt: &plannerroute.Attempt{Stage: "slice_agent", Outcome: "failed"}},
+		}},
+		{ID: "empty"},
+	}
+	want := []RoutingAttemptCount{
+		{Stage: "planning", Outcome: "failed", Count: 1},
+		{Stage: "slice_agent", Outcome: "interrupted", Count: 1},
+		{Stage: "slice_empty_session", Outcome: "failed", Count: 2},
+		{Stage: "slice_wrote_elsewhere", Outcome: "failed", Count: 1},
+		{Stage: "unknown", Outcome: "unknown", Count: 1},
+		{Stage: "unspecified", Outcome: "plan_created", Count: 1},
+		{Stage: "unspecified", Outcome: "unknown", Count: 1},
+	}
+	for range 2 {
+		report, err := AggregateWithRoutes(context.Background(), fixtureLister{}, fixtureRouteLister{records: records})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(report.PlannerRouting.AttemptCounts, want) || report.PlannerRouting.AttemptsWithoutPlan != 1 {
+			t.Fatalf("routing = %+v", report.PlannerRouting)
+		}
+		slices.Reverse(records)
+	}
+	sources := []RepositorySource{
+		{ID: "a", Plans: fixtureLister{}, Routes: fixtureRouteLister{records: records}},
+		{ID: "b", Plans: fixtureLister{}, Routes: fixtureRouteLister{records: records}},
+	}
+	for i := range want {
+		want[i].Count *= 2
+	}
+	for range 2 {
+		report, err := AggregateSources(context.Background(), fixtureSourceLister{sources: sources})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(report.PlannerRouting.AttemptCounts, want) {
+			t.Fatal(report.PlannerRouting.AttemptCounts)
+		}
+		slices.Reverse(sources)
+	}
+}
+
 func TestAggregatePlannerRoutingDifferentEligibleSets(t *testing.T) {
 	arms, err := plannerroute.ParseArms("pi=0.5,claude=0.5")
 	if err != nil {

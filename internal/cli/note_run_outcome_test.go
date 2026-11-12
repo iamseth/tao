@@ -165,7 +165,7 @@ func TestNoteRunTerminalNotesWithoutPlans(t *testing.T) {
 }
 
 func TestNoteRunPlanningRefusal(t *testing.T) {
-	for _, stage := range []planning.GenerationStage{planning.GenerationStageAllocation, planning.GenerationStagePrompt, planning.GenerationStageRuntime, "unknown"} {
+	for _, stage := range []planning.GenerationStage{planning.GenerationStageEmptySession, planning.GenerationStageAllocation, planning.GenerationStagePrompt, planning.GenerationStageRuntime, "unknown"} {
 		cause := errors.New("failed")
 		err := classifyNoteRunError(&planning.GenerationError{Stage: stage, Err: cause})
 		if ExitCode(err) != 1 || !errors.Is(err, cause) {
@@ -173,6 +173,9 @@ func TestNoteRunPlanningRefusal(t *testing.T) {
 		}
 	}
 	for _, failure := range []*planning.GenerationError{
+		{Stage: planning.GenerationStageWroteElsewhere, Err: context.Canceled},
+		{Stage: planning.GenerationStageEmptySession, Err: errors.New("empty"), CleanupErr: errors.New("disk error")},
+		{Stage: planning.GenerationStageWroteElsewhere, Err: errors.New("elsewhere"), CleanupErr: errors.New("disk error")},
 		{Stage: planning.GenerationStageValidation, Err: context.Canceled},
 		{Stage: planning.GenerationStageValidation, Err: errors.New("rejected"), CleanupErr: errors.New("disk error")},
 	} {
@@ -180,7 +183,7 @@ func TestNoteRunPlanningRefusal(t *testing.T) {
 			t.Fatalf("infrastructure hidden: %v", failure)
 		}
 	}
-	for _, stage := range []planning.GenerationStage{planning.GenerationStageRequiredArtifact, planning.GenerationStagePlanID, planning.GenerationStageVerification, planning.GenerationStageOpenQuestions, planning.GenerationStageValidation} {
+	for _, stage := range []planning.GenerationStage{planning.GenerationStageWroteElsewhere, planning.GenerationStageRequiredArtifact, planning.GenerationStagePlanID, planning.GenerationStageVerification, planning.GenerationStageOpenQuestions, planning.GenerationStageValidation} {
 		refusal := &planning.GenerationError{Stage: stage, Err: errors.New("rejected")}
 		for _, err := range []error{refusal, fmt.Errorf("wrapped: %w", refusal), errors.Join(refusal, refusal)} {
 			if got := ExitCode(classifyNoteRunError(err)); got != 5 {
