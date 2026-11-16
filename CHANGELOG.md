@@ -9,6 +9,30 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-11-09
+
+#### Added
+- You can explore monthly repository trends from the dashboard’s **Trends** tab, including cohort comparisons and clear indicators when evidence is incomplete or immature.
+- Trend reports can now show an unattended rate when intervention records provide sufficient coverage, and can estimate escaped defects attributed to merged plans with explicit maturity and coverage indicators.
+- You can get machine-readable arrays from `tao list --json` and `tao note list --json`; `tao note show --json` also includes repository-scoped predecessor plan and reference context.
+- You can pin `GOTOOLCHAIN`, `GOFLAGS`, and `CI` per repository with `gate_env` so supported agents and verification gates use consistent values across launch paths.
+- You can park owner-blocked plans with `tao park <id> --reason TEXT` and restore them with `tao unpark <id>`; parked plans are excluded from runnable and active work views.
+- You can pass bounded supplemental context to fresh note planning with `tao note run --hints-file FILE`, and check note readiness before promotion without gating execution.
+- You can add mechanical file scope with `tao edit amend --allow-file PATH... --mechanical REASON`; validation can also suggest a mechanical amendment when a known coupled file is missing from a slice.
+
+#### Changed
+- `tao merge --all` skips plans already integrated into the default branch and reports them with a hint for recording the merge. Dashboard-launched batch merge errors are now retained in a repository log.
+- You can rerun `tao note run` on an archived or promoted note to resume its linked plan. Its documented exit codes distinguish completion, blockers, decisions, refusals, and no work.
+- Insights now distinguishes direct, relayed, and mixed operator interventions. Using `--force` no longer counts as an intervention when no safeguard was overridden.
+
+#### Fixed
+- Invalid saved `workspace.setup` values now stop `tao run`, `tao note run`, and `tao rework --run` before execution instead of silently omitting the setup hook.
+- Compact `tao doctor` output no longer shows Claude’s policy-closed local-login status when the installation is otherwise healthy; other unknown readiness reasons remain visible.
+- Git status handling now preserves exact filenames, including names with arrows or significant whitespace, so affected-file reporting and safety checks retain the correct paths.
+
+#### Reliability
+- Pi runs now wait for the actual settled event rather than treating intermediate endings as final, and recoverable session failures can be retried once. Refused note-planning attempts retain diagnostic logs and report clearer outcomes and possible recovery candidates.
+
 ### Week of 2026-11-02
 
 #### Added
