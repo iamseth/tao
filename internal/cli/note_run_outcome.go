@@ -19,6 +19,7 @@ const (
 	NoteRunDecision
 	NoteRunPlanningRefusal
 	NoteRunNothingToDo
+	NoteRunMergePending
 )
 
 // NoteRunOutcome reports an observation, never permission to mutate or recover.
@@ -115,7 +116,7 @@ func noteRunErrorCode(err error) int {
 }
 
 // projectNoteRunOutcome reads freshly loaded artifacts after a nil handoff or
-// admission refusal. Only blocked/decision projections refine admission refusals;
+// admission refusal. Blocked, decision, and merge-pending projections refine admission refusals;
 // actual execution failures take precedence over all durable projections.
 func projectNoteRunOutcome(detail *plan.PlanDetail, alreadyComplete bool) error {
 	if detail == nil {
@@ -128,8 +129,14 @@ func projectNoteRunOutcome(detail *plan.PlanDetail, alreadyComplete bool) error 
 		return noteRunOutcome(NoteRunNothingToDo, fmt.Errorf("note run: linked plan is already completed"))
 	}
 	derived := plan.Derive(detail, time.Time{})
-	if derived.Capabilities.NeedsApproval || derived.Capabilities.NeedsScopeDecision || plan.IsPostSliceStatus(plan.PlanLifecycleStatus(detail)) {
-		return noteRunOutcome(NoteRunDecision, fmt.Errorf("note run: plan requires an approval, review, merge, or scope decision"))
+	if derived.Capabilities.NeedsApproval || derived.Capabilities.NeedsScopeDecision {
+		return noteRunOutcome(NoteRunDecision, fmt.Errorf("note run: plan requires an approval or scope decision"))
+	}
+	if primary := derived.NextAction.Primary; primary.Kind == plan.PlanActionMerge && primary.Class == plan.PlanActionClassProgress {
+		return noteRunOutcome(NoteRunMergePending, fmt.Errorf("note run: merge pending; normal merge safeguards still apply"))
+	}
+	if plan.IsPostSliceStatus(plan.PlanLifecycleStatus(detail)) {
+		return noteRunOutcome(NoteRunDecision, fmt.Errorf("note run: plan requires review, recovery, or another decision"))
 	}
 	if detail.State.Status == plan.StatusBlocked || derived.CurrentSlice != nil && derived.CurrentSlice.Status == plan.StatusBlocked || derived.NextSlice != nil && derived.NextSlice.Status == plan.StatusBlocked {
 		return noteRunOutcome(NoteRunBlocked, fmt.Errorf("note run: slice is blocked"))

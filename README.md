@@ -207,9 +207,14 @@ These exit codes apply **only to `tao note run`** (including `tao n r`):
 | 1 | Infrastructure, empty planner session, or unclassified error |
 | 2 | Usage error |
 | 3 | Slice blocked |
-| 4 | Approval, review/merge, or scope decision required |
+| 4 | Approval, review, recovery, or scope decision required (not ordinary merge pending) |
 | 5 | Planning refused: failed acceptance checks or possible sibling candidate |
 | 6 | Nothing further to do; not a completion signal |
+| 7 | Ordinary merge pending; advisory, not completion or authorization |
+
+Code 7 observes that the primary next action is an ordinary merge. Drivers must
+invoke `tao merge` through its normal safeguards; this code grants no permission
+to merge, approve, execute, or recover.
 
 If the planner wrote nothing, retry planning; an operator or orchestrator may
 choose the other agent once. Tao does not automatically switch agents. If the

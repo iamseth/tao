@@ -21,12 +21,29 @@ import (
 
 func TestNoteRunExitCodes(t *testing.T) {
 	cause := errors.New("cause")
-	for code := 0; code <= 6; code++ {
+	for code, assigned := range []int{NoteRunCompleted, NoteRunInfrastructure, NoteRunUsage, NoteRunBlocked, NoteRunDecision, NoteRunPlanningRefusal, NoteRunNothingToDo, NoteRunMergePending} {
+		if assigned != code {
+			t.Fatalf("numeric contract: index=%d value=%d", code, assigned)
+		}
 		err := &NoteRunOutcome{Code: code, Cause: cause}
 		wrapped := fmt.Errorf("wrapped: %w", err)
 		var outcome *NoteRunOutcome
 		if ExitCode(wrapped) != code || !errors.Is(wrapped, cause) || !errors.As(wrapped, &outcome) {
 			t.Fatalf("code %d: %v", code, wrapped)
+		}
+	}
+	merge := noteRunOutcome(NoteRunMergePending, cause)
+	for _, tc := range []struct {
+		err  error
+		code int
+	}{
+		{errors.Join(merge, merge), 7},
+		{errors.Join(merge, cause), 1},
+		{errors.Join(merge, noteRunOutcome(NoteRunDecision, cause)), 1},
+		{errors.Join(&plan.ApprovalRequiredError{}, cause), 1},
+	} {
+		if ExitCode(tc.err) != tc.code || ExitCode(classifyNoteRunError(tc.err)) != tc.code {
+			t.Fatalf("joined outcome: %v", tc.err)
 		}
 	}
 	if ExitCode(&run.SliceVerificationError{}) != NoteRunInfrastructure {
@@ -66,8 +83,83 @@ func TestNoteRunDurableOutcomes(t *testing.T) {
 			}
 		})
 	}
+	for _, kind := range []string{"approved", "missing", "stale", "rework", "recovery", "verification", "scope", "approval"} {
+		t.Run(kind, func(t *testing.T) {
+			detail := &plan.PlanDetail{Slices: plan.SlicesFile{Slices: []plan.Slice{{ID: "001-a"}}}}
+			setNoteRunMergeReady(t, detail)
+			want := 4
+			switch kind {
+			case "approved":
+				want = 7
+			case "missing":
+				detail.State.Plan.Review = nil
+			case "stale":
+				detail.Events = []plan.Event{{Type: plan.EventTypePlanReopened}}
+			case "rework":
+				detail.State.Plan.Review.Verdict = plan.ReviewVerdictChangesRequested
+			case "recovery":
+				detail.State.Workspace = &plan.Workspace{RebaseIntent: &plan.WorkspaceRebaseIntent{}}
+			case "scope", "approval":
+				detail.State.Status = plan.StatusInProgress
+				detail.State.Plan.PendingSlices = []string{"r101-fix"}
+				detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: "r101-fix", Status: plan.StatusPending})
+				if kind == "scope" {
+					detail.Slices.Slices[0].ExpectedFiles = []string{"original.go"}
+					detail.Slices.Slices[1].ExpectedFiles = []string{"original.go", "new.go"}
+				} else {
+					detail.Slices.Slices[1].Approval = &plan.Approval{Required: true}
+				}
+			case "verification":
+				want = 6 // Preserve the existing non-post-slice verification outcome.
+				detail.State.Workspace = &plan.Workspace{HeadSHA: "approved-head"}
+				detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "approved-head", Result: "failed", FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "failure"}
+			}
+			if kind == "missing" || kind == "rework" {
+				found := false
+				for _, alternative := range plan.DeriveNextAction(detail).Alternatives {
+					found = found || alternative.Kind == plan.PlanActionMerge && alternative.Class == plan.PlanActionClassAdministrative
+				}
+				if !found {
+					t.Fatal("fixture must offer only a forced merge alternative")
+				}
+			}
+			if got := ExitCode(projectNoteRunOutcome(detail, false)); got != want {
+				t.Fatalf("code=%d want=%d action=%+v", got, want, plan.DeriveNextAction(detail))
+			}
+		})
+	}
 	if ExitCode(projectNoteRunOutcome(nil, false)) != 1 {
 		t.Fatal("nil load guessed success")
+	}
+}
+
+func setNoteRunMergeReady(t *testing.T, detail *plan.PlanDetail) {
+	t.Helper()
+	detail.State.Status = plan.StatusReviewed
+	detail.State.Plan.PendingSlices = nil
+	detail.State.Plan.CurrentSlice = nil
+	detail.State.Plan.CompletedSlices = []string{"001-a"}
+	detail.Slices.Slices[0].Status = plan.StatusCompleted
+	detail.State.Plan.Review = &plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove, Head: "approved-head"}
+	action := plan.DeriveNextAction(detail).Primary
+	if action.Kind != plan.PlanActionMerge || action.Class != plan.PlanActionClassProgress {
+		t.Fatalf("fixture is not ordinary merge ready: %+v", action)
+	}
+}
+
+func persistNoteRunMergeReady(t *testing.T, dir string) {
+	t.Helper()
+	detail, err := plan.NewFileRepository(filepath.Dir(dir)).GetPlanExact(context.Background(), filepath.Base(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setNoteRunMergeReady(t, detail)
+	record, err := plan.NewPlanRecord(dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -77,8 +169,15 @@ func TestNoteRunHandoffOutcomePrecedence(t *testing.T) {
 		name, status, sliceStatus string
 		executionErr              error
 		remove                    bool
+		mergeReady                bool
 		code                      int
 	}{
+		{name: "merge pending", mergeReady: true, code: 7},
+		{name: "cancel beats merge", mergeReady: true, executionErr: context.Canceled, code: 1},
+		{name: "transport beats merge", mergeReady: true, executionErr: errors.New("transport"), code: 1},
+		{name: "decision beats merge", mergeReady: true, executionErr: &plan.ApprovalRequiredError{}, code: 4},
+		{name: "scope beats merge", mergeReady: true, executionErr: &plan.ReworkScopeDecisionError{}, code: 4},
+		{name: "failed load beats merge", mergeReady: true, remove: true, code: 1},
 		{name: "completed", status: plan.StatusCompleted, sliceStatus: plan.StatusCompleted, code: 0},
 		{name: "partial", status: plan.StatusInProgress, sliceStatus: plan.StatusPending, code: 6},
 		{name: "nil blocked", status: plan.StatusBlocked, sliceStatus: plan.StatusBlocked, code: 3},
@@ -107,6 +206,13 @@ func TestNoteRunHandoffOutcomePrecedence(t *testing.T) {
 			executeSinglePlan = func(run.Service, context.Context, run.Request) error {
 				calls++
 				switch {
+				case tc.mergeReady:
+					persistNoteRunMergeReady(t, fixture.dir)
+					if tc.remove {
+						if err := os.Remove(filepath.Join(fixture.dir, "state.json")); err != nil {
+							t.Fatal(err)
+						}
+					}
 				case tc.remove:
 					if err := os.Remove(filepath.Join(fixture.dir, "state.json")); err != nil {
 						t.Fatal(err)

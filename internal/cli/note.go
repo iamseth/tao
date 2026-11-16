@@ -1043,7 +1043,7 @@ func (a App) runLinkedNote(ctx context.Context, registered taodata.Repo, item no
 		if errors.Is(err, run.ErrCannotStart) {
 			if current, loadErr := loader.GetPlanExact(ctx, link.ID); loadErr == nil {
 				code := ExitCode(projectNoteRunOutcome(current, false))
-				if code == NoteRunBlocked || code == NoteRunDecision {
+				if code == NoteRunBlocked || code == NoteRunDecision || code == NoteRunMergePending {
 					return noteRunOutcome(code, err)
 				}
 			}

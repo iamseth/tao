@@ -924,6 +924,7 @@ func TestNoteRunLinkedAdmissionOutcomes(t *testing.T) {
 	}{
 		{"blocked", true, NoteRunBlocked},
 		{"approval", false, NoteRunDecision},
+		{"merge pending", false, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clearTaoEnv(t)
@@ -937,10 +938,13 @@ func TestNoteRunLinkedAdmissionOutcomes(t *testing.T) {
 				t.Fatal(err)
 			}
 			detail.State.Repo.Root = root
-			if tc.blocked {
+			switch {
+			case tc.name == "merge pending":
+				setNoteRunMergeReady(t, detail)
+			case tc.blocked:
 				detail.State.Status = plan.StatusBlocked
 				detail.Slices.Slices[0].Status = plan.StatusBlocked
-			} else {
+			default:
 				detail.Slices.Slices[0].Approval = &plan.Approval{Required: true, Reason: "operator decision"}
 			}
 			record, err := plan.NewPlanRecord(fixture.dir, detail)
