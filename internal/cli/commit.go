@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	taocommit "github.com/iamseth/tao/internal/commit"
@@ -82,8 +83,30 @@ func (a App) commit(ctx context.Context, args []string) error {
 		return fmt.Errorf("resolve standalone commit repository: %w", err)
 	}
 	git := gitops.NewClient(repoRoot, a.CommandRunner)
-	if err := a.guardStandaloneCommit(ctx, git, repoRoot); err != nil {
+	commonDir, err := git.RevParse(ctx, "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("resolve standalone commit repository identity: %w", err)
+	}
+	identityRoot, err := workspace.RepositoryRootFromGitCommonDir(repoRoot, commonDir)
+	if err != nil {
+		return fmt.Errorf("resolve standalone commit repository identity: %w", err)
+	}
+	if err := a.guardStandaloneCommit(ctx, git, repoRoot, identityRoot); err != nil {
 		return err
+	}
+	// Reuse the ownership identity, including for linked worktrees, without
+	// consulting the launch checkout or adding a Git subprocess. The settings
+	// read must distinguish absent registration from unreadable metadata.
+	effective, err := a.settingsForRepository(ctx, taodata.Repo{ID: taodata.RepoID(identityRoot)})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil {
+		prefixes, err := effective.envSnapshot().CommitSecretPathPrefixes()
+		if err != nil {
+			return err
+		}
+		options.SafetyPolicy = taocommit.SafetyPolicy{AllowPrefixes: prefixes}
 	}
 	if contextMode {
 		var push *taocommit.StandalonePush
@@ -94,7 +117,7 @@ func (a App) commit(ctx context.Context, args []string) error {
 			}
 			push = &target
 		}
-		commitContext, err := taocommit.BuildStandaloneContext(ctx, git, repoRoot)
+		commitContext, err := taocommit.BuildStandaloneContextWithPolicy(ctx, git, repoRoot, options.SafetyPolicy)
 		if err != nil {
 			return err
 		}
@@ -127,15 +150,7 @@ func (a App) commit(ctx context.Context, args []string) error {
 	return writef(a.Out, "Created local commit %s %s.\n", abbreviateCommitSHA(result.SHA), result.Subject)
 }
 
-func (a App) guardStandaloneCommit(ctx context.Context, git gitops.Client, worktreeRoot string) error {
-	commonDir, err := git.RevParse(ctx, "--git-common-dir")
-	if err != nil {
-		return fmt.Errorf("resolve standalone commit repository identity: %w", err)
-	}
-	repoRoot, err := workspace.RepositoryRootFromGitCommonDir(worktreeRoot, commonDir)
-	if err != nil {
-		return fmt.Errorf("resolve standalone commit repository identity: %w", err)
-	}
+func (a App) guardStandaloneCommit(ctx context.Context, git gitops.Client, worktreeRoot, repoRoot string) error {
 	canonicalWorktree, err := workspace.PhysicalPath(worktreeRoot)
 	if err != nil {
 		return fmt.Errorf("resolve standalone commit worktree: %w", err)

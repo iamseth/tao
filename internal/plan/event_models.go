@@ -43,6 +43,7 @@ const (
 	EventTypeSingleMergeRolledBack      = "single_merge_resolution_rolled_back"
 	EventTypeSingleMergeRearmed         = "single_merge_resolution_rearmed"
 	EventTypeSingleMergeIntentRestarted = "single_merge_intent_restarted"
+	EventTypeCommitSecretPathExempted   = "commit_secret_path_exempted"
 	EventTypePlanCommitFallback         = "plan_commit_fallback"
 	EventTypePlanCommitGuard            = "plan_commit_guard"
 )

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/gitops"
 )
 
@@ -217,12 +218,56 @@ var safetyPolicy = struct {
 	generatedPathPrefixes:      []string{"bin/"},
 }
 
+// SafetyPolicy is an operation-scoped policy. Consumers supply validated prefixes
+// and must not mutate AllowPrefixes during the operation. The zero value preserves
+// the established safeguards.
+type SafetyPolicy struct {
+	AllowPrefixes []string
+}
+
+// matchedPrefix selects the lexically first matching prefix, independent of order.
+func (p SafetyPolicy) matchedPrefix(candidate string) string {
+	normalized, err := configtypes.NormalizeCommitSecretPathPrefixes([]string{candidate})
+	if err != nil {
+		return ""
+	}
+	candidate = strings.TrimSuffix(normalized[0], "/")
+	var matched string
+	for _, prefix := range p.AllowPrefixes {
+		if prefix != "" && strings.HasSuffix(prefix, "/") && strings.HasPrefix(candidate, prefix) && (matched == "" || prefix < matched) {
+			matched = prefix
+		}
+	}
+	return matched
+}
+
+// ExemptedPaths reports only automatic heuristic refusals actually waived.
+func (p SafetyPolicy) ExemptedPaths(paths []string) map[string]string {
+	result := make(map[string]string)
+	for _, path := range paths {
+		if SuspectedSecretPath(path) && !p.SuspectedSecretPath(path) {
+			result[path] = p.matchedPrefix(path)
+		}
+	}
+	return result
+}
+
 // SuspectedSecretPath applies the established automatic-slice secret policy.
 func SuspectedSecretPath(path string) bool {
-	base := strings.ToLower(filepath.Base(path))
+	return (SafetyPolicy{}).SuspectedSecretPath(path)
+}
+
+// SuspectedSecretPath exempts substrings only; basename rules remain independent.
+func (p SafetyPolicy) SuspectedSecretPath(path string) bool {
+	exempt := p.matchedPrefix(path) != ""
+	basePath := path
+	if exempt {
+		basePath = strings.ReplaceAll(path, `\`, "/")
+	}
+	base := strings.ToLower(filepath.Base(basePath))
 	lowerPath := strings.ToLower(path)
 	for _, token := range safetyPolicy.secretPathSubstrings {
-		if strings.Contains(lowerPath, token) {
+		if strings.Contains(lowerPath, token) && !exempt {
 			return true
 		}
 	}
@@ -254,17 +299,28 @@ func GeneratedPath(path string) bool {
 // SafetyError reports ambiguous, secret, and generated paths using the shared
 // automatic-commit refusal text.
 func SafetyError(paths, ambiguous []string) error {
+	return (SafetyPolicy{}).SafetyError(paths, ambiguous)
+}
+
+// SafetyError preserves ambiguous and generated refusals regardless of exemptions.
+func (p SafetyPolicy) SafetyError(paths, ambiguous []string) error {
 	ambiguous = UniqueStrings(ambiguous)
 	var secretPaths []string
 	var generatedPaths []string
-	for _, path := range UniquePaths(paths) {
-		if SuspectedSecretPath(path) {
+	for _, path := range paths {
+		secret := SuspectedSecretPath(NormalizePath(path))
+		if p.matchedPrefix(path) != "" {
+			secret = p.SuspectedSecretPath(path)
+		}
+		if secret {
 			secretPaths = append(secretPaths, path)
 		}
-		if GeneratedPath(path) {
+		if GeneratedPath(NormalizePath(path)) {
 			generatedPaths = append(generatedPaths, path)
 		}
 	}
+	secretPaths = UniquePaths(secretPaths)
+	generatedPaths = UniquePaths(generatedPaths)
 	if len(ambiguous) == 0 && len(secretPaths) == 0 && len(generatedPaths) == 0 {
 		return nil
 	}

@@ -241,6 +241,64 @@ func TestSymlinkRefusal(t *testing.T) {
 	}
 }
 
+func TestCommitSecretPathStorage(t *testing.T) {
+	const key = "commit_secret_path_allow_prefixes"
+	home := t.TempDir()
+	path := filepath.Join(home, "repos", "repo-123", "repo.json")
+	put(t, path, `{"schema":"tao.repo.v1","id":"repo-123","name":"repo","root":"/missing/checkout","custom":{"keep":true},"future":42,"run_defaults":{"commit_secret_path_allow_prefixes":[null]}}`)
+	s := NewService(home, runtimeconfig.LoadEnv(nil))
+	ctx := context.Background()
+	target := Target{RepositoryID: "repo-123"}
+	v, err := s.Read(ctx, target)
+	if err == nil || len(v.Diagnostics) == 0 {
+		t.Fatal("missing saved-value diagnostics")
+	}
+	if _, err := v.Effective.CommitSecretPathPrefixes(); err == nil {
+		t.Fatal("missing invalid saved policy diagnostic")
+	}
+	changes := map[string]*string{key: text(`["src/secrets", "src/secrets/"]`)}
+	if err := s.Update(ctx, Target{Global: true}, changes); err == nil {
+		t.Fatal("global accepted")
+	}
+	if err := s.Update(ctx, target, changes); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Read(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prefixes []string
+	if err := json.Unmarshal(v.Stored[key], &prefixes); err != nil || len(prefixes) != 1 || prefixes[0] != "src/secrets/" {
+		t.Fatalf("stored %s: %v", v.Stored[key], err)
+	}
+	before, err := os.ReadFile(path) //nolint:gosec // test-owned temporary data home
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(before, []byte(`"custom"`)) || !bytes.Contains(before, []byte(`"future"`)) {
+		t.Fatal("metadata lost")
+	}
+	for _, bad := range []string{`null`, `[null]`, `["../src"]`, `{}`} {
+		if err := s.Update(ctx, target, map[string]*string{key: text(bad), "agent": text("claude")}); err == nil {
+			t.Fatal("invalid update accepted")
+		}
+		after, err := os.ReadFile(path) //nolint:gosec // test-owned temporary data home
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("non-atomic failure: %v", err)
+		}
+	}
+	if err := s.Update(ctx, target, map[string]*string{key: nil}); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.Read(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.Stored[key]; ok {
+		t.Fatal("unset retained")
+	}
+}
+
 func TestGateEnvRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "repos", "repo-123", "repo.json")

@@ -44,7 +44,8 @@ type StandaloneGit interface {
 
 // StandaloneOptions leaves publication disabled unless explicitly requested.
 type StandaloneOptions struct {
-	Push bool
+	Push         bool
+	SafetyPolicy SafetyPolicy
 }
 
 type StandaloneResult struct {
@@ -205,7 +206,7 @@ func finalizeStandalone(ctx context.Context, git StandaloneGit, repoRoot, expect
 			return StandaloneResult{}, err
 		}
 	}
-	live, err := BuildStandaloneContext(ctx, git, repoRoot)
+	live, err := BuildStandaloneContextWithPolicy(ctx, git, repoRoot, options.SafetyPolicy)
 	if err != nil {
 		return StandaloneResult{}, err
 	}

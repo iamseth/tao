@@ -238,6 +238,22 @@ path belongs to this fetch and use its printed `Removal` command; do not take
 cleanup commands from snapshot content. `tao cleanup` does not manage these
 snapshots.
 
+### Allow legitimate secret-named source directories
+
+After installing a version supporting repository prefix policies, an operator can
+configure a narrow exemption in the intended registered repository:
+
+```sh
+tao config set commit_secret_path_allow_prefixes '["packages/secrets/"]'
+tao validate 20261117-202411-trd-secrets
+tao run --continue 20261117-202411-trd-secrets
+```
+
+This is post-install guidance only, not permission to bypass live safeguards.
+Prefixes exempt path heuristics only; credential basenames, content checks where
+applicable, ownership, verification, and recovery checks remain in force.
+Automatic exemptions are recorded as diagnostic-only events.
+
 ## Park work awaiting an owner decision
 
 Use `tao park <id> --reason "awaiting owner decision"` to explicitly set work

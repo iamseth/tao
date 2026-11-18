@@ -242,7 +242,16 @@ func builtinEnvDefaults() EnvDefaults {
 	}
 }
 
+// CommitSecretPathPrefixes returns a defensive repository policy after admission.
+func (s EnvSnapshot) CommitSecretPathPrefixes() ([]string, error) {
+	if err := s.Require("commit_secret_path_allow_prefixes"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(s.defaults.CommitSecretPathAllowPrefixes), nil
+}
+
 func cloneEnvDefaults(d EnvDefaults) EnvDefaults {
+	d.CommitSecretPathAllowPrefixes = slices.Clone(d.CommitSecretPathAllowPrefixes)
 	d.GateEnv = maps.Clone(d.GateEnv)
 	d.MaxSlices = cloneEnvPointer(d.MaxSlices)
 	d.Continue = cloneEnvPointer(d.Continue)

@@ -87,8 +87,9 @@ const (
 // commands. Optional defaults preserve explicit false semantics from
 // environment variables.
 type EnvDefaults struct {
-	WorkspaceSetup string
-	GateEnv        map[string]string
+	WorkspaceSetup                string
+	CommitSecretPathAllowPrefixes []string
+	GateEnv                       map[string]string
 	RunOptionsPatch
 	SessionWarnPercent          int
 	AutoRework                  *bool

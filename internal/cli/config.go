@@ -16,7 +16,7 @@ var configCommand = commandMetadata{
 	name: "config", minPrefix: "config",
 	usageLines:            []string{"config [--global | --repo ID]", "config get [key] [--global | --repo ID]", "config set <key> <value> [--global | --repo ID]", "config unset <key> [--global | --repo ID]"},
 	completionDescription: "Inspect and edit scoped settings",
-	long:                  "Inspect stored and effective settings with their sources and diagnostics. Defaults to the current registered repository; --global works outside a repository. Environment values mask saved values. Unset restores inheritance; null disables only budget STOP caps. Malformed files must be repaired manually at the reported path. Replaces the deprecated repo config adapter.",
+	long:                  "Inspect stored and effective settings with their sources and diagnostics. Defaults to the current registered repository; --global works outside a repository. Environment values mask saved values. Unset restores inheritance; null disables only budget STOP caps. commit_secret_path_allow_prefixes accepts a repository-only JSON string array (for example '[\"src/secrets\"]'); prefixes normalize to case-sensitive relative directories with trailing slashes. This exempts only path heuristics, not credential or content safeguards; [] or unset restores no exemptions. Malformed files must be repaired manually at the reported path. Replaces the deprecated repo config adapter.",
 	examples:              "  tao config\n  tao config set models.model provider/model --global\n  tao config unset pull_request --repo tao",
 	registerFlags:         registerConfigFlags,
 	subcommands:           configSubcommands(),

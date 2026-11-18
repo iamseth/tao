@@ -19,6 +19,7 @@ func TestPlanFormatDocumentsEmittedEventContract(t *testing.T) {
 	currentEmittedEventTypes := []string{
 		"plan_created",
 		EventTypeSliceStarted,
+		EventTypeCommitSecretPathExempted,
 		EventTypeSliceCompleted,
 		EventTypeSliceBlocked,
 		EventTypeSliceResumeAttempted,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/iamseth/tao/internal/configtypes"
@@ -19,6 +20,15 @@ func (d *RepoRunDefaults) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = RepoRunDefaults{Extra: raw}
+	var prefixes []string
+	if value, ok := raw["commit_secret_path_allow_prefixes"]; ok && json.Unmarshal(value, &prefixes) == nil && prefixes != nil {
+		// Invalid policies remain raw and repairable; registry loading never fails
+		// because a saved setting is invalid.
+		if _, err := configtypes.NormalizeCommitSecretPathPrefixes(prefixes); err == nil {
+			d.CommitSecretPathAllowPrefixes = prefixes
+			delete(d.Extra, "commit_secret_path_allow_prefixes")
+		}
+	}
 	var pull bool
 	if value, ok := raw["pull_request"]; ok && string(value) != "null" && json.Unmarshal(value, &pull) == nil {
 		d.PullRequest = &pull
@@ -51,6 +61,13 @@ func (d RepoRunDefaults) MarshalJSON() ([]byte, error) {
 	raw := d.Extra.Clone()
 	if raw == nil {
 		raw = configtypes.SettingsValues{}
+	}
+	if d.CommitSecretPathAllowPrefixes != nil {
+		data, err := json.Marshal(d.CommitSecretPathAllowPrefixes)
+		if err != nil {
+			return nil, err
+		}
+		raw["commit_secret_path_allow_prefixes"] = data
 	}
 	if d.PullRequest != nil {
 		data, err := json.Marshal(d.PullRequest)
@@ -126,7 +143,7 @@ func (d *RepoRunDefaults) clearModels() {
 }
 
 func (d RepoRunDefaults) empty() bool {
-	return d.ReviewAgent == "" && d.PullRequest == nil && d.Models == nil && d.MaxReworkAttempts == nil && d.ReworkEscalationFromAttempt == nil && len(d.Extra) == 0
+	return d.CommitSecretPathAllowPrefixes == nil && d.ReviewAgent == "" && d.PullRequest == nil && d.Models == nil && d.MaxReworkAttempts == nil && d.ReworkEscalationFromAttempt == nil && len(d.Extra) == 0
 }
 
 func (r Registry) lockRepo(ctx context.Context, id string) (func(), error) {
@@ -147,6 +164,7 @@ func (r Registry) lockRepo(ctx context.Context, id string) (func(), error) {
 
 func (d RepoRunDefaults) clone() RepoRunDefaults {
 	d.Extra = d.Extra.Clone()
+	d.CommitSecretPathAllowPrefixes = slices.Clone(d.CommitSecretPathAllowPrefixes)
 	if d.PullRequest != nil {
 		v := *d.PullRequest
 		d.PullRequest = &v

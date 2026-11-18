@@ -156,6 +156,55 @@ func TestBuildStandaloneContextFingerprintsRawUntrackedBytes(t *testing.T) {
 	}
 }
 
+func TestStandaloneContextSafetyPolicy(t *testing.T) {
+	policy := SafetyPolicy{AllowPrefixes: []string{"packages/secrets/"}}
+	if got := policy.standaloneRejectionReason("packages/secrets/client.go", "+safe", []string{"packages/secrets/"}); got != "local-only path excluded by packages/secrets/" {
+		t.Fatalf("local exclusion = %q", got)
+	}
+	for _, path := range []string{"packages/secrets/../secret.go", `packages\secrets\..\secret.go`, "/packages/secrets/client.go"} {
+		if policy.matchedPrefix(path) != "" {
+			t.Fatalf("malformed path matched: %q", path)
+		}
+	}
+	if got := standaloneRejectionReason("packages/secrets/client.go", "+safe", nil); got != "secret-looking path" {
+		t.Fatalf("default reason = %q", got)
+	}
+	for _, tt := range []struct{ path, diff, reason string }{
+		{"packages/secrets/src/client.go", "+safe", ""},
+		{"packages/secrets-other/client.go", "+safe", "secret-looking path"},
+		{"packages/other/secret.go", "+safe", "secret-looking path"},
+		{"packages/secrets/.env.example", "+safe", "forbidden credential path"},
+		{"packages/secrets/.env.local", "+safe", "forbidden credential path"},
+		{"packages/secrets/id_rsa", "+safe", "forbidden credential path"},
+		{"packages/secrets/client.go", "+-----BEGIN RSA PRIVATE KEY-----", "credential-looking diff content"},
+		{"packages/secrets/client.min.js", "+safe", "generated artifact"},
+	} {
+		t.Run(tt.path+tt.reason, func(t *testing.T) {
+			git := &contextGitStub{head: "head", status: " M " + tt.path + "\x00", diffs: map[string]string{tt.path: tt.diff}}
+			root := t.TempDir()
+			got, err := BuildStandaloneContextWithPolicy(context.Background(), git, root, policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.reason == "" {
+				if len(got.AllowedPaths) != 1 {
+					t.Fatalf("not allowed: %+v", got)
+				}
+			} else if len(got.RejectedPaths) != 1 || got.RejectedPaths[0].Reason != tt.reason || got.AllowedDiff != "" {
+				t.Fatalf("unexpected context: %+v", got)
+			}
+			zero, err := BuildStandaloneContextWithPolicy(context.Background(), git, root, SafetyPolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy, err := BuildStandaloneContext(context.Background(), git, root)
+			if err != nil || zero.Fingerprint != legacy.Fingerprint {
+				t.Fatalf("default mismatch: %v", err)
+			}
+		})
+	}
+}
+
 func TestWriteIdentityLengthFramesFieldBoundaries(t *testing.T) {
 	var first bytes.Buffer
 	writeIdentity(&first, "first", "a")

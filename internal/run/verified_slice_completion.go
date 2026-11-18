@@ -30,6 +30,9 @@ func (s SliceCompletionService) CompleteVerified(ctx context.Context, request Sl
 	if request.Record == nil || request.Record.Detail() == nil {
 		return fmt.Errorf("slice completion requires a plan record")
 	}
+	if _, err := s.completionSafetyPolicy(); err != nil {
+		return err
+	}
 	release, err := acquireSliceCompletionLock(request.Record.Dir())
 	if err != nil {
 		return err
@@ -303,8 +306,16 @@ func (s SliceCompletionService) inspectVerifiedCompletion(ctx context.Context, r
 		return result, fmt.Errorf("slice completion unsafe branch %q", branch)
 	}
 	classification := commitcontract.ClassifyStatus(status, nil)
-	if err := commitcontract.SafetyError(commitcontract.UniquePaths(classification.CommitCandidates), nil); err != nil && policy == CommitPolicySlice.String() {
+	safety, err := s.completionSafetyPolicy()
+	if err != nil {
 		return result, err
+	}
+	if policy == CommitPolicySlice.String() {
+		paths := commitcontract.UniquePaths(classification.CommitCandidates)
+		if err := safety.SafetyError(paths, nil); err != nil {
+			return result, err
+		}
+		s.recordSecretPathExemptions(request, safety, paths, head)
 	}
 	indexFingerprint, err := git.DirtyFingerprint(ctx)
 	if err != nil {

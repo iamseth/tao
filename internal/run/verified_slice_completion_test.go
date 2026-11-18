@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/iamseth/tao/internal/commandrunner"
+	"github.com/iamseth/tao/internal/configtypes"
 	"github.com/iamseth/tao/internal/plan"
+	"github.com/iamseth/tao/internal/runtimeconfig"
 
 	"github.com/iamseth/tao/internal/testenv"
 )
@@ -439,6 +441,56 @@ func TestCompleteVerifiedMovedFile(t *testing.T) {
 	}
 }
 
+func TestCompleteVerifiedSecretPathPolicy(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, path := range []string{"packages/secrets/source.go", "packages/secrets/.env", "outside/secrets.go", "ordinary.go"} {
+		t.Run(path, func(t *testing.T) {
+			request, root := sliceStagingFixture(t, map[string]string{path: "baseline\n"})
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, path), []byte("package example\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"commit_secret_path_allow_prefixes": []byte(`["packages/secrets/"]`)}, runtimeconfig.LoadEnv(nil))
+			service := SliceCompletionService{RuntimeEnv: &snapshot}
+			err := service.Complete(context.Background(), request)
+			allowed := path == "packages/secrets/source.go" || path == "ordinary.go"
+			if (err == nil) != allowed {
+				t.Fatalf("completion: %v", err)
+			}
+			if !allowed {
+				if got := runCommitTestGitOutput(t, root, "diff", "--cached"); got != "" {
+					t.Fatal("refusal staged changes")
+				}
+				if got := reloadVerifiedCompletion(t, request).Detail().Slices.Slices[0]; got.CommitIntent != nil || got.VerificationAttempt != nil {
+					t.Fatal("refusal ran gates or persisted intent")
+				}
+				return
+			}
+			if err := service.Complete(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, event := range reloadVerifiedCompletion(t, request).Detail().Events {
+				if event.Type == "commit_secret_path_exempted" {
+					count++
+					if event.Reason != "packages/secrets/" || strings.Join(event.Paths, ",") != path || event.HeadSHA == "" || event.SliceID != request.SliceID {
+						t.Fatalf("event: %+v", event)
+					}
+				}
+			}
+			want := 0
+			if path == "packages/secrets/source.go" {
+				want = 1
+			}
+			if count != want {
+				t.Fatalf("exemption events = %d, want %d", count, want)
+			}
+		})
+	}
+}
+
 func TestCompleteVerifiedInvalidPinsBeforeExecution(t *testing.T) {
 	testenv.SkipIfShort(t)
 	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
@@ -509,9 +561,9 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, `printf cache > "$GOLANGCI_LINT_CACHE/entry"`)
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
-			if err := os.WriteFile(filepath.Join(root, "change.go"), []byte("package change\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			runCommitTestGitCommand(t, root, "config", "status.showUntrackedFiles", "all")
+			writeSliceStagingFile(t, root, "packages/secrets/change.go", "package change\n")
+			snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"commit_secret_path_allow_prefixes": []byte(`["packages/secrets/"]`)}, runtimeconfig.LoadEnv(nil))
 			if point == "staged move" {
 				runCommitTestGitCommand(t, root, "config", "status.renames", "true")
 				if err := os.Rename(filepath.Join(root, "binary.dat"), filepath.Join(root, "moved.dat")); err != nil {
@@ -520,7 +572,7 @@ func TestCompleteVerifiedInterruptedIntentRecovery(t *testing.T) {
 			}
 			gates := 0
 			interrupted := false
-			service := SliceCompletionService{CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+			service := SliceCompletionService{RuntimeEnv: &snapshot, CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 				if name == "sh" {
 					gates++
 				}
@@ -670,9 +722,8 @@ func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
 		t.Run(map[bool]string{true: "legacy", false: "message-bound"}[legacy], func(t *testing.T) {
 			request := verifiedCompletionFixture(t, CommitPolicySlice, "must never run")
 			root := request.Record.Detail().Slices.Slices[0].ExecutionRoot
-			if err := os.WriteFile(filepath.Join(root, "old.go"), []byte("package old\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			runCommitTestGitCommand(t, root, "config", "status.showUntrackedFiles", "all")
+			writeSliceStagingFile(t, root, "packages/secrets/old.go", "package old\n")
 			message := "old unvalidated message"
 			if !legacy {
 				var err error
@@ -706,6 +757,8 @@ func TestCompleteVerifiedRecoversBothHistoricalHashesVerbatim(t *testing.T) {
 				}
 				return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
 			}}
+			snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"commit_secret_path_allow_prefixes": []byte(`["packages/secrets/"]`)}, runtimeconfig.LoadEnv(nil))
+			service.RuntimeEnv = &snapshot
 			wrong := request
 			wrong.VerificationResults = nil
 			if err := service.Complete(context.Background(), wrong); err == nil {

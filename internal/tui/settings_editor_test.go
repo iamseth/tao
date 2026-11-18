@@ -95,6 +95,9 @@ func TestSettingsEditorSchema(t *testing.T) {
 		}
 		t.Run(d.Key, func(t *testing.T) {
 			value := "1"
+			if d.Kind == "array" {
+				value = `["src/secrets"]`
+			}
 			if d.Kind == "object" {
 				value = `{"CI":"true"}`
 			}

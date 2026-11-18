@@ -85,6 +85,56 @@ func TestSafetyPathClassification(t *testing.T) {
 	}
 }
 
+func TestSafetyPolicyPrefixes(t *testing.T) {
+	policy := SafetyPolicy{AllowPrefixes: []string{"packages/secrets/src/", "packages/secrets/"}}
+	for _, tt := range []struct {
+		path           string
+		secret, exempt bool
+	}{
+		{"packages/secrets/src/client.go", false, true},
+		{`packages\secrets\src\client.go`, false, true},
+		{"packages/secrets-other/client.go", true, false},
+		{"packages/other/secret.go", true, false},
+		{"Packages/secrets/client.go", true, false},
+		{"packages/secrets/../secret.go", true, false},
+		{`packages\secrets\..\secret.go`, true, false},
+		{"packages/secrets/\x00client.go", true, false},
+		{"C:packages/secrets/client.go", true, false},
+		{"packages/secrets", true, false},
+		{`packages\secrets\.env.local`, true, false},
+		{"/packages/secrets/client.go", true, false},
+		{"packages/secrets/.env.local", true, false},
+		{"packages/secrets/.env.example", false, true},
+		{"ordinary/client.go", false, false},
+		{".env.example", false, false},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := policy.SuspectedSecretPath(tt.path); got != tt.secret {
+				t.Fatalf("secret = %v", got)
+			}
+			exemptions := policy.ExemptedPaths([]string{tt.path})
+			if (len(exemptions) != 0) != tt.exempt {
+				t.Fatalf("exemptions = %v", exemptions)
+			}
+			if tt.exempt && exemptions[tt.path] != "packages/secrets/" {
+				t.Fatalf("non-deterministic prefix: %v", exemptions)
+			}
+			if (SafetyPolicy{}).SuspectedSecretPath(tt.path) != SuspectedSecretPath(tt.path) {
+				t.Fatal("default changed")
+			}
+		})
+	}
+	if got := (SafetyPolicy{AllowPrefixes: []string{"ordinary/"}}).ExemptedPaths([]string{"ordinary/client.go"}); len(got) != 0 {
+		t.Fatalf("reported non-heuristic path: %v", got)
+	}
+	if err := policy.SafetyError([]string{"packages/secrets/src/client.go"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.SafetyError([]string{"bin/output"}, []string{"ambiguous"}); err == nil {
+		t.Fatal("waived non-secret safeguards")
+	}
+}
+
 func TestSafetyErrorReportsSortedUniqueRefusals(t *testing.T) {
 	err := SafetyError(
 		[]string{"bin/tao", ".env.local", "./bin/tao", ".env.example"},

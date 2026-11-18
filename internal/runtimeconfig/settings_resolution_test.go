@@ -369,6 +369,45 @@ func TestResolveSettingsPresentationAndInvocation(t *testing.T) {
 	}
 }
 
+func TestCommitSecretPathResolution(t *testing.T) {
+	const key = "commit_secret_path_allow_prefixes"
+	for _, s := range []EnvSnapshot{{}, ResolveSettings(nil, nil, capturedSettings(nil))} {
+		got, err := s.CommitSecretPathPrefixes()
+		if err != nil || len(got) != 0 {
+			t.Fatalf("zero = %v, %v", got, err)
+		}
+	}
+	repo := settingLayer(key, `["src/secrets"]`)
+	s := ResolveSettings(nil, repo, capturedSettings(nil))
+	got, err := s.CommitSecretPathPrefixes()
+	if err != nil || len(got) != 1 || got[0] != "src/secrets/" {
+		t.Fatalf("policy = %v, %v", got, err)
+	}
+	got[0] = "changed"
+	s.Defaults().CommitSecretPathAllowPrefixes[0] = "changed"
+	repo[key][2] = 'X'
+	again, err := s.CommitSecretPathPrefixes()
+	if err != nil || again[0] != "src/secrets/" {
+		t.Fatalf("aliased policy = %v, %v", again, err)
+	}
+	for _, bad := range []string{`null`, `[null]`, `["../src"]`, `{}`, `"src"`} {
+		s := ResolveSettings(nil, settingLayer(key, bad), capturedSettings(nil))
+		if _, err := s.CommitSecretPathPrefixes(); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+		if len(s.Defaults().CommitSecretPathAllowPrefixes) != 0 {
+			t.Fatal("invalid policy applied")
+		}
+		if settingStatus(t, s, key).Warning == "" {
+			t.Fatal("missing diagnostic")
+		}
+	}
+	s = ResolveSettings(settingLayer(key, `[]`), settingLayer(key, `["src"]`), capturedSettings(nil))
+	if _, err := s.CommitSecretPathPrefixes(); err == nil {
+		t.Fatal("masked global error")
+	}
+}
+
 func TestGateEnvResolution(t *testing.T) {
 	for _, raw := range []string{"", `{}`, `{"CI":"","GOFLAGS":"-mod=readonly"}`} {
 		var repo configtypes.SettingsValues

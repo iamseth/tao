@@ -29,6 +29,9 @@ func TestConfigSchemaRoundTrips(t *testing.T) {
 		for _, scope := range def.Scopes {
 			t.Run(scope+"/"+def.Key, func(t *testing.T) {
 				value := "2"
+				if def.Kind == "array" {
+					value = `["src/secrets"]`
+				}
 				if def.Kind == "object" {
 					value = `{"CI":"true","GOFLAGS":""}`
 				}

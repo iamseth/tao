@@ -14,6 +14,38 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestRepoCommitSecretPathDefaults(t *testing.T) {
+	for _, raw := range []string{`[]`, `["src/secrets"]`, `[null]`, `null`, `42`, `["../src"]`} {
+		var d RepoRunDefaults
+		if err := json.Unmarshal([]byte(`{"commit_secret_path_allow_prefixes":`+raw+`,"future":true}`), &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.empty() {
+			t.Fatal("defaults lost")
+		}
+		encoded, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &values); err != nil {
+			t.Fatal(err)
+		}
+		if string(values["commit_secret_path_allow_prefixes"]) != raw || string(values["future"]) != "true" {
+			t.Fatalf("round trip: %s", encoded)
+		}
+	}
+	d := RepoRunDefaults{CommitSecretPathAllowPrefixes: []string{"src/secrets"}}
+	copy := d.clone()
+	copy.CommitSecretPathAllowPrefixes[0] = "changed"
+	if d.CommitSecretPathAllowPrefixes[0] != "src/secrets" {
+		t.Fatal("clone aliases policy")
+	}
+	if d.empty() {
+		t.Fatal("policy-only defaults empty")
+	}
+}
+
 func TestRepoReviewAgentDefaults(t *testing.T) {
 	var legacy Repo
 	if err := json.Unmarshal([]byte(`{"id":"legacy","unknown":true}`), &legacy); err != nil {

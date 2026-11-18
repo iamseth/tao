@@ -52,6 +52,32 @@ var nonEnvSettings = map[string]struct {
 			return strconv.Itoa(n), nil
 		},
 	},
+	"commit_secret_path_allow_prefixes": {
+		definition:   SettingDefinition{Key: "commit_secret_path_allow_prefixes", Kind: "array", Scopes: []string{"repo"}},
+		defaultValue: "[]",
+		apply: func(d *EnvDefaults, value string) (string, error) {
+			var members []json.RawMessage
+			if err := json.Unmarshal([]byte(value), &members); err != nil || members == nil {
+				return "", fmt.Errorf("must be a JSON array of strings")
+			}
+			prefixes := make([]string, len(members))
+			for i, member := range members {
+				if string(member) == "null" || json.Unmarshal(member, &prefixes[i]) != nil {
+					return "", fmt.Errorf("must be a JSON array of strings")
+				}
+			}
+			normalized, err := configtypes.NormalizeCommitSecretPathPrefixes(prefixes)
+			if err != nil {
+				return "", err
+			}
+			if normalized == nil {
+				normalized = []string{}
+			}
+			d.CommitSecretPathAllowPrefixes = normalized
+			encoded, err := json.Marshal(normalized)
+			return string(encoded), err
+		},
+	},
 	"gate_env": {
 		definition:   SettingDefinition{Key: "gate_env", Kind: "object", Scopes: []string{"repo"}},
 		defaultValue: "{}",
@@ -147,7 +173,7 @@ func validateSetting(key string, raw json.RawMessage, scope string) error {
 	if !slices.Contains(d.Scopes, scope) {
 		return fmt.Errorf("%s: not allowed in %s scope", key, scope)
 	}
-	if key == "gate_env" {
+	if key == "gate_env" || d.Kind == "array" {
 		_, err := ParseSetting(key, string(raw))
 		return err
 	}

@@ -40,6 +40,9 @@ func (a App) validate(ctx context.Context, repo plan.Resolver, args []string) er
 	if err != nil {
 		return err
 	}
+	if _, err := a.envSnapshot().CommitSecretPathPrefixes(); err != nil {
+		return err
+	}
 	budget, err := a.envSnapshot().Budget()
 	if err != nil {
 		return err

@@ -71,6 +71,7 @@ runtime parsers below, then save native scalars.
 | Global and repository | `budget.<slice\|plan>.<metric>.warn` | Non-negative count integer or cost number |
 | Global and repository | `budget.slice.output_tokens.stop`, `budget.slice.cost.stop` | Non-negative integer/number or `null` |
 | Repository only | `workspace.setup` | String; workspace setup command (empty by default) |
+| Repository only | `commit_secret_path_allow_prefixes` | JSON string array of secret-path heuristic directory exemptions (empty by default) |
 | Repository only | `gate_env` | Native JSON object; bounded child environment pins (empty by default) |
 | Global only | `theme`, `update` | String; choices below |
 | Environment/flags only (not persisted) | `merge_verify_command`, `aggregate_review_convergence_window`, `approved_by`, `planner_routing`, `planner_routing_arms`, `planner_routing_floor` | Existing process/merge/planner controls; see below and command help |
@@ -84,6 +85,18 @@ instead.
 Bootstrap paths and recovery actions are never persisted settings.
 
 ### Workspace setup
+
+`commit_secret_path_allow_prefixes` is stored in `run_defaults` in `tao.repo.v1` and is repository-only, with no environment alias or bypass flag:
+
+```sh
+tao config set commit_secret_path_allow_prefixes '["src/secrets", "internal/credentials"]'
+tao config get commit_secret_path_allow_prefixes
+tao config unset commit_secret_path_allow_prefixes
+```
+
+Missing and `[]` mean no exemptions. Values must be a JSON array containing only strings; `null`, other JSON types, and non-string members are rejected. Prefixes are case-sensitive, repository-relative directories. Backslashes normalize to forward slashes, redundant separators and dot segments are cleaned, a trailing slash is added, and duplicates are removed in sorted order. Empty/root-wide, absolute, drive-qualified, NUL-containing, and parent-traversing entries are rejected before cleaning. Directory-boundary matching never exempts a sibling such as `src/secrets-other`.
+
+This is a narrow repository-owner security policy: it exempts only automatic substring and standalone path-regex heuristics. It does not exempt forbidden credential files, credential-content checks, generated/local-only exclusions, or ambiguous Git status; existing `.env` and template handling remains unchanged. Invalid saved values retain diagnostics and can be repaired with `config set` or removed with `config unset`, rather than making the repository disappear. Settings alone never authorize lifecycle, recovery, or merge actions.
 
 `gate_env` is repository-only and has no runtime environment alias:
 
@@ -202,6 +215,7 @@ PRs or inherit automatic slice-commit behavior.
 | `TAO_MERGE_REVIEW_EFFORT` | — | — | — | — | yes | — |
 | `TAO_RESOLVER_EFFORT` | — | — | — | — | yes | — |
 | `workspace.setup` | yes | yes | yes | — | — | — |
+| `commit_secret_path_allow_prefixes` | yes | yes | yes | — | — | — |
 | `TAO_AUTO_REWORK` | yes | yes | yes | — | — | — |
 | `TAO_MAX_REWORK_ATTEMPTS` | yes | yes | yes | — | — | — |
 | `TAO_RUN_HEADER` | yes | yes | yes | — | — | — |

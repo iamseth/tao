@@ -88,6 +88,9 @@ func (a App) sliceComplete(ctx context.Context, args []string) error {
 		}
 	}
 	snapshot := a.envSnapshot()
+	if _, err := snapshot.CommitSecretPathPrefixes(); err != nil {
+		return err
+	}
 	service := run.SliceCompletionService{CommandRunner: a.CommandRunner, Output: a.Out, RuntimeEnv: &snapshot}
 	if err := service.Complete(ctx, run.SliceCompletionRequest{
 		Record: record, SliceID: sliceID, Notes: inputs.Notes,

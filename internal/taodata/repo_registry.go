@@ -36,12 +36,13 @@ type Repo struct {
 
 // RepoRunDefaults records optional defaults for runs in one repository.
 type RepoRunDefaults struct {
-	ReviewAgent                 string                     `json:"review_agent,omitempty"`
-	PullRequest                 *bool                      `json:"pull_request,omitempty"`
-	Models                      *RepoModelDefaults         `json:"models,omitempty"`
-	MaxReworkAttempts           *int                       `json:"max_rework_attempts,omitempty"`
-	ReworkEscalationFromAttempt *int                       `json:"rework_escalation_from_attempt,omitempty"`
-	Extra                       configtypes.SettingsValues `json:"-"`
+	CommitSecretPathAllowPrefixes []string                   `json:"commit_secret_path_allow_prefixes,omitzero"`
+	ReviewAgent                   string                     `json:"review_agent,omitempty"`
+	PullRequest                   *bool                      `json:"pull_request,omitempty"`
+	Models                        *RepoModelDefaults         `json:"models,omitempty"`
+	MaxReworkAttempts             *int                       `json:"max_rework_attempts,omitempty"`
+	ReworkEscalationFromAttempt   *int                       `json:"rework_escalation_from_attempt,omitempty"`
+	Extra                         configtypes.SettingsValues `json:"-"`
 }
 
 // WithReworkDefaults returns a copy with each numeric default copied from its

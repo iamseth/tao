@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,6 +35,38 @@ type SliceCompletionService struct {
 	RuntimeEnv    *runtimeconfig.EnvSnapshot
 	CommandRunner commandrunner.Runner
 	Output        io.Writer
+}
+
+func (s SliceCompletionService) completionSafetyPolicy() (commitcontract.SafetyPolicy, error) {
+	prefixes, err := runtimeEnv(s.RuntimeEnv).CommitSecretPathPrefixes()
+	return commitcontract.SafetyPolicy{AllowPrefixes: prefixes}, err
+}
+
+// Diagnostic observations never authorize completion or recovery.
+func (s SliceCompletionService) recordSecretPathExemptions(request SliceCompletionRequest, policy commitcontract.SafetyPolicy, paths []string, head string) {
+	groups := map[string][]string{}
+	for path, prefix := range policy.ExemptedPaths(paths) {
+		groups[prefix] = append(groups[prefix], path)
+	}
+	prefixes := make([]string, 0, len(groups))
+	for prefix := range groups {
+		prefixes = append(prefixes, prefix)
+	}
+	slices.Sort(prefixes)
+	detail := request.Record.Detail()
+	for _, prefix := range prefixes {
+		matched := commitcontract.UniquePaths(groups[prefix])
+		duplicate := slices.ContainsFunc(detail.Events, func(event plan.Event) bool {
+			return event.Type == plan.EventTypeCommitSecretPathExempted && event.PlanID == detail.State.Plan.ID && event.SliceID == request.SliceID && event.HeadSHA == head && event.Reason == prefix && slices.Equal(event.Paths, matched)
+		})
+		if duplicate {
+			continue
+		}
+		event := plan.Event{Type: plan.EventTypeCommitSecretPathExempted, Timestamp: request.Now, PlanID: detail.State.Plan.ID, SliceID: request.SliceID, HeadSHA: head, Reason: prefix, Paths: matched, Message: "Repository prefix policy exempted automatic secret-path heuristic matches; diagnostic only"}
+		if err := plan.AppendEvent(request.Record.Dir(), event); err == nil {
+			detail.Events = append(detail.Events, event)
+		}
+	}
 }
 
 // Complete observes declared gates before any new intent. Only a recorded
@@ -193,7 +226,11 @@ func (s SliceCompletionService) finishSliceCompletion(ctx context.Context, git g
 	}
 	paths := commitcontract.UniquePaths(classification.CommitCandidates)
 	unexpected := commitcontract.UnexpectedPaths(paths, expectedPlanCommitPaths(request.Record.Detail(), request.SliceID))
-	if err := commitcontract.SafetyError(paths, nil); err != nil {
+	safety, err := s.completionSafetyPolicy()
+	if err != nil {
+		return err
+	}
+	if err := safety.SafetyError(paths, nil); err != nil {
 		return fmt.Errorf("slice commit refused: %w", err)
 	}
 	if err := checkFrozenVerificationWorktree(ctx, git, intent); err != nil {
@@ -202,6 +239,7 @@ func (s SliceCompletionService) finishSliceCompletion(ctx context.Context, git g
 	if err := check(); err != nil {
 		return err
 	}
+	s.recordSecretPathExemptions(request, safety, paths, head)
 	if len(paths) == 0 {
 		outcome := plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionNoChanges, CommitSHA: head}
 		return persistSliceCompletion(request, &outcome, request.Now)

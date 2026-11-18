@@ -342,6 +342,7 @@ func TestInsightsCorrectedVerificationEventsRetainExistingGoldenProjection(t *te
 	for _, event := range []plan.Event{
 		{Type: plan.EventTypeVerificationCommandInvalid, SliceID: "slice-a", VerificationAttemptID: "attempt-one", Command: "go test pkg/example_test.go", CorrectedCommand: "go test example_test.go", Result: "passed", Reason: "No test files found"},
 		{Type: plan.EventTypeVerificationCommandInvalid, SliceID: "slice-a", VerificationAttemptID: "attempt-two", Command: "go test pkg/example_test.go", CorrectedCommand: "go test example_test.go", Result: "passed", Reason: "No test files found"},
+		{Type: plan.EventTypeCommitSecretPathExempted, SliceID: "slice-a", HeadSHA: "diagnostic-head", Reason: "packages/secrets/", Paths: []string{"packages/secrets/source.go"}},
 		{Type: plan.EventTypeVerificationClaimMismatch, SliceID: "slice-a", VerificationAttemptID: "attempt-two", Command: "go test pkg/example_test.go", ClaimedResult: "passed", Result: "failed", Message: "password=private-claim"},
 	} {
 		if err := plan.AppendEvent(fixture.dir, event); err != nil {
@@ -376,7 +377,7 @@ func TestInsightsCorrectedVerificationEventsRetainExistingGoldenProjection(t *te
 			if err := test.render(&out, collected); err != nil {
 				t.Fatal(err)
 			}
-			for _, forbidden := range []string{plan.EventTypeVerificationClaimMismatch, "private-claim", "attempt-two"} {
+			for _, forbidden := range []string{plan.EventTypeVerificationClaimMismatch, plan.EventTypeCommitSecretPathExempted, "packages/secrets/", "private-claim", "attempt-two"} {
 				if strings.Contains(out.String(), forbidden) {
 					t.Fatalf("diagnostic became a rendered insight: %q", forbidden)
 				}

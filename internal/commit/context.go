@@ -123,6 +123,12 @@ func addLocalOnlyPattern(patterns map[string]bool, token string) {
 // BuildStandaloneContext captures the complete live identity while returning a
 // bounded diff. Rejected content is classified before it can enter AllowedDiff.
 func BuildStandaloneContext(ctx context.Context, git ContextGit, repoRoot string) (StandaloneContext, error) {
+	return BuildStandaloneContextWithPolicy(ctx, git, repoRoot, SafetyPolicy{})
+}
+
+// BuildStandaloneContextWithPolicy exempts only the standalone path heuristic.
+func BuildStandaloneContextWithPolicy(ctx context.Context, git ContextGit, repoRoot string, policy SafetyPolicy) (StandaloneContext, error) {
+	policy.AllowPrefixes = slices.Clone(policy.AllowPrefixes)
 	if git == nil {
 		return StandaloneContext{}, errors.New("standalone commit context requires Git")
 	}
@@ -167,7 +173,7 @@ func BuildStandaloneContext(ctx context.Context, git ContextGit, repoRoot string
 		}
 		reason := pathReason
 		if reason == "" {
-			reason = standaloneRejectionReason(path, diff, exclusions.Patterns)
+			reason = policy.standaloneRejectionReason(path, diff, exclusions.Patterns)
 		}
 		if len(diff) > changeDiffLimit {
 			reason = "change exceeds standalone diff safety limit"
@@ -341,6 +347,14 @@ func standaloneAmbiguousStatusLines(status string) []string {
 }
 
 func standaloneRejectionReason(path, diff string, exclusions []string) string {
+	return (SafetyPolicy{}).standaloneRejectionReason(path, diff, exclusions)
+}
+
+func (p SafetyPolicy) standaloneRejectionReason(path, diff string, exclusions []string) string {
+	exempt := p.matchedPrefix(path) != ""
+	if exempt {
+		path = strings.ReplaceAll(path, `\`, "/")
+	}
 	path = NormalizePath(path)
 	for _, pattern := range exclusions {
 		if matchesStandaloneExclusion(path, pattern) {
@@ -353,7 +367,7 @@ func standaloneRejectionReason(path, diff string, exclusions []string) string {
 	if standaloneForbiddenPath(path) {
 		return "forbidden credential path"
 	}
-	if secretPathPattern.MatchString(path) {
+	if secretPathPattern.MatchString(path) && !exempt {
 		return "secret-looking path"
 	}
 	added := addedDiffLines(diff)
