@@ -36,6 +36,9 @@ func TestValidateCoupledFilesLeavesArtifactsUnchanged(t *testing.T) {
 	}
 	file.Slices[0].ExpectedFiles = []string{"internal/runtimeconfig/example.go"}
 	file.Slices[0].Verification.Commands = []string{"go version"}
+	detail := &plan.PlanDetail{State: state, Slices: file}
+	addCoupledValidationLifecycleExamples(detail)
+	state, file = detail.State, detail.Slices
 	for name, value := range map[string]any{"state.json": state, "slices.json": file} {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -53,7 +56,8 @@ func TestValidateCoupledFilesLeavesArtifactsUnchanged(t *testing.T) {
 	if err := (newTestApp(App{Out: &out, Err: &out})).Run(context.Background(), []string{"--plans-dir", fixture.root, "validate", fixture.id}); err != nil {
 		t.Fatalf("%v: %s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "--allow-file docs/configuration.md --mechanical") {
+	if strings.Count(out.String(), "--allow-file docs/configuration.md --mechanical") != 2 ||
+		!strings.Contains(out.String(), "warning 003-completed") || strings.Contains(out.String(), "amend "+fixture.id+" 003-completed") {
 		t.Fatal(out.String())
 	}
 	for name, content := range before {
@@ -64,6 +68,21 @@ func TestValidateCoupledFilesLeavesArtifactsUnchanged(t *testing.T) {
 	if readText(t, target) != "unchanged" {
 		t.Fatal("mutated target")
 	}
+}
+
+// Keep an actionable pending/blocked pair alongside completed history in one
+// lifecycle-consistent blocked plan. The historical command warning must survive.
+func addCoupledValidationLifecycleExamples(detail *plan.PlanDetail) {
+	blocked := detail.Slices.Slices[0]
+	blocked.ID, blocked.Status = "002-blocked", plan.StatusBlocked
+	completed := detail.Slices.Slices[0]
+	completed.ID, completed.Status = "003-completed", plan.StatusCompleted
+	completed.Verification.Commands = []string{"go test missing_test.go"}
+	detail.Slices.Slices = append(detail.Slices.Slices, blocked, completed)
+	detail.State.Status = plan.StatusBlocked
+	detail.State.Plan.CurrentSlice = new(blocked.ID)
+	detail.State.Plan.PendingSlices = []string{detail.Slices.Slices[0].ID, blocked.ID}
+	detail.State.Plan.CompletedSlices = []string{completed.ID}
 }
 
 func TestValidateCoupledFilesGolden(t *testing.T) {
@@ -77,6 +96,7 @@ func TestValidateCoupledFilesGolden(t *testing.T) {
 	}
 	detail := validatePlanDetail(root, []string{"go version"}, nil)
 	detail.Slices.Slices[0].ExpectedFiles = []string{"internal/cli/example.go"}
+	addCoupledValidationLifecycleExamples(detail)
 	before, err := json.Marshal(detail)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +113,7 @@ func TestValidateCoupledFilesGolden(t *testing.T) {
 	if !bytes.Equal(before, after) || readText(t, target) != "unchanged" {
 		t.Fatal("validation mutated artifacts")
 	}
-	assertGolden(t, "testdata/coupled_files_validation.golden", out.Bytes())
+	assertGolden(t, "testdata/coupled_files_validation.golden", []byte(strings.ReplaceAll(out.String(), root, "<repo>")))
 }
 
 func TestValidateSliceTimingGolden(t *testing.T) {

@@ -39,6 +39,9 @@ var coupledInsightsFixtures = []string{
 }
 
 func validateCoupledFiles(detail *PlanDetail, slice Slice, validationRoot string, allowances futureFileSet) []VerificationFinding {
+	if slice.Status != StatusPending && slice.Status != StatusBlocked {
+		return nil
+	}
 	if strings.TrimSpace(validationRoot) == "" {
 		return nil
 	}

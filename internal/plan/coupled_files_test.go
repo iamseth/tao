@@ -33,6 +33,42 @@ func coupledFindings(result VerificationValidationResult) []VerificationFinding 
 	return found
 }
 
+func TestCoupledFilesStatusAdmission(t *testing.T) {
+	root := t.TempDir()
+	coupledTarget(t, root, "internal/cli/testdata/zsh_completion.golden")
+	for _, status := range []string{StatusPending, StatusBlocked, StatusInProgress, StatusCompleted, StatusSkipped, "", "unknown"} {
+		t.Run(status, func(t *testing.T) {
+			detail := coupledDetail(root, "internal/cli/example.go")
+			// Only status changes between cases, including pending/completed.
+			detail.Slices.Slices[0].Status = status
+			detail.Slices.Slices[0].Verification.Commands = []string{"go test missing_test.go"}
+			before, _ := json.Marshal(detail)
+			result := ValidatePlanVerification(detail)
+			found := coupledFindings(result)
+			want := 0
+			if status == StatusPending || status == StatusBlocked {
+				want = 1
+			}
+			if len(found) != want || (want == 1 && found[0].SliceID != "001-a") {
+				t.Fatalf("coupled findings: %+v; want %d", found, want)
+			}
+			unrelated := false
+			for _, finding := range result.Findings {
+				if finding.Code == "verification_path_missing" && finding.SliceID == "001-a" {
+					unrelated = true
+				}
+			}
+			if !unrelated {
+				t.Fatalf("unrelated finding suppressed: %+v", result)
+			}
+			after, _ := json.Marshal(detail)
+			if string(before) != string(after) {
+				t.Fatal("mutated detail")
+			}
+		})
+	}
+}
+
 func TestCoupledFilesTable(t *testing.T) {
 	insights := []string{
 		"internal/cli/testdata/insights/all-repositories-digest.golden",
@@ -195,6 +231,31 @@ func TestCoupledFilesAllowances(t *testing.T) {
 				t.Fatalf("selected want %d: %+v", wantSelected, result)
 			}
 		})
+	}
+}
+
+func TestCoupledFilesSelectedAdmission(t *testing.T) {
+	root := t.TempDir()
+	coupledTarget(t, root, "internal/cli/testdata/zsh_completion.golden")
+	detail := coupledDetail(root, "internal/cli/example.go")
+	detail.State.Status = StatusInProgress
+	detail.State.Plan.CurrentSlice = new("001-a")
+	detail.Slices.Slices[0].Status = StatusInProgress
+	result := ValidateSelectedSliceVerificationAtRoot(detail, "")
+	if result.HasErrors() || len(coupledFindings(result)) != 0 {
+		t.Fatalf("in-progress selected validation: %+v", result)
+	}
+	detail.State.Status = StatusBlocked
+	detail.Slices.Slices[0].Status = StatusBlocked
+	result = ValidateSelectedSliceVerificationAtRoot(detail, "")
+	admissionRefused := false
+	for _, finding := range result.Findings {
+		if finding.Code == "verification_slice_not_runnable" && finding.SliceID == "001-a" {
+			admissionRefused = true
+		}
+	}
+	if !admissionRefused || len(coupledFindings(result)) != 0 {
+		t.Fatalf("blocked selected validation bypassed admission: %+v", result)
 	}
 }
 
