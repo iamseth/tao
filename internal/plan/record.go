@@ -1220,6 +1220,9 @@ func (r *PlanRecord) RecordPullRequestIntent(pr PullRequest, branch, headSHA str
 			}
 			return nil, fmt.Errorf("plan %s has a conflicting pull request intent", detail.State.Plan.ID)
 		}
+		if err := requireCurrentFinalApproval(detail, pr.HeadSHA); err != nil {
+			return nil, err
+		}
 		detail.State.Plan.PullRequestIntent = clonePullRequest(&pr)
 		return nil, nil
 	})
@@ -1243,6 +1246,11 @@ func (r *PlanRecord) RecordPullRequest(pr PullRequest, branch, headSHA string) e
 		return err
 	}
 	return r.applyStateEvent(store, func(detail *PlanDetail, changes *artifactChangeSet) ([]Event, error) {
+		if detail.State.Plan.PullRequestIntent == nil {
+			if err := requireCurrentFinalApproval(detail, headSHA); err != nil {
+				return nil, err
+			}
+		}
 		pr.Branch = branch
 		pr.HeadSHA = headSHA
 		if intent := detail.State.Plan.PullRequestIntent; intent != nil {
@@ -1296,6 +1304,9 @@ func (r *PlanRecord) RecordSingleMergeCommitIntent(intent SingleMergeCommitInten
 				return nil, nil
 			}
 			return nil, fmt.Errorf("plan %s has a conflicting single-merge commit intent", detail.State.Plan.ID)
+		}
+		if err := requireCurrentFinalApproval(detail, intent.SourceHead); err != nil {
+			return nil, err
 		}
 		detail.State.Plan.MergeCommitIntent = cloneSingleMergeCommitIntent(&intent)
 		return nil, nil
@@ -1926,6 +1937,15 @@ func (r *PlanRecord) RecordReviewProposalCorrection(expected FinalizationFailure
 }
 
 func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, content *string, expectedFailure *FinalizationFailure) error {
+	if err := RequireCurrentFinalVerification(r.detail); err != nil {
+		return err
+	}
+	// Bind to the inspected snapshot, then compare again under the mutation lock.
+	// Caller-provided digests cannot select a different durable revision.
+	review.VerificationContractDigest = ""
+	if c := r.detail.State.Plan.FinalVerificationContract; c != nil {
+		review.VerificationContractDigest, _ = c.Digest()
+	}
 	if review.Status != ReviewStatusCompleted || review.Verdict != ReviewVerdictApprove {
 		review.CommitMessage = nil
 	}
@@ -1939,6 +1959,19 @@ func (r *PlanRecord) recordReviewCompleted(review PlanReview, agent string, cont
 		}
 		if err := RequireSliceWorkSettled(detail); err != nil {
 			return nil, fmt.Errorf("record plan review: %w", err)
+		}
+		if err := RequireCurrentFinalVerification(detail); err != nil {
+			return nil, err
+		}
+		digest := ""
+		if c := detail.State.Plan.FinalVerificationContract; c != nil {
+			digest, _ = c.Digest()
+			if review.Head != detail.State.Workspace.HeadSHA {
+				return nil, fmt.Errorf("review head changed; reload and retry")
+			}
+		}
+		if digest != review.VerificationContractDigest {
+			return nil, fmt.Errorf("final verification contract changed during review; reload and retry")
 		}
 		reviewedAt := review.ReviewedAt
 		mutationAt := reviewedAt
@@ -2051,6 +2084,15 @@ func (r *PlanRecord) RecordMerged(branch string, mergedDefaultSHA string, merged
 				return nil, nil
 			}
 			return nil, fmt.Errorf("plan merge is already recorded with different evidence")
+		}
+		if detail.State.Plan.MergeCommitIntent == nil {
+			head := ""
+			if detail.State.Workspace != nil {
+				head = detail.State.Workspace.HeadSHA
+			}
+			if err := requireCurrentFinalApproval(detail, head); err != nil {
+				return nil, err
+			}
 		}
 		var resolutionEvidence *SingleMergeResolution
 		if intent := detail.State.Plan.MergeCommitIntent; intent != nil && intent.Resolution != nil {

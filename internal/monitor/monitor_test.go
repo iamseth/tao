@@ -644,11 +644,16 @@ func TestPlanRowProjectsVerificationRecoveryByClassification(t *testing.T) {
 	}{
 		{name: "code", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRepairVerification, Command: "tao run --repair-verification plan-a"}, wantNext: "REPAIR VERIFICATION"},
 		{name: "code repair cap reached", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "Repair the repository verification failure manually before explicitly reverifying"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "unknown", kind: plan.FinalVerificationFailureKindUnknown, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "diagnose unknown"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "prerequisite missing", kind: plan.FinalVerificationFailureKindPrerequisiteMissing, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "restore prerequisite"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "correction required", kind: plan.FinalVerificationFailureKindInvalidContract, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "preview tao edit final-verification"}, wantNext: "RESOLVE VERIFICATION"},
+		{name: "corrected awaiting verification", action: plan.PlanAction{Kind: plan.PlanActionReverify, Command: "tao run --reverify plan-a"}, wantNext: "REVERIFY"},
 		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "restore tool"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve timeout"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "resolve cancellation"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand, action: plan.PlanAction{Kind: plan.PlanActionResolveVerification, Instruction: "correct command"}, wantNext: "RESOLVE VERIFICATION"},
 		{name: "legacy unclassified", action: plan.PlanAction{Kind: plan.PlanActionReverify, Command: "tao run --reverify plan-a"}, wantNext: "REVERIFY"},
+		{name: "awaiting contract without failure", action: plan.PlanAction{Kind: plan.PlanActionReverify, Command: "tao run --reverify plan-a"}, wantNext: "REVERIFY"},
 		{name: "pending verification repair", kind: plan.FinalVerificationFailureKindCode, action: plan.PlanAction{Kind: plan.PlanActionRun, Command: "tao run plan-a"}, wantNext: "RUN"},
 	}
 	for _, test := range tests {

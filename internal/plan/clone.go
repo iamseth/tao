@@ -66,7 +66,9 @@ func clonePlanState(plan PlanState) PlanState {
 	clone.PRFeedbackConsumedThreadIDs = cloneStringSlice(plan.PRFeedbackConsumedThreadIDs)
 	clone.Review = clonePlanReview(plan.Review)
 	clone.MergeCommitIntent = cloneSingleMergeCommitIntent(plan.MergeCommitIntent)
+	clone.FinalVerificationCorrections = cloneCorrectionAudits(plan.FinalVerificationCorrections)
 	clone.FinalVerification = cloneFinalVerification(plan.FinalVerification)
+	clone.FinalVerificationContract = cloneFinalVerificationContract(plan.FinalVerificationContract)
 	clone.FinalizationFailure = cloneFinalizationFailure(plan.FinalizationFailure)
 	return clone
 }
@@ -192,6 +194,33 @@ func cloneFinalVerification(verification *FinalVerification) *FinalVerification 
 	clone := *verification
 	clone.ExitCode = cloneIntPtr(verification.ExitCode)
 	clone.Baseline = cloneFinalVerificationBaseline(verification.Baseline)
+	if verification.Comparison != nil {
+		comparison := *verification.Comparison
+		if comparison.Runs != nil {
+			comparison.Runs = append([]FinalVerificationComparisonRun{}, comparison.Runs...)
+		}
+		for i := range comparison.Runs {
+			run := &comparison.Runs[i]
+			run.ExitCode = cloneIntPtr(run.ExitCode)
+			if run.Observations != nil {
+				run.Observations = append([]FinalVerificationObservation{}, run.Observations...)
+			}
+		}
+		clone.Comparison = &comparison
+	}
+	return &clone
+}
+
+func cloneFinalVerificationContract(contract *FinalVerificationContract) *FinalVerificationContract {
+	if contract == nil {
+		return nil
+	}
+	clone := *contract
+	clone.Coverage = cloneStringSlice(contract.Coverage)
+	clone.PermittedEffects = cloneStringSlice(contract.PermittedEffects)
+	if contract.Prerequisites != nil {
+		clone.Prerequisites = append([]FinalVerificationPrerequisite{}, contract.Prerequisites...)
+	}
 	return &clone
 }
 
@@ -269,6 +298,10 @@ func cloneSlice(slice Slice) Slice {
 	clone.Tasks = cloneStringSlice(slice.Tasks)
 	clone.ExpectedFiles = cloneStringSlice(slice.ExpectedFiles)
 	clone.RequiredInputs = cloneRequiredInputs(slice.RequiredInputs)
+	if slice.VerificationSupersession != nil {
+		supersession := *slice.VerificationSupersession
+		clone.VerificationSupersession = &supersession
+	}
 	clone.Verification = cloneVerification(slice.Verification)
 	clone.Approval = cloneApproval(slice.Approval)
 	if slice.VerificationRepair != nil {

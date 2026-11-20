@@ -551,6 +551,9 @@ func createReviewWithAgentSession(ctx context.Context, executor AgentSessionExec
 	} else {
 		detail.State = state
 	}
+	if err := plan.RequireCurrentFinalVerification(detail); err != nil {
+		return plan.PlanReview{}, err
+	}
 	// A clean committed tree is required only when the commit policy actually
 	// commits slice work; under CommitPolicyNone the changes are intentionally
 	// left uncommitted, so demanding a clean worktree would stall every review.

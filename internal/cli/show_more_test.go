@@ -35,6 +35,38 @@ func TestShowPlanOwnedBlocker(t *testing.T) {
 	}
 }
 
+func TestShowDiagnosisOnlyFinalVerification(t *testing.T) {
+	for _, kind := range []plan.FinalVerificationFailureKind{plan.FinalVerificationFailureKindUnknown, plan.FinalVerificationFailureKindInvalidContract, plan.FinalVerificationFailureKindPrerequisiteMissing} {
+		detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a", FinalVerification: &plan.FinalVerification{Result: "failed", FailureKind: kind, Details: "hostile\x1b[31m\n" + strings.Repeat("x", 3000)}}}}
+		var out bytes.Buffer
+		if err := newTestApp(App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{})}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), string(kind)) || strings.Contains(out.String(), "\x1b") || strings.Contains(out.String(), strings.Repeat("x", 1000)) {
+			t.Fatalf("unsafe or missing typed failure: %s", out.String())
+		}
+	}
+}
+
+func TestShowFinalContractCorrectionHistory(t *testing.T) {
+	detail := &plan.PlanDetail{State: plan.State{Plan: plan.PlanState{ID: "plan-a",
+		FinalVerificationContract:    &plan.FinalVerificationContract{Revision: 2, Command: "echo\x1b[31m\nsecret", CWD: "."},
+		FinalVerificationCorrections: []plan.FinalVerificationCorrectionAudit{{NewContract: plan.FinalVerificationContract{Revision: 2}, Ruling: "reason\x1b[31m\n" + strings.Repeat("x", 3000), CoverageRemoved: []string{"integration"}, DeferredChecks: []string{"operator check"}, SupersededSlices: []string{"vr01"}}},
+	}}}
+	var out bytes.Buffer
+	if err := newTestApp(App{}).renderPlanDetail(&out, planview.Plan{Detail: detail, Derived: plan.Derive(detail, time.Time{})}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Final contract: revision 2", "comparison permitted: false", "Removed coverage", "integration", "Deferred checks", "operator check", "Superseded repairs", "vr01", "fresh review", "Completed work preserved"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q: %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "\x1b") || strings.Contains(out.String(), strings.Repeat("x", 1000)) {
+		t.Fatal("unbounded or unsafe correction text")
+	}
+}
+
 func TestRenderPlanDetailFinalVerificationEvents(t *testing.T) {
 	now := time.Date(2026, 8, 14, 3, 30, 0, 0, time.UTC)
 	for _, tc := range []struct {

@@ -329,8 +329,8 @@ func CheckRequestCanStart(detail *plan.PlanDetail, request Request) error {
 		return cannotStartf("%s", err)
 	}
 	if request.Reverify {
-		if plan.CurrentFailedFinalVerification(detail) == nil {
-			return cannotStartf("--reverify requires current failed final-verification evidence")
+		if plan.CurrentFailedFinalVerification(detail) == nil && (detail == nil || plan.RequireCurrentFinalVerification(detail) == nil) {
+			return cannotStartf("--reverify requires current failed final-verification evidence or an awaiting contract")
 		}
 		if !plan.AnalyzeRunCapabilities(detail).Complete {
 			return cannotStartf("--reverify requires settled slice work with all slices complete")

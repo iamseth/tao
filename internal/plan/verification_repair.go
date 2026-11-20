@@ -41,6 +41,13 @@ func VerificationRepairAttemptCount(detail *PlanDetail) int {
 // final-verification evidence. It grants no mutation authority.
 func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision {
 	failure := CurrentFailedFinalVerification(detail)
+	if failure == nil && detail != nil && RequireCurrentFinalVerification(detail) != nil {
+		reason := "current final contract requires passing verification"
+		if len(detail.State.Plan.FinalVerificationCorrections) > 0 {
+			reason = "corrected contract awaiting verification; completed work and repair history preserved; fresh review required after passing verification"
+		}
+		return VerificationRecoveryDecision{Kind: PlanActionReverify, Command: "tao run --reverify " + detail.State.Plan.ID, Reason: reason}
+	}
 	if failure == nil {
 		return VerificationRecoveryDecision{Kind: PlanActionNone, Reason: "no current failed final-verification evidence authorizes repair"}
 	}
@@ -84,6 +91,17 @@ func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision
 		}
 		decision.Reason = fmt.Sprintf("final verification failed on pre-existing failures that also fail at base %s: %s; rerun with --reverify or fix them on the default branch; explicit --repair-verification remains available under the repair cap", sha, signatures)
 		return decision
+	case FinalVerificationFailureKindUnknown, FinalVerificationFailureKindInvalidContract, FinalVerificationFailureKindPrerequisiteMissing:
+		decision.Kind = PlanActionResolveVerification
+		decision.Instruction = "Diagnose the repository verification contract and prerequisites before explicitly reverifying; no code repair or passing result is authorized"
+		switch failure.FailureKind {
+		case FinalVerificationFailureKindInvalidContract:
+			decision.Instruction = "Correct the invalid source verification contract before explicitly reverifying; no code repair or passing result is authorized"
+		case FinalVerificationFailureKindPrerequisiteMissing:
+			decision.Instruction = "Diagnose and restore missing or unobservable declared prerequisites before explicitly reverifying; no code repair or passing result is authorized"
+		}
+		decision.Instruction += correctionPreviewGuidance()
+		decision.Reason = string(failure.FailureKind) + " final verification evidence does not authorize code repair"
 	case FinalVerificationFailureKindToolMissing:
 		decision.Kind = PlanActionResolveVerification
 		decision.Instruction = "Restore the tool required by the repository verification command before explicitly reverifying the unchanged head"
@@ -98,8 +116,8 @@ func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision
 		decision.Reason = "cancelled verification evidence does not authorize code repair"
 	case FinalVerificationFailureKindInvalidCommand:
 		decision.Kind = PlanActionResolveVerification
-		decision.Instruction = "Correct the repository verification command before explicitly reverifying the unchanged head"
-		decision.Reason = "invalid-command verification evidence does not authorize code repair"
+		decision.Instruction = "Correct the repository verification command before explicitly reverifying the unchanged head" + correctionPreviewGuidance()
+		decision.Reason = "invalid_command verification evidence does not authorize code repair"
 	default:
 		decision.Kind = PlanActionReverify
 		decision.Command = "tao run --reverify " + id
@@ -109,6 +127,12 @@ func DeriveVerificationRecovery(detail *PlanDetail) VerificationRecoveryDecision
 		decision.Reason = stopReason
 	}
 	return decision
+}
+
+// Keep preview guidance instructional, not an executable action: the owner must
+// author a proposal and review the resulting token before confirmation.
+func correctionPreviewGuidance() string {
+	return "; if correction is needed, author a proposal, then preview with tao edit final-verification <plan> --proposal-file <owner-authored-file>; preview is not approval"
 }
 
 // RepairVerificationAdmissible admits explicit repair without granting automatic scheduling authority.
@@ -139,6 +163,7 @@ func currentVerificationRepairStop(detail *PlanDetail, failure FinalVerification
 type VerificationRepairRequest struct {
 	Binding   VerificationRepairBinding
 	CreatedAt time.Time
+	Automatic bool
 }
 
 func (r VerificationRepairRequest) Validate() error {
@@ -172,6 +197,11 @@ func (r *PlanRecord) AppendVerificationRepair(request VerificationRepairRequest)
 		if ok, reason := RepairVerificationAdmissible(detail); !ok {
 			return lifecycleMutation{}, fmt.Errorf("verification repair refused: %s", reason)
 		}
+		if request.Automatic {
+			if ok, reason := AutomaticVerificationRepairAdmissible(detail); !ok {
+				return lifecycleMutation{}, fmt.Errorf("automatic verification repair refused: %s", reason)
+			}
+		}
 		repairNumber := 1
 		for i := range detail.Slices.Slices {
 			slice := &detail.Slices.Slices[i]
@@ -179,7 +209,7 @@ func (r *PlanRecord) AppendVerificationRepair(request VerificationRepairRequest)
 				continue
 			}
 			repairNumber++
-			if slice.Completion == nil {
+			if slice.Completion == nil && !auditedRepairSuperseded(detail, slice) {
 				return lifecycleMutation{}, fmt.Errorf("verification repair slice already exists and is not complete: %s", slice.ID)
 			}
 			if *slice.VerificationRepair == request.Binding {
@@ -221,6 +251,9 @@ func (r *PlanRecord) AppendVerificationRepair(request VerificationRepairRequest)
 			Verification: Verification{Commands: []string{request.Binding.Command}, Source: "exact failed repository-owned final-verification command", ManualChecks: []string{}},
 			Approval:     &Approval{Required: false}, VerificationRepair: &binding,
 		}
+		if request.Automatic {
+			slice.Verification.Steps = []VerificationStep{{Command: request.Binding.Command, CWD: detail.State.Plan.FinalVerificationContract.CWD}}
+		}
 		detail.Slices.Slices = append(detail.Slices.Slices, slice)
 		detail.State.Plan.PendingSlices = append(detail.State.Plan.PendingSlices, sliceID)
 		detail.State.Plan.CurrentSlice = nil
@@ -240,6 +273,12 @@ func CurrentFailedFinalVerification(detail *PlanDetail) *FinalVerification {
 		return nil
 	}
 	verification := detail.State.Plan.FinalVerification
+	if c := detail.State.Plan.FinalVerificationContract; c != nil {
+		digest, err := c.Digest()
+		if err != nil || verification.ContractDigest != digest {
+			return nil
+		}
+	}
 	if strings.TrimSpace(verification.HeadSHA) == "" || verification.HeadSHA != detail.State.Workspace.HeadSHA || strings.TrimSpace(verification.Fingerprint) == "" {
 		return nil
 	}

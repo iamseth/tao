@@ -189,7 +189,7 @@ func managedWorktreeRecoveryCommand(detail *plan.PlanDetail) (string, string) {
 			return "tao run " + id, ""
 		}
 	}
-	if plan.CurrentFailedFinalVerification(detail) != nil {
+	if plan.CurrentFailedFinalVerification(detail) != nil || plan.RequireCurrentFinalVerification(detail) != nil {
 		action := plan.DeriveNextAction(detail).Primary
 		return action.Command, action.Instruction
 	}

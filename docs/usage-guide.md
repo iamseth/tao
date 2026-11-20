@@ -896,6 +896,18 @@ The lifetime attempt count includes completed repairs and never resets; generate
 repair slices are system-owned: they cannot be skipped or removed, and amend may only append expected files, tasks, or manual checks. Their goal, verification commands, and repair binding stay frozen. See
 [repair evidence](plan-format.md#final-verification-repair-evidence) for durable
 stop fields (`verification_repair_stopped` also appears in `tao insights`).
+### Correct a final source contract
+
+When the source final gate is wrong, use `tao edit final-verification <plan> --proposal-file FILE` to preview a bounded correction, then repeat with `--confirm TOKEN`. Neither command runs the gate. The JSON proposal contains `expected_digest` (empty for a legacy gate), `expected_head`, the next-revision `contract`, `reason`, `coverage_removed`, and `deferred_checks`. Use explicit arrays, including `[]` for no removed coverage or deferred checks; omit timestamps and confirmation from JSON. Contract fields follow the [plan-format contract](plan-format.md#final-verification-repair-evidence).
+
+Review the old/new command and cwd, removed coverage, deferred checks, repair supersession, invalidated verification/review, and remaining lifetime attempts before confirming. Confirmation authorizes that exact transition, not authenticated identity, code correctness, or build-equivalent coverage. The proposal must be a regular bounded JSON file; symlinks escaping its containing directory are refused.
+
+Both operations acquire run ownership and passively inspect the recorded execution workspace. Active runs, dirty/missing workspaces, stale HEAD or state, terminal plans, and frozen intents refuse correction. If the preview becomes stale, obtain a new preview rather than reusing its token. Preserve unfinished work; correction never resets the worktree. Completed implementation and generated-repair bindings/history remain intact, including the lifetime cap of two. Supersession does not mark unperformed repair work completed. Exact repeated confirmation is idempotent.
+
+After every correction, run `tao run --reverify <plan>` from the clean recorded workspace, then obtain fresh review/approval before publication or merge. Old passing verification and approvals no longer authorize either, even at unchanged HEAD. Ordinary generated-repair goal/command edits remain forbidden. `tao show` distinguishes typed diagnosis-only failures from corrected contracts awaiting verification and shows removed coverage, deferred checks, and superseded repair history. Preview guidance requires an owner-authored proposal; dashboard actions never invent one or confirm it automatically.
+
+Contract declarations and passive comparisons are not a command safety guarantee or a sandbox. There is no automatic pre-implementation final-gate preflight. Comparison remains bounded to one same-head retry and one recorded-base run; legacy baseline recovery remains explicit. There is no supported downgrade writer for corrected plans: restoring coverage is another audited revision with fresh verification and review, never direct JSON restoration. Correction events are audit-only and neither create quality failures nor erase historical counts; share-safe reports do not include local correction text.
+
 For ordinary pending or blocked slices, `tao edit amend` records a required reason,
 validates before persisting, refuses an active run lock, and journals the change;
 it never clears blockers or bypasses approval. If a gate contradicts its own slice

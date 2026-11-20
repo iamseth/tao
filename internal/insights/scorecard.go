@@ -292,7 +292,8 @@ func observePlan(repository sourceIdentity, summary plan.PlanSummary, data planD
 				switch event.FailureKind {
 				case plan.FinalVerificationFailureKindCode, plan.FinalVerificationFailureKindBaseline, plan.FinalVerificationFailureKindToolMissing,
 					plan.FinalVerificationFailureKindTimeout, plan.FinalVerificationFailureKindCancelled,
-					plan.FinalVerificationFailureKindInvalidCommand:
+					plan.FinalVerificationFailureKindInvalidCommand, plan.FinalVerificationFailureKindUnknown,
+					plan.FinalVerificationFailureKindInvalidContract, plan.FinalVerificationFailureKindPrerequisiteMissing:
 					o.reliability["final_verification_"+string(event.FailureKind)]++
 				}
 			}

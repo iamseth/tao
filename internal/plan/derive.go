@@ -361,10 +361,10 @@ func deriveNextAction(detail *PlanDetail, derived DerivedPlan) PlanNextAction {
 	if PlanIsPullRequestComplete(detail) {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "the approved pull-request handoff is complete; remote integration is not asserted")
 	}
-	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
+	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) && detail.State.Plan.FinalVerificationContract == nil {
 		return primary(PlanActionNone, PlanActionClassTerminal, "", "legacy completed state is preserved without asserting merge evidence")
 	}
-	if CurrentFailedFinalVerification(detail) != nil {
+	if CurrentFailedFinalVerification(detail) != nil || RequireCurrentFinalVerification(detail) != nil {
 		return PlanNextAction{Primary: deriveVerificationRecoveryAction(detail), Alternatives: []PlanAction{}}
 	}
 
@@ -641,7 +641,9 @@ func newDetailIndex(detail *PlanDetail) detailIndex {
 				index.completedAt = &value
 			}
 		default:
-			index.pendingCount++
+			if !auditedRepairSuperseded(detail, slice) {
+				index.pendingCount++
+			}
 		}
 	}
 	return index
@@ -722,11 +724,11 @@ func Summarize(detail *PlanDetail, now time.Time) PlanSummary {
 	}
 
 	if status == StatusVerificationFailed {
+		recovery := DeriveVerificationRecovery(detail)
+		summary.VerificationRecoveryAction = recovery.Kind
+		summary.VerificationRecoveryCommand = recovery.Command
 		if failure := CurrentFailedFinalVerification(detail); failure != nil {
-			recovery := DeriveVerificationRecovery(detail)
 			summary.FinalVerificationFailureKind = failure.FailureKind
-			summary.VerificationRecoveryAction = recovery.Kind
-			summary.VerificationRecoveryCommand = recovery.Command
 		}
 	}
 
@@ -762,10 +764,10 @@ func PlanLifecycleStatus(detail *PlanDetail) string {
 	// RecordMerged appends its event, so this remaining arm preserves legacy
 	// artifacts; lifecycleComplete trusts the same persisted status, keeping
 	// projection and gating aligned.
-	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) {
+	if detail.State.Status == StatusCompleted && !anyPlanMergedEvent(detail.Events) && detail.State.Plan.FinalVerificationContract == nil {
 		return StatusCompleted
 	}
-	if CurrentFailedFinalVerification(detail) != nil {
+	if CurrentFailedFinalVerification(detail) != nil || (slicesComplete(detail) && RequireCurrentFinalVerification(detail) != nil) {
 		return StatusVerificationFailed
 	}
 	if slicesComplete(detail) || IsPostSliceStatus(detail.State.Status) {
@@ -907,6 +909,12 @@ func CurrentReview(detail *PlanDetail) *PlanReview {
 	review := PersistedReview(detail)
 	if review == nil || ReviewSupersededByReopen(detail.Events) {
 		return nil
+	}
+	if contract := detail.State.Plan.FinalVerificationContract; contract != nil {
+		digest, err := contract.Digest()
+		if err != nil || review.VerificationContractDigest != digest || RequireCurrentFinalVerification(detail) != nil {
+			return nil
+		}
 	}
 	return review
 }

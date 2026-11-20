@@ -58,6 +58,9 @@ func (f Finalizer) FinalizeIfComplete(ctx context.Context, runCount int, detail 
 		if f.execution.Request.Reverify {
 			return true, f.reverifyCompletedRun(ctx, detail)
 		}
+		if detail.State.Plan.PullRequestIntent == nil && plan.RequireCurrentFinalVerification(detail) != nil {
+			return true, f.writeAlreadyCompleteRun(detail)
+		}
 		if f.pullRequestRecoveryEnabled(detail) {
 			// A pending intent is an unsettled transaction even when a later
 			// substantive review replaced the approval that authorized it. Route
@@ -117,6 +120,9 @@ func (f Finalizer) writeAlreadyCompleteRun(detail *plan.PlanDetail) error {
 	if err := writef(out, "Plan slices complete: %s\n", detail.State.Plan.ID); err != nil {
 		return err
 	}
+	if plan.RequireCurrentFinalVerification(detail) != nil {
+		return writef(out, "Next: run `tao run --reverify %s` for the current final contract, then request a fresh review.\n", detail.State.Plan.ID)
+	}
 	if detail.State.Status != plan.StatusInReview {
 		return nil
 	}
@@ -139,7 +145,9 @@ func (f Finalizer) finalizeCompletedRun(ctx context.Context, runCount int, detai
 		}
 	}
 	ReportPhase(ctx, PhaseFinalVerification, nil)
-	if err := f.verifyCompletedBranch(ctx, detail, executionRoot); err != nil {
+	comparisonAllowed := runCount > 0 && !execution.Request.Reverify && !execution.Request.RepairVerification &&
+		(execution.Config.MaxSlices <= 0 || runCount < execution.Config.MaxSlices)
+	if err := f.verifyCompletedBranchWithComparison(ctx, detail, executionRoot, comparisonAllowed); err != nil {
 		return fmt.Errorf("finalize completed run: %w", f.handleFinalVerificationFailure(ctx, runCount, detail, executionRoot, err))
 	}
 	if err := writeSessionSummary(out, detail, now(execution).UTC()); err != nil {
@@ -199,6 +207,9 @@ func (f Finalizer) handleFinalVerificationFailure(ctx context.Context, runCount 
 	if runCount <= 0 || !errors.As(verificationErr, &failure) || f.execution.Request.RepairVerification || f.execution.Request.Reverify ||
 		(config.MaxSlices > 0 && runCount >= config.MaxSlices) ||
 		plan.DeriveVerificationRecovery(detail).Kind != plan.PlanActionRepairVerification {
+		return verificationErr
+	}
+	if ok, _ := plan.AutomaticVerificationRepairAdmissible(detail); !ok {
 		return verificationErr
 	}
 	execution := f.execution

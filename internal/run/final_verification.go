@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -52,6 +53,13 @@ func (e *FinalVerificationError) Unwrap() error { return e.Cause }
 // verifyCompletedBranch runs repository-owned broad verification in the plan
 // execution root and persists its command and result before review begins.
 func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanDetail, executionRoot string) error {
+	return f.verifyCompletedBranchWithComparison(ctx, detail, executionRoot, false)
+}
+
+func (f Finalizer) verifyCompletedBranchWithComparison(ctx context.Context, detail *plan.PlanDetail, executionRoot string, comparisonAllowed bool) error {
+	if detail != nil && detail.State.Plan.FinalVerificationContract != nil {
+		return f.verifyContractBranch(ctx, detail, executionRoot, comparisonAllowed)
+	}
 	command := finalVerificationCommand(detail, executionRoot)
 	verification := plan.FinalVerification{
 		Command:    command,
@@ -87,32 +95,11 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 	gateCtx := commandrunner.WithGateEnv(commandrunner.WithVerificationCache(ctx, executionRoot), pins)
 	runErr := f.execution.Dependencies.CommandRunner(gateCtx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
 	combined := combineFinalVerificationOutput(stdout.String(), stderr.String())
-	if runErr != nil {
-		first := verification
-		first.Result = finalVerificationFailed
-		first.FailureKind, first.ExitCode = classifyFinalVerificationFailure(ctx, runErr)
-		if first.FailureKind == plan.FinalVerificationFailureKindCode && !f.execution.Request.Reverify && plan.VerificationRepairAttemptCount(detail) < plan.VerificationRepairAttemptCap && ctx.Err() == nil && f.failuresOutsidePlanOwnership(ctx, detail, executionRoot, combined) {
-			first.Details, first.OutputTruncated = boundedFinalVerificationDetails(combined)
-			first.Fingerprint = finalVerificationFingerprint(first)
-			firstOutput := combined
-			stdout.Reset()
-			stderr.Reset()
-			runErr = f.execution.Dependencies.CommandRunner(gateCtx, executionRoot, "sh", []string{"-c", command}, &stdout, &stderr)
-			combined = combineFinalVerificationOutput(stdout.String(), stderr.String())
-			if runErr == nil {
-				f.appendFinalVerificationFlakeEvent(detail, first, firstOutput)
-			}
-		}
-	}
 	finishedAt := now(f.execution)
 	durationSeconds := max(int64(finishedAt.Sub(startedAt)/time.Second), 0)
 	if runErr != nil {
 		verification.Result = finalVerificationFailed
-		verification.FailureKind, verification.ExitCode = classifyFinalVerificationFailure(ctx, runErr)
-		if baseline := f.probeBaselineFailure(ctx, detail, executionRoot, verification, combined); baseline != nil {
-			verification.FailureKind = plan.FinalVerificationFailureKindBaseline
-			verification.Baseline = baseline
-		}
+		verification.FailureKind, verification.ExitCode = classifyConservativeFinalVerificationFailure(ctx, runErr)
 		verification.Details, verification.OutputTruncated = boundedFinalVerificationDetails(combined)
 		verification.Fingerprint = finalVerificationFingerprint(verification)
 		recordErr := f.recordFinalVerification(detail, verification)
@@ -135,28 +122,6 @@ func (f Finalizer) verifyCompletedBranch(ctx context.Context, detail *plan.PlanD
 		return recordErr
 	}
 	return writef(f.outputWriter(), "Final verification: passed (%s)\n", command)
-}
-
-func (f Finalizer) appendFinalVerificationFlakeEvent(detail *plan.PlanDetail, first plan.FinalVerification, output string) {
-	appender := f.execution.Dependencies.EventAppender
-	if detail == nil || appender == nil {
-		return
-	}
-	event := plan.Event{
-		Type:        plan.EventTypeFinalVerificationFlake,
-		Timestamp:   now(f.execution).UTC(),
-		PlanID:      detail.State.Plan.ID,
-		Command:     first.Command,
-		HeadSHA:     first.HeadSHA,
-		Fingerprint: first.Fingerprint,
-		FailureKind: first.FailureKind,
-		ExitCode:    first.ExitCode,
-		Reason:      verifyoutput.Reason(output, first.Details, 1000),
-		Message:     "Final verification passed on same-head rerun",
-	}
-	if err := appender.AppendEvent(detail.Dir, event); err != nil {
-		_, _ = fmt.Fprintf(f.outputWriter(), "Warning: append final verification flake event: %v\n", err)
-	}
 }
 
 func (f Finalizer) appendFinalVerificationEvent(detail *plan.PlanDetail, verification plan.FinalVerification, combinedOutput string, timestamp time.Time, durationSeconds *int64) {
@@ -245,6 +210,17 @@ func finalVerificationCommand(detail *plan.PlanDetail, executionRoot string) str
 	return verifydetect.DetectCommand(executionRoot)
 }
 
+// Final gates cannot infer regressions from exit status or output. The shared
+// classifier below retains ordinary slice-gate semantics; comparison authority
+// must be established separately before a final failure can become code.
+func classifyConservativeFinalVerificationFailure(ctx context.Context, runErr error) (plan.FinalVerificationFailureKind, *int) {
+	kind, code := classifyFinalVerificationFailure(ctx, runErr)
+	if kind == plan.FinalVerificationFailureKindCode {
+		kind = plan.FinalVerificationFailureKindUnknown
+	}
+	return kind, code
+}
+
 func classifyFinalVerificationFailure(ctx context.Context, runErr error) (plan.FinalVerificationFailureKind, *int) {
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(runErr, context.DeadlineExceeded):
@@ -286,7 +262,12 @@ func boundedFinalVerificationDetails(output string) (string, bool) {
 }
 
 func finalVerificationFingerprint(verification plan.FinalVerification) string {
-	sum := sha256.Sum256([]byte(verification.Command + "\x00" + verification.HeadSHA + "\x00" + verification.Result + "\x00" + verification.Details))
+	identity := verification.Command + "\x00" + verification.HeadSHA + "\x00" + verification.Result + "\x00" + verification.Details
+	if verification.ContractDigest != "" {
+		comparison, _ := json.Marshal(verification.Comparison)
+		identity += "\x00" + verification.ContractDigest + "\x00" + string(comparison)
+	}
+	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }
 

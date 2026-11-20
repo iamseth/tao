@@ -16,15 +16,16 @@ import (
 var editCommand = commandMetadata{
 	name:                  "edit",
 	minPrefix:             "e",
-	usageLines:            []string{"edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --allow-file PATH... --mechanical REASON", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]..."},
+	usageLines:            []string{"edit (e) final-verification <plan> --proposal-file FILE [--confirm TOKEN]", "edit (e) remove <plan-id-or-slug-or-path> <slice-id>", "edit (e) skip <plan-id-or-slug-or-path> <slice-id>", "edit (e) move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --allow-file PATH... --mechanical REASON", "edit (e) amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]..."},
 	completionDescription: "Edit pending slices in a plan",
-	long:                  "Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Use --mechanical REASON with --allow-file PATH for file-only mechanical extensions, mutually exclusive with --reason-file and all other contract edits. Classification does not bypass ownership, review, or merge checks. Repeatable --replace-verification-command OLD and --with NEW flags are paired by index for one-for-one replacement, never deleting a command. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal or verification command. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
+	long:                  "Preview or explicitly confirm an audited final source-contract correction with final-verification --proposal-file FILE [--confirm TOKEN]; this never runs gates and requires fresh verification and review afterward. Edit pending slices in a Tao plan without changing application files. Use it to remove, skip, or reorder work before running the remaining queue, or to amend a pending or blocked slice's contract with a recorded reason. Amend appends tasks, expected files, and manual checks or replaces the goal. Use --mechanical REASON with --allow-file PATH for file-only mechanical extensions, mutually exclusive with --reason-file and all other contract edits. Classification does not bypass ownership, review, or merge checks. Repeatable --replace-verification-command OLD and --with NEW flags are paired by index for one-for-one replacement, never deleting a command. Generated repair slices accept appended files, tasks, and manual checks but never a replacement goal or verification command. Amend never changes slice status, blocker notes, or approval, refuses while a run holds the plan lock, and validates the amended plan before persisting.",
 	examples: "  tao edit remove my-plan 003-old-slice\n" +
 		"  tao edit skip my-plan 004-optional\n" +
 		"  tao edit move my-plan 005-tests --before 004-docs\n" +
 		"  tao edit amend my-plan 002-blocked --reason-file /tmp/reason.txt --allow-file internal/cli/helper.go --add-task 'Add the helper' --add-manual-check 'Run the helper once'\n" +
 		"  tao edit amend my-plan 002-blocked --allow-file internal/cli/testdata/zsh_completion.golden --mechanical 'Regenerate completion for the new flag'",
 	subcommands: []commandSubcommand{
+		{name: "final-verification", description: "Preview or confirm an audited final source-contract correction; no gates run", registerFlags: registerFinalCorrectionFlags, completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}, flagValues: map[string]completionFlagValue{"proposal-file": {kind: completionValuePath, label: "path"}, "confirm": {kind: completionValueText, label: "token"}}}},
 		{name: "remove", description: "Remove a pending slice from the plan", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "skip", description: "Mark a pending slice skipped", completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
 		{name: "move", description: "Move a pending slice before or after another pending slice", registerFlags: registerEditMoveFlags, completion: completionContext{positional: completionPositional{index: 1, label: "plan", completer: completePlanIDs}}},
@@ -51,7 +52,7 @@ var editCommand = commandMetadata{
 
 const (
 	editAmendUsage = "tao edit amend <plan-id-or-slug-or-path> <slice-id> --allow-file PATH... --mechanical REASON | tao edit amend <plan-id-or-slug-or-path> <slice-id> --reason-file FILE [--goal-file FILE] [--add-task TEXT]... [--allow-file PATH]... [--add-manual-check TEXT]... [--replace-verification-command OLD --with NEW]... (one-for-one; never deletes commands; refused for generated repair slices)"
-	editUsage      = "usage: tao edit remove <plan-id-or-slug-or-path> <slice-id> | tao edit skip <plan-id-or-slug-or-path> <slice-id> | " + editAmendUsage + " | tao edit move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)"
+	editUsage      = "usage: " + finalCorrectionUsage + " | tao edit remove <plan-id-or-slug-or-path> <slice-id> | tao edit skip <plan-id-or-slug-or-path> <slice-id> | " + editAmendUsage + " | tao edit move <plan-id-or-slug-or-path> <slice-id> (--before ID | --after ID)"
 )
 
 type editRepository interface {
@@ -64,6 +65,8 @@ func (a App) edit(ctx context.Context, repo editRepository, args []string) error
 	}
 
 	switch args[0] {
+	case "final-verification":
+		return a.editFinalVerification(ctx, repo, args[1:])
 	case "remove":
 		return a.editRemove(ctx, repo, args[1:])
 	case "skip":
@@ -112,6 +115,7 @@ func (a App) editSkip(ctx context.Context, repo editRepository, args []string) e
 func registerEditFlags(fs *flag.FlagSet) {
 	registerEditMoveFlags(fs)
 	registerEditAmendFlags(fs)
+	registerFinalCorrectionFlags(fs)
 }
 
 func registerEditMoveFlags(fs *flag.FlagSet) {

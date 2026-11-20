@@ -393,6 +393,9 @@ func TestFinalVerificationFailureProjectionAndRecoveryByClassification(t *testin
 		{name: "timeout", kind: FinalVerificationFailureKindTimeout, wantAction: PlanActionResolveVerification},
 		{name: "cancelled", kind: FinalVerificationFailureKindCancelled, wantAction: PlanActionResolveVerification},
 		{name: "invalid command", kind: FinalVerificationFailureKindInvalidCommand, wantAction: PlanActionResolveVerification},
+		{name: "unknown", kind: FinalVerificationFailureKindUnknown, wantAction: PlanActionResolveVerification},
+		{name: "invalid contract", kind: FinalVerificationFailureKindInvalidContract, wantAction: PlanActionResolveVerification},
+		{name: "prerequisite missing", kind: FinalVerificationFailureKindPrerequisiteMissing, wantAction: PlanActionResolveVerification},
 		{name: "legacy unclassified", wantAction: PlanActionReverify, wantCommand: "tao run --reverify plan"},
 		{name: "unrecognized", kind: FinalVerificationFailureKind("network"), wantAction: PlanActionReverify, wantCommand: "tao run --reverify plan"},
 	}

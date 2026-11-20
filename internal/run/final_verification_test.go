@@ -19,7 +19,8 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
-func TestVerifyCompletedBranchSameHeadRerun(t *testing.T) {
+// Synthetic coverage of unexplained exits, not a reproduction of Carbon.
+func TestVerifyCompletedBranchUnexplainedFailure(t *testing.T) {
 	testenv.SkipIfShort(t)
 	root, detail := sameHeadRerunFixture(t)
 	calls := 0
@@ -36,15 +37,16 @@ func TestVerifyCompletedBranchSameHeadRerun(t *testing.T) {
 			_, _ = io.WriteString(stdout, "--- FAIL: TestFlake (0.00s)\nFAIL\texample.org/test/outside\n")
 			return errors.New("exit 1")
 		}
-		_, _ = io.WriteString(stdout, "rerun passed")
+		t.Fatal("unpermitted daemon/comparison branch executed")
 		return nil
 	}
 	f := newFinalizer(io.Discard, testRunExecution(ExecutionConfig{}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: memoryPlanRecordFactory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })}))
-	if err := f.verifyCompletedBranch(context.Background(), detail, root); err != nil {
-		t.Fatal(err)
+	completed := len(detail.Slices.Slices)
+	if err := f.verifyCompletedBranch(context.Background(), detail, root); err == nil {
+		t.Fatal("expected failure")
 	}
 	v := detail.State.Plan.FinalVerification
-	if calls != 2 || v.Result != "passed" || v.Details != "rerun passed" || v.FailureKind != "" || v.Fingerprint != finalVerificationFingerprint(*v) {
+	if calls != 1 || v.Result != "failed" || v.FailureKind != "unknown" || v.Fingerprint != finalVerificationFingerprint(*v) {
 		t.Fatalf("calls=%d verification=%+v", calls, v)
 	}
 	flakes := 0
@@ -58,12 +60,12 @@ func TestVerifyCompletedBranchSameHeadRerun(t *testing.T) {
 		case plan.EventTypeVerificationRepairCreated:
 			t.Fatal("scheduled repair")
 		case plan.EventTypeFinalVerification:
-			if e.Result != "passed" {
+			if e.Result != "failed" {
 				t.Fatalf("result=%s", e.Result)
 			}
 		}
 	}
-	if flakes != 1 || plan.VerificationRepairAttemptCount(detail) != 0 {
+	if flakes != 0 || len(detail.Slices.Slices) != completed || plan.VerificationRepairAttemptCount(detail) != 0 {
 		t.Fatalf("flakes=%d", flakes)
 	}
 }
@@ -75,16 +77,14 @@ func TestVerifyCompletedBranchRerunGuardsAndFailureEvidence(t *testing.T) {
 		calls int
 		kind  plan.FinalVerificationFailureKind
 	}{
-		{"in scope", 1, plan.FinalVerificationFailureKindCode},
-		{"reverify", 1, plan.FinalVerificationFailureKindCode},
-		{"cap", 1, plan.FinalVerificationFailureKindCode},
+		{"in scope", 1, plan.FinalVerificationFailureKindUnknown},
+		{"reverify", 1, plan.FinalVerificationFailureKindUnknown},
+		{"cap", 1, plan.FinalVerificationFailureKindUnknown},
 		{"timeout", 1, plan.FinalVerificationFailureKindTimeout},
 		{"cancelled", 1, plan.FinalVerificationFailureKindCancelled},
 		{"tool missing", 1, plan.FinalVerificationFailureKindToolMissing},
 		{"invalid command", 1, plan.FinalVerificationFailureKindInvalidCommand},
-		{"rerun in scope", 2, plan.FinalVerificationFailureKindCode},
-		{"rerun timeout", 2, plan.FinalVerificationFailureKindTimeout},
-		{"rerun cancelled", 2, plan.FinalVerificationFailureKindCancelled},
+		{"outside scope", 1, plan.FinalVerificationFailureKindUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, detail := sameHeadRerunFixture(t)
@@ -100,12 +100,8 @@ func TestVerifyCompletedBranchRerunGuardsAndFailureEvidence(t *testing.T) {
 				if name != "sh" {
 					return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
 				}
-				// Reverify retains the existing baseline probe; only root calls are reruns.
 				if cwd != root {
-					if tc.name != "reverify" {
-						t.Fatalf("unexpected baseline probe for %s", tc.name)
-					}
-					return nil
+					t.Fatalf("unexpected baseline probe for %s", tc.name)
 				}
 				calls++
 				output := "--- FAIL: TestFlake (0.00s)\nFAIL\texample.org/test/outside\n"
@@ -347,7 +343,7 @@ func TestVerifyCompletedBranchAppendsOutcomeEvents(t *testing.T) {
 			if tt.wantResult != finalVerificationFailed && (verification.FailureKind != "" || verification.ExitCode != nil) {
 				t.Fatalf("non-failure was classified: %+v", verification)
 			}
-			if tt.wantResult == finalVerificationFailed && (verification.FailureKind != plan.FinalVerificationFailureKindCode || verification.ExitCode != nil || event.FailureKind != verification.FailureKind || event.ExitCode != nil) {
+			if tt.wantResult == finalVerificationFailed && (verification.FailureKind != plan.FinalVerificationFailureKindUnknown || verification.ExitCode != nil || event.FailureKind != verification.FailureKind || event.ExitCode != nil) {
 				t.Fatalf("failed verification classification was not carried to its event: verification=%+v event=%+v", verification, event)
 			}
 		})
@@ -459,6 +455,64 @@ func TestVerifyCompletedBranchReturnsRepairStopAppendFailureAtExhaustion(t *test
 	}
 }
 
+func TestConservativeFinalClassificationPreservesSliceClassification(t *testing.T) {
+	for _, command := range []string{"exit 1", "kill -TERM $$"} {
+		runErr := finalVerificationProcessError(t, exec.Command("sh", "-c", command)) //nolint:gosec // G204: fixed synthetic exit commands, no external input.
+		kind, code := classifyConservativeFinalVerificationFailure(context.Background(), runErr)
+		sliceKind, sliceCode := classifyFinalVerificationFailure(context.Background(), runErr)
+		if kind != plan.FinalVerificationFailureKindUnknown || sliceKind != plan.FinalVerificationFailureKindCode {
+			t.Fatalf("%s: final=%s slice=%s", command, kind, sliceKind)
+		}
+		if (code == nil) != (sliceCode == nil) || code != nil && *code != *sliceCode {
+			t.Fatal("classification lost exit evidence")
+		}
+	}
+}
+
+// Synthetic root-only rejection: the daemon branch is never executed.
+func TestSyntheticRootOnlyBuildRejectionDoesNotRepair(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root, detail := sameHeadRerunFixture(t)
+	completed := len(detail.Slices.Slices)
+	attempts := plan.VerificationRepairAttemptCount(detail)
+	calls := 0
+	var events []plan.Event
+	runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+		if name != "sh" {
+			return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+		}
+		calls++
+		if cwd != root || calls != 1 {
+			t.Fatal("unpermitted comparison")
+		}
+		// The synthetic root guard rejects before any external service branch.
+		cmd := exec.CommandContext(ctx, "sh", "-c", "if test -n root; then echo root-only-build-rejection; exit 1; fi; echo daemon-called")
+		output, err := cmd.CombinedOutput()
+		if strings.Contains(string(output), "daemon-called") {
+			t.Fatal("daemon branch executed")
+		}
+		_, _ = stdout.Write(output)
+		return err
+	}
+	execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated}}, RunDependencies{CommandRunner: runner, reviewGitFactory: newReviewGitFactory(runner), PlanRecordFactory: memoryPlanRecordFactory, EventAppender: eventAppenderFunc(func(_ string, e plan.Event) error { events = append(events, e); return nil })})
+	f := newFinalizer(io.Discard, execution)
+	failure := f.verifyCompletedBranch(context.Background(), detail, root)
+	if failure == nil || detail.State.Plan.FinalVerification.FailureKind != plan.FinalVerificationFailureKindUnknown {
+		t.Fatalf("failure = %v", failure)
+	}
+	if err := f.handleFinalVerificationFailure(context.Background(), 1, detail, root, failure); errors.Is(err, errVerificationRepairScheduled) {
+		t.Fatal("scheduled repair")
+	}
+	if calls != 1 || len(detail.Slices.Slices) != completed || plan.VerificationRepairAttemptCount(detail) != attempts {
+		t.Fatal("unexplained failure changed completed work or repair history")
+	}
+	for _, event := range events {
+		if event.Type == plan.EventTypeVerificationRepairCreated {
+			t.Fatal("repair-created event")
+		}
+	}
+}
+
 func TestClassifyFinalVerificationFailure(t *testing.T) {
 	t.Parallel()
 	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -554,7 +608,7 @@ func TestVerifyCompletedBranchRefusesToRunWhenLiveHeadCannotBeResolved(t *testin
 	}
 }
 
-func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) {
+func TestFailedFinalVerificationAfterCleanRebaseRequiresDiagnosis(t *testing.T) {
 	testenv.SkipIfShort(t)
 	t.Parallel()
 	root := initSliceCompletionRepo(t)
@@ -598,11 +652,11 @@ func TestFailedFinalVerificationAfterCleanRebaseRemainsRepairable(t *testing.T) 
 	if plan.CurrentFailedFinalVerification(detail) == nil {
 		t.Fatal("failed verification was not current after rebased HEAD was persisted")
 	}
-	if err := appendVerificationRepair(context.Background(), detail, execution); err != nil {
-		t.Fatalf("append verification repair after clean rebase: %v", err)
+	if err := appendVerificationRepair(context.Background(), detail, execution); err == nil {
+		t.Fatal("unexplained failure authorized repair after clean rebase")
 	}
-	if len(detail.State.Plan.PendingSlices) != 1 || !strings.HasPrefix(detail.State.Plan.PendingSlices[0], plan.VerificationRepairSlicePrefix) {
-		t.Fatalf("pending repair slices = %v", detail.State.Plan.PendingSlices)
+	if len(detail.State.Plan.PendingSlices) != 0 || plan.VerificationRepairAttemptCount(detail) != 0 {
+		t.Fatalf("unexpected repair work = %v", detail.State.Plan.PendingSlices)
 	}
 }
 

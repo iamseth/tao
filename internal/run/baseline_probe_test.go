@@ -43,6 +43,7 @@ func TestFailuresOutsidePlanOwnership(t *testing.T) {
 	}
 }
 
+// Characterizes the helper directly, not permission for finalizer comparisons.
 func TestBaselineProbe(t *testing.T) {
 	testenv.SkipIfShort(t)
 	setupVerificationIdentityTools(t)
@@ -189,18 +190,14 @@ func TestBaselineProbe(t *testing.T) {
 			if outside != (tc.calls == 1) {
 				t.Fatalf("failuresOutsidePlanOwnership=%v want %v", outside, tc.calls == 1)
 			}
-			failure := f.verifyCompletedBranch(context.Background(), detail, root)
-			wantHeadCalls := 1
-			if outside {
-				wantHeadCalls++
+			v := &plan.FinalVerification{Command: "make verify", CWD: root, Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode}
+			v.Baseline = f.probeBaselineFailure(context.Background(), detail, root, *v, tc.head)
+			if v.Baseline != nil {
+				v.FailureKind = plan.FinalVerificationFailureKindBaseline
 			}
-			if headCalls != wantHeadCalls {
-				t.Fatalf("head calls=%d want %d", headCalls, wantHeadCalls)
+			if headCalls != 0 {
+				t.Fatalf("helper ran head gate %d times", headCalls)
 			}
-			if failure == nil {
-				t.Fatal("expected failure")
-			}
-			v := detail.State.Plan.FinalVerification
 			if calls != tc.calls {
 				t.Fatalf("base calls=%d want %d", calls, tc.calls)
 			}
@@ -208,34 +205,16 @@ func TestBaselineProbe(t *testing.T) {
 				if v.FailureKind != plan.FinalVerificationFailureKindBaseline || v.Baseline == nil || v.Baseline.SHA != base || v.Baseline.Source != "live_merge_base" || !slices.Contains(v.Baseline.Signatures, "TestX") {
 					t.Fatalf("verification=%+v baseline=%+v", v, v.Baseline)
 				}
+				failure := &FinalVerificationError{Verification: *v}
 				if !strings.Contains(failure.Error(), "baseline: also fails at "+base[:12]) {
 					t.Fatal(failure)
-				}
-				_ = f.handleFinalVerificationFailure(context.Background(), 1, detail, root, failure)
-				found := false
-				for _, e := range events {
-					if e.Type == plan.EventTypeVerificationRepairCreated {
-						t.Fatal("scheduled repair")
-					}
-					if e.Type == plan.EventTypeFinalVerification {
-						found = true
-						if e.Baseline == nil {
-							t.Fatal("missing event baseline")
-						}
-					}
-				}
-				if !found {
-					t.Fatal("missing verification event")
 				}
 			} else if v.FailureKind != plan.FinalVerificationFailureKindCode || v.Baseline != nil {
 				t.Fatalf("verification=%+v", v)
 			}
-			if tc.name == "base passes" {
-				if err := f.handleFinalVerificationFailure(context.Background(), 1, detail, root, failure); !errors.Is(err, errVerificationRepairScheduled) {
-					t.Fatalf("failing rerun did not schedule repair: %v", err)
-				}
-				if plan.VerificationRepairAttemptCount(detail) != 1 {
-					t.Fatal("missing repair attempt")
+			for _, event := range events {
+				if event.Type == plan.EventTypeVerificationRepairCreated {
+					t.Fatal("helper scheduled repair")
 				}
 			}
 			if probeDir != "" {

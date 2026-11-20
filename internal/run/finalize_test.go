@@ -29,6 +29,7 @@ func TestExplicitBaselineRepairAppendsSlice(t *testing.T) {
 		},
 	})
 	execution.ExecutionRoot = root
+	execution.Request.RepairVerification = true
 	if err := appendVerificationRepair(context.Background(), detail, execution); err != nil {
 		t.Fatalf("explicit baseline repair: %v", err)
 	}

@@ -3,6 +3,8 @@ package run
 import (
 	"context"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 
 	"github.com/iamseth/tao/internal/plan"
@@ -47,7 +49,21 @@ func appendVerificationRepair(ctx context.Context, detail *plan.PlanDetail, exec
 	if !ok {
 		return fmt.Errorf("plan record does not support verification repair")
 	}
+	automatic := !execution.Request.RepairVerification
+	if automatic {
+		if ok, reason := plan.AutomaticVerificationRepairAdmissible(detail); !ok {
+			return fmt.Errorf("automatic verification repair refused: %s", reason)
+		}
+		observations, err := observeFinalVerificationPrerequisites(ctx, execution.ExecutionRoot, os.Getenv("PATH"), detail.State.Plan.FinalVerificationContract.Prerequisites)
+		if err != nil || !slices.Equal(observations, failure.Comparison.Runs[0].Observations) {
+			return fmt.Errorf("automatic verification repair refused: prerequisite evidence changed")
+		}
+		if !newFinalizer(nil, execution).stableFinalContractHead(ctx, detail, execution.ExecutionRoot, failure.HeadSHA, failure.ContractDigest) {
+			return fmt.Errorf("automatic verification repair refused: comparison boundary changed")
+		}
+	}
 	request := plan.VerificationRepairRequest{
+		Automatic: automatic,
 		Binding:   plan.VerificationRepairBinding{Command: failure.Command, HeadSHA: failure.HeadSHA, Fingerprint: failure.Fingerprint},
 		CreatedAt: now(execution).UTC(),
 	}
@@ -72,8 +88,8 @@ func observeVerificationRecovery(detail *plan.PlanDetail, execution runExecution
 
 func requireReverifyFinalVerificationBoundary(ctx context.Context, detail *plan.PlanDetail, execution runExecution) (*plan.FinalVerification, error) {
 	failure := plan.CurrentFailedFinalVerification(detail)
-	if failure == nil {
-		return nil, fmt.Errorf("reverification requires current failed final-verification evidence")
+	if failure == nil && (detail == nil || plan.RequireCurrentFinalVerification(detail) == nil) {
+		return nil, fmt.Errorf("reverification requires current failed final-verification evidence or an awaiting contract")
 	}
 	if !plan.AnalyzeRunCapabilities(detail).Complete {
 		return nil, fmt.Errorf("reverification requires settled slice work with all slices complete")
@@ -97,6 +113,12 @@ func requireReverifyFinalVerificationBoundary(ctx context.Context, detail *plan.
 	head = strings.TrimSpace(head)
 	if detail.State.Workspace == nil || strings.TrimSpace(branch) == "" || branch != detail.State.Workspace.Branch {
 		return nil, fmt.Errorf("reverification worktree boundary is stale: branch %q does not match recorded branch", branch)
+	}
+	if failure == nil {
+		if head == "" || head != detail.State.Workspace.HeadSHA {
+			return nil, fmt.Errorf("reverification requires matching recorded workspace head")
+		}
+		return nil, nil
 	}
 	if head != failure.HeadSHA {
 		descendsFromFailure, err := git.IsAncestor(ctx, failure.HeadSHA, head)

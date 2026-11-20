@@ -132,6 +132,11 @@ func validateDetail(detail *PlanDetail) []string {
 		warnings = append(warnings, "state.json plan.change_type is invalid: "+err.Error())
 	}
 	warnings = append(warnings, validateApprovedProposalType(detail.State.Plan)...)
+	if contract := detail.State.Plan.FinalVerificationContract; contract != nil {
+		if err := contract.Validate(); err != nil {
+			warnings = append(warnings, "state.json plan.final_verification_contract is invalid: "+err.Error())
+		}
+	}
 	if verification := detail.State.Plan.FinalVerification; verification != nil {
 		if !validFinalVerificationFailureKind(verification.FailureKind) {
 			warnings = append(warnings, "state.json plan.final_verification.failure_kind is invalid")
@@ -192,6 +197,16 @@ func validateDetail(detail *PlanDetail) []string {
 		warnings = append(warnings, "state.json plan.id does not match slices.json plan_id")
 	}
 
+	for i := range detail.Slices.Slices {
+		slice := &detail.Slices.Slices[i]
+		if slice.VerificationSupersession != nil {
+			if !auditedRepairSuperseded(detail, slice) {
+				warnings = append(warnings, fmt.Sprintf("slice %s has invalid correction supersession evidence", slice.ID))
+			} else if slices.Contains(detail.State.Plan.PendingSlices, slice.ID) || (detail.State.Plan.CurrentSlice != nil && *detail.State.Plan.CurrentSlice == slice.ID) {
+				warnings = append(warnings, fmt.Sprintf("superseded repair slice %s remains executable", slice.ID))
+			}
+		}
+	}
 	index := newDetailIndex(detail)
 	warnings = append(warnings, validateSliceReferences(detail, index)...)
 	warnings = append(warnings, validatePlanningBrief(detail)...)
@@ -262,7 +277,7 @@ func validFinalVerificationBaseline(baseline *FinalVerificationBaseline) bool {
 
 func validFinalVerificationFailureKind(kind FinalVerificationFailureKind) bool {
 	switch kind {
-	case "", FinalVerificationFailureKindBaseline, FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand:
+	case "", FinalVerificationFailureKindUnknown, FinalVerificationFailureKindInvalidContract, FinalVerificationFailureKindPrerequisiteMissing, FinalVerificationFailureKindBaseline, FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand:
 		return true
 	default:
 		return false

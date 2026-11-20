@@ -374,11 +374,18 @@ _tao() {
       ;;
     e|ed|edi|edit)
       if (( CURRENT == 3 )); then
-        subcommands=('remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice' 'amend:Amend a pending or blocked slice'\''s contract with a recorded reason; verification replacements are one-for-one, never delete commands, and are refused for generated repair slices, as are goal replacements')
+        subcommands=('final-verification:Preview or confirm an audited final source-contract correction; no gates run' 'remove:Remove a pending slice from the plan' 'skip:Mark a pending slice skipped' 'move:Move a pending slice before or after another pending slice' 'amend:Amend a pending or blocked slice'\''s contract with a recorded reason; verification replacements are one-for-one, never delete commands, and are refused for generated repair slices, as are goal replacements')
         _describe -t commands 'edit command' subcommands
         return
       fi
       case ${words[3]} in
+        final-verification)
+          _arguments '--confirm[exact preview token authorizing this transition]:token:' '--proposal-file[bounded JSON source-contract correction proposal]:path:_files'
+          if _tao_at_positional 4 1 0 ',,' '--confirm' '--proposal-file'; then
+            plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")
+            compadd -a plan_ids
+          fi
+          ;;
         remove)
           if _tao_at_positional 4 1 0 ',,'; then
             plan_ids=("${(@f)$(${words[1]} complete plan-ids 2>/dev/null)}")

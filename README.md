@@ -191,6 +191,8 @@ commands also accept the short unambiguous prefixes shown by help.
 | Settings | `config`, `completion`, `doctor`, `update` | Manage scoped preferences, configure shell support, diagnose setup, and update release binaries. |
 | Other | `version`, `slice-complete`, `slice-blocked` | Inspect the build or support Tao-managed agent lifecycle handoffs and compatibility. |
 
+Preview a final gate correction with `tao edit final-verification <plan> --proposal-file FILE`; apply that exact preview with `--confirm TOKEN`. No gate runs; fresh verification and review remain required. See the [source-contract correction workflow](docs/usage-guide.md#correct-a-final-source-contract).
+
 ### Repeatable note execution
 
 `tao note run <id>` generates and links a plan for an open note, or resumes its

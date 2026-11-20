@@ -313,6 +313,9 @@ func TestCheckRequestCanStartRequiresRepairVerificationDecision(t *testing.T) {
 		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout},
 		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled},
 		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand},
+		{name: "unknown", kind: plan.FinalVerificationFailureKindUnknown},
+		{name: "invalid contract", kind: plan.FinalVerificationFailureKindInvalidContract},
+		{name: "prerequisite missing", kind: plan.FinalVerificationFailureKindPrerequisiteMissing},
 		{name: "legacy unclassified"},
 	}
 	for _, test := range tests {
@@ -375,6 +378,17 @@ func TestCheckRequestCanStartRefusesReverifyWithoutCurrentFailedEvidence(t *test
 	err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{Reverify: true}})
 	if err == nil || !strings.Contains(err.Error(), "--reverify requires current failed final-verification evidence") {
 		t.Fatalf("reverify admission error = %v", err)
+	}
+}
+
+func TestCheckRequestCanStartReverifyAwaitingContract(t *testing.T) {
+	detail := completedReviewPlanDetail(t.TempDir())
+	detail.State.Plan.FinalVerificationContract = &plan.FinalVerificationContract{Revision: 1, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+	if err := CheckRequestCanStart(detail, Request{RecoveryMode: RecoveryMode{Reverify: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if detail.State.Plan.FinalVerification != nil {
+		t.Fatal("invented verification evidence")
 	}
 }
 

@@ -1017,6 +1017,14 @@ func approvedPullRequestDetail(changeType plan.ChangeType, head string) *plan.Pl
 	return detail
 }
 
+func TestPullRequestPreflightRequiresCurrentContract(t *testing.T) {
+	detail := approvedPullRequestDetail(plan.ChangeTypeFix, "head")
+	detail.State.Plan.FinalVerificationContract = &plan.FinalVerificationContract{Revision: 1, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+	if _, _, err := pullRequestPreflight(PullRequestRun{Detail: detail}); err == nil {
+		t.Fatal("unverified contract admitted")
+	}
+}
+
 func TestPullRequestVerificationProjectionExcludesDiagnosticEvidence(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{"", plan.VerificationSourceTao} {

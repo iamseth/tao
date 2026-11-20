@@ -384,6 +384,16 @@ func TestCheckPreMergeGateSkipsWorktreeCheckWhenWorktreePathEqualsRepoRoot(t *te
 	}
 }
 
+func TestCheckPreMergeGateRequiresCurrentContract(t *testing.T) {
+	detail := mergeReadyDetail("base")
+	detail.State.Plan.FinalVerificationContract = &plan.FinalVerificationContract{Revision: 1, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+	for _, force := range []bool{false, true} {
+		if err := (newTestService(Service{})).CheckPreMergeGate(context.Background(), detail, Options{Force: force}); err == nil {
+			t.Fatal("unverified contract admitted")
+		}
+	}
+}
+
 func TestCheckPreMergeGateAllowsApprovedMatchingReviewBase(t *testing.T) {
 	t.Parallel()
 	git := &fakeGitClient{defaultBranch: "main", mergeBase: "base123"}

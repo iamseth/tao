@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamseth/tao/internal/commandrunner"
 	"github.com/iamseth/tao/internal/plan"
 
 	"github.com/iamseth/tao/internal/testenv"
@@ -25,6 +26,9 @@ func TestAppendVerificationRepairRefusesNonCodeRecoveryBeforeGit(t *testing.T) {
 		name string
 		kind plan.FinalVerificationFailureKind
 	}{
+		{name: "unknown", kind: plan.FinalVerificationFailureKindUnknown},
+		{name: "invalid contract", kind: plan.FinalVerificationFailureKindInvalidContract},
+		{name: "prerequisite missing", kind: plan.FinalVerificationFailureKindPrerequisiteMissing},
 		{name: "tool missing", kind: plan.FinalVerificationFailureKindToolMissing},
 		{name: "timeout", kind: plan.FinalVerificationFailureKindTimeout},
 		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled},
@@ -169,6 +173,7 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 		wantErr    string
 	}{
 		{name: "exact head", liveBranch: "feature", liveHead: "failed-head"},
+		{name: "awaiting contract", liveBranch: "feature", liveHead: "failed-head"},
 		{name: "advanced clean head", liveBranch: "feature", liveHead: "advanced-head"},
 		{name: "diverged head", liveBranch: "feature", liveHead: "diverged-head", diverged: true, wantErr: "or its descendant"},
 		{name: "dirty worktree", liveBranch: "feature", liveHead: "failed-head", status: testenv.StatusFixture(" M repaired.go"), wantErr: "clean worktree"},
@@ -180,6 +185,10 @@ func TestRequireReverifyFinalVerificationBoundary(t *testing.T) {
 			detail := completedReviewPlanDetail(t.TempDir())
 			detail.State.Workspace = &plan.Workspace{Branch: "feature", HeadSHA: "failed-head"}
 			detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "failed-head", Result: finalVerificationFailed, Fingerprint: "failure"}
+			if test.name == "awaiting contract" {
+				detail.State.Plan.FinalVerification = nil
+				detail.State.Plan.FinalVerificationContract = &plan.FinalVerificationContract{Revision: 1, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+			}
 			if test.unsettled {
 				detail.State.Status = plan.StatusInProgress
 				detail.State.Plan.CompletedSlices = nil
@@ -227,6 +236,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 	tests := []struct {
 		name              string
 		failures          int
+		comparison        bool
 		explicit          bool
 		diagnosticFailure bool
 		resume            bool
@@ -237,11 +247,15 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 		wantStops         int
 		wantError         bool
 	}{
-		{name: "first attempt succeeds", failures: 1, wantAttempts: 1, wantRuns: 2},
-		{name: "second attempt succeeds", failures: 2, wantAttempts: 2, wantRuns: 3},
-		{name: "exhaustion", failures: 3, wantAttempts: 2, wantRuns: 3, wantStops: 1, wantError: true},
+		{name: "comparison repairs once", comparison: true, failures: 1, wantAttempts: 1, wantRuns: 2},
+		{name: "comparison repairs twice", comparison: true, failures: 2, wantAttempts: 2, wantRuns: 3},
+		{name: "comparison reaches lifetime cap", comparison: true, failures: 3, wantAttempts: 2, wantRuns: 3, wantStops: 1, wantError: true},
+		{name: "comparison reaches invocation budget", comparison: true, failures: 2, maxSlices: 2, wantAttempts: 1, wantRuns: 2, wantError: true},
+		{name: "unexplained failure stops", failures: 1, wantRuns: 1, wantError: true},
+		{name: "no implicit second attempt", failures: 2, wantRuns: 1, wantError: true},
+		{name: "no implicit exhaustion", failures: 3, wantRuns: 1, wantError: true},
 		{name: "max slices consumed by ordinary work", failures: 1, maxSlices: 1, wantRuns: 1, wantError: true},
-		{name: "max slices permits only one repair", failures: 2, maxSlices: 2, wantAttempts: 1, wantRuns: 2, wantError: true},
+		{name: "spare slice budget does not authorize repair", failures: 2, maxSlices: 2, wantRuns: 1, wantError: true},
 		{name: "ordinary service resumes after append", resume: true, wantAttempts: 1, wantRuns: 1},
 		{name: "tool missing", failures: 1, failureKind: plan.FinalVerificationFailureKindToolMissing, wantRuns: 1, wantError: true},
 		{name: "timeout", failures: 1, failureKind: plan.FinalVerificationFailureKindTimeout, wantRuns: 1, wantError: true},
@@ -261,6 +275,12 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			if err := os.MkdirAll(planDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
+			var comparisonDetail *plan.PlanDetail
+			if test.comparison {
+				root, comparisonDetail = contractComparisonFixture(t)
+				runCommitTestGitCommand(t, root, "checkout", "-b", "feature")
+				comparisonDetail.State.Workspace.Branch = "feature"
+			}
 			detail := runPlanDetail(plan.StatusPlanned, []string{"001-a"}, nil, "001-a", plan.StatusPending, nil, nil)
 			detail.Dir = planDir
 			detail.State.Repo.Root = root
@@ -270,6 +290,11 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 				detail.State.Repo.Root = root
 				detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: root, Branch: "feature", HeadSHA: "head123"}
 				detail.State.Plan.FinalVerification = &plan.FinalVerification{Command: "make verify", HeadSHA: "head123", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "initial-failure"}
+			}
+			if test.comparison {
+				detail.State.Workspace = comparisonDetail.State.Workspace
+				detail.State.Repo.BaseCommit = comparisonDetail.State.Repo.BaseCommit
+				detail.State.Plan.FinalVerificationContract = comparisonDetail.State.Plan.FinalVerificationContract
 			}
 			if test.resume {
 				detail.State.Repo.Root = t.TempDir()
@@ -285,6 +310,9 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			}
 			commandErr := errors.New("tests failed")
 			var runErr = commandErr
+			if test.comparison {
+				runErr = finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 1"))
+			}
 			switch test.failureKind {
 			case plan.FinalVerificationFailureKindToolMissing:
 				runErr = finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 127"))
@@ -292,6 +320,9 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 				runErr = finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 126"))
 			}
 			git := newScriptedGitRunner("")
+			if test.comparison {
+				git.Head = detail.State.Workspace.HeadSHA
+			}
 			var identityRunner CommandRunner
 			if test.resume {
 				identityRunner = interruptedServiceGitRunner(t, root, &[]string{}, func() string { return "" }, "feature", "head123")
@@ -304,8 +335,11 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			}, RunDependencies{RepositoryAdmission: testRepositoryAdmission,
 				EventAppender: repo,
 				RootResolver:  ExecutionRootResolverFunc(func(context.Context, *plan.PlanDetail) (string, error) { return root, nil }),
-				CommandRunner: testenv.SplitBatchedRevParse(func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 					if name != "sh" {
+						if test.comparison {
+							return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
+						}
 						if test.resume && name == "git" {
 							switch runGitKey(args) {
 							case "rev-parse --show-toplevel", "rev-parse --git-common-dir", "rev-parse --git-dir":
@@ -314,14 +348,17 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 						}
 						return git.Run(ctx, cwd, name, args, stdout, stderr)
 					}
+					gateCalls++
 					if cwd != root {
+						if test.comparison {
+							return nil
+						}
 						t.Fatalf("verification ran outside execution root: %s", cwd)
 					}
-					gateCalls++
 					if strings.Join(args, " ") != "-c make verify" {
 						t.Fatalf("unexpected gate: %v", args)
 					}
-					if gateCalls <= test.failures {
+					if (!test.comparison && gateCalls <= test.failures) || (test.comparison && len(runs) <= test.failures) {
 						switch test.failureKind {
 						case plan.FinalVerificationFailureKindCancelled:
 							cancel()
@@ -332,7 +369,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 						return runErr
 					}
 					return nil
-				}),
+				},
 				SliceExecutor: sliceExecutorFunc(func(ctx context.Context, run SliceRun) error {
 					loaded, err := repo.ResolvePlan(ctx, run.PlanDir)
 					if err != nil {
@@ -348,6 +385,10 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 					}
 					runs = append(runs, run.SliceID)
 					git.Head = "after-" + run.SliceID
+					if test.comparison {
+						runCommitTestGitCommand(t, root, "commit", "--allow-empty", "-m", run.SliceID)
+						git.Head = strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+					}
 					return record.CompleteSliceWithOutcome(run.SliceID, "done", nil, plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionCommitted, CommitSHA: git.Head}, time.Now().UTC())
 				}),
 				ReviewCreator: reviewCreatorFunc(func(_ context.Context, run ReviewRun) (plan.PlanReview, error) {
@@ -358,6 +399,9 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 					return plan.PlanReview{Status: plan.ReviewStatusCompleted, Verdict: plan.ReviewVerdictApprove}, nil
 				}),
 			})
+			if !test.comparison {
+				execution.Dependencies.CommandRunner = testenv.SplitBatchedRevParse(execution.Dependencies.CommandRunner)
+			}
 			execution.Request = Request{RecoveryMode: RecoveryMode{RepairVerification: test.explicit}}
 			if test.diagnosticFailure {
 				execution.Dependencies.EventAppender = eventAppenderFunc(func(dir string, event plan.Event) error {
@@ -369,11 +413,13 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			}
 			var pendingRepairID string
 			if test.explicit || test.resume {
+				execution.Request.RepairVerification = true
 				execution.ExecutionRoot = root
 				resolveExecutorDefaults(&execution)
 				if err := appendVerificationRepair(ctx, detail, execution); err != nil {
 					t.Fatal(err)
 				}
+				execution.Request.RepairVerification = test.explicit
 				pendingRepairID = plan.Derive(detail, time.Time{}).NextSliceID
 				if !strings.HasPrefix(pendingRepairID, plan.VerificationRepairSlicePrefix) {
 					t.Fatalf("append did not leave a pending repair: %q", pendingRepairID)
@@ -398,7 +444,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 				}
 				wantKind := test.failureKind
 				if wantKind == "" {
-					wantKind = plan.FinalVerificationFailureKindCode
+					wantKind = plan.FinalVerificationFailureKindUnknown
 				}
 				if verificationErr.Verification.FailureKind != wantKind {
 					t.Fatalf("failure kind = %q, want %q", verificationErr.Verification.FailureKind, wantKind)
@@ -421,7 +467,7 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 				case plan.EventTypeVerificationRepairStopped:
 					trigger = "verification_repair_stop"
 				case plan.EventTypeInterventionObserved:
-					if !test.explicit || event.Actor != "operator" || event.Trigger != "verification_repair_requested" || event.AttributionVersion != 1 {
+					if (!test.explicit && !test.resume) || event.Actor != "operator" || event.Trigger != "verification_repair_requested" || event.AttributionVersion != 1 {
 						t.Fatalf("unexpected intervention: %+v", event)
 					}
 				}
@@ -438,8 +484,12 @@ func TestExecuteAutomaticVerificationRepair(t *testing.T) {
 			if got := countPlanEvents(loaded.Events, plan.EventTypeVerificationRepairStopped); got != test.wantStops {
 				t.Fatalf("repair stopped events = %d, want %d", got, test.wantStops)
 			}
-			if len(runs) != test.wantRuns || gateCalls != test.wantRuns {
-				t.Fatalf("runs = %v, gate calls = %d, want %d each", runs, gateCalls, test.wantRuns)
+			wantGates := test.wantRuns
+			if test.comparison {
+				wantGates += 2 * test.wantAttempts
+			}
+			if len(runs) != test.wantRuns || gateCalls != wantGates {
+				t.Fatalf("runs = %v, gate calls = %d, want %d runs/%d gates", runs, gateCalls, test.wantRuns, wantGates)
 			}
 			automaticAttempts := test.wantAttempts
 			if test.explicit || test.resume {
@@ -540,7 +590,7 @@ func TestRecoveryFinalVerificationDoesNotScheduleRepair(t *testing.T) {
 			var failure *FinalVerificationError
 			if !errors.As(err, &failure) || !errors.Is(err, gateErr) || errors.Is(err, errVerificationRepairScheduled) {
 				t.Errorf("recovery error = %v, want original FinalVerificationError", err)
-			} else if failure.Verification.FailureKind != plan.FinalVerificationFailureKindCode || failure.Verification.HeadSHA != head || failure.Verification.Command != "make verify" {
+			} else if failure.Verification.FailureKind != plan.FinalVerificationFailureKindUnknown || failure.Verification.HeadSHA != head || failure.Verification.Command != "make verify" {
 				t.Errorf("verification failure = %+v", failure.Verification)
 			}
 			if gateCalls != 1 || handoffs != 0 || reviews != 0 || pullRequests != 0 {
@@ -556,8 +606,8 @@ func TestRecoveryFinalVerificationDoesNotScheduleRepair(t *testing.T) {
 			if got := countPlanEvents(loaded.Events, plan.EventTypeVerificationRepairCreated); got != 0 {
 				t.Errorf("repair creation events = %d, want none", got)
 			}
-			if decision := plan.DeriveVerificationRecovery(loaded); decision.Kind != plan.PlanActionRepairVerification {
-				t.Errorf("expected eligible failure left for explicit repair, got %+v", decision)
+			if decision := plan.DeriveVerificationRecovery(loaded); decision.Kind != plan.PlanActionResolveVerification {
+				t.Errorf("expected diagnosis without repair authority, got %+v", decision)
 			}
 		})
 	}
@@ -588,21 +638,16 @@ func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
 	t.Parallel()
 	for _, failReload := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reload error=%t", failReload), func(t *testing.T) {
-			root := t.TempDir()
-			if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@true\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			root, detail := contractComparisonFixture(t)
+			gateErr := finalVerificationProcessError(t, exec.Command("sh", "-c", "exit 1"))
 			plansDir := t.TempDir()
 			planDir := filepath.Join(plansDir, "plan-a")
 			if err := os.MkdirAll(planDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			detail := completedReviewPlanDetail(planDir)
-			detail.State.Repo.Root = root
-			detail.State.Workspace = &plan.Workspace{Strategy: plan.WorkspaceStrategyWorktree, Path: root, Branch: "feature", HeadSHA: "head123"}
+			detail.Dir = planDir
 			persistRunArtifacts(t, planDir, detail)
 			repo := plan.NewFileRepository(plansDir)
-			git := newScriptedGitRunner("")
 			gateCalls, reloads, handoffs := 0, 0, 0
 			reloadErr := errors.New("reload unavailable")
 			handoffErr := errors.New("stop at fresh repair handoff")
@@ -618,10 +663,14 @@ func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
 				},
 				CommandRunner: func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
 					if name != "sh" {
-						return git.Run(ctx, cwd, name, args, stdout, stderr)
+						return commandrunner.DefaultLocal(ctx, cwd, name, args, stdout, stderr)
 					}
 					gateCalls++
-					return errors.New("tests failed")
+					if cwd != root {
+						return nil
+					}
+					_, _ = io.WriteString(stdout, "reproducible failure")
+					return gateErr
 				},
 				SliceExecutor: sliceExecutorFunc(func(_ context.Context, run SliceRun) error {
 					handoffs++
@@ -632,7 +681,8 @@ func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
 				}),
 			})
 			resolveExecutorDefaults(&execution)
-			// Enter the real loop at the boundary just after ordinary work completed.
+			// Real comparison evidence admits append; only a reload may hand off
+			// the journaled repair, never this stale pre-append detail.
 			executor := detailExecutor{
 				runs: 1, out: io.Discard, execution: execution,
 				sliceExecutor: execution.Dependencies.SliceExecutor,
@@ -656,15 +706,22 @@ func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
 					return fresh, nil
 				},
 			}
-			err := executor.execute(context.Background(), detail)
+			failure := executor.finalizer.verifyCompletedBranchWithComparison(context.Background(), detail, root, true)
+			if err := executor.finalizer.handleFinalVerificationFailure(context.Background(), 1, detail, root, failure); !errors.Is(err, errVerificationRepairScheduled) {
+				t.Fatalf("typed-code admission: %v", err)
+			}
+			fresh, err := executor.reload(context.Background(), detail)
+			if err == nil {
+				err = executor.execute(context.Background(), fresh)
+			}
 			if failReload {
-				if !errors.Is(err, reloadErr) || !strings.Contains(err.Error(), "reload plan after scheduling verification repair") || handoffs != 0 {
+				if !errors.Is(err, reloadErr) || handoffs != 0 {
 					t.Fatalf("reload failure = %v, handoffs = %d", err, handoffs)
 				}
 			} else if !errors.Is(err, handoffErr) || handoffs != 1 {
 				t.Fatalf("fresh handoff = %v, calls = %d", err, handoffs)
 			}
-			if gateCalls != 1 || reloads != 1 {
+			if gateCalls != 3 || reloads != 1 {
 				t.Fatalf("gate calls = %d, reloads = %d; must not re-enter finalization with stale detail", gateCalls, reloads)
 			}
 			loaded, err := repo.ResolvePlan(context.Background(), planDir)
@@ -673,6 +730,42 @@ func TestExecuteVerificationRepairRequiresFreshDetail(t *testing.T) {
 			}
 			if got := countPlanEvents(loaded.Events, plan.EventTypeVerificationRepairCreated); got != 1 {
 				t.Fatalf("repair created events = %d, want one durable append", got)
+			}
+		})
+	}
+}
+
+func TestTypedVerificationFailureRespectsRepairBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		attempts, maxSlices, runs int
+	}{
+		{name: "lifetime cap", attempts: plan.VerificationRepairAttemptCap, runs: 1},
+		{name: "invocation budget", maxSlices: 1, runs: 1},
+		{name: "no implementation", runs: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := completedReviewPlanDetail(t.TempDir())
+			detail.State.Workspace.HeadSHA = "head123"
+			verification := plan.FinalVerification{Command: "make verify", HeadSHA: "head123", Result: finalVerificationFailed, FailureKind: plan.FinalVerificationFailureKindCode, Fingerprint: "typed-code"}
+			detail.State.Plan.FinalVerification = &verification
+			for i := range tc.attempts {
+				detail.Slices.Slices = append(detail.Slices.Slices, plan.Slice{ID: fmt.Sprintf("vr%02d", i+1), Status: plan.StatusCompleted, VerificationRepair: &plan.VerificationRepairBinding{Command: "make verify", HeadSHA: "old", Fingerprint: "old"}})
+			}
+			execution := testRunExecution(ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{CommitPolicy: CommitPolicySlice, ExecutionMode: ExecutionModeIsolated, MaxSlices: tc.maxSlices}}, RunDependencies{CommandRunner: func(context.Context, string, string, []string, io.Writer, io.Writer) error {
+				t.Fatal("budget refusal reached Git or a gate")
+				return nil
+			}})
+			if plan.CurrentFailedFinalVerification(detail) == nil {
+				t.Fatal("fixture lacks current typed failure")
+			}
+			failure := &FinalVerificationError{Verification: verification}
+			f := newFinalizer(io.Discard, execution)
+			if err := f.handleFinalVerificationFailure(context.Background(), tc.runs, detail, "unused", failure); !errors.Is(err, failure) {
+				t.Fatalf("lost original failure: %v", err)
+			}
+			if plan.VerificationRepairAttemptCount(detail) != tc.attempts {
+				t.Fatal("refusal consumed attempt")
 			}
 		})
 	}

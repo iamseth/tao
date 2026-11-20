@@ -892,7 +892,7 @@ func TestValidateDetailBaselineEvidence(t *testing.T) {
 
 func TestValidateDetailConstrainsFinalVerificationFailureKind(t *testing.T) {
 	t.Parallel()
-	validKinds := []FinalVerificationFailureKind{FinalVerificationFailureKindBaseline, "", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand}
+	validKinds := []FinalVerificationFailureKind{FinalVerificationFailureKindUnknown, FinalVerificationFailureKindInvalidContract, FinalVerificationFailureKindPrerequisiteMissing, FinalVerificationFailureKindBaseline, "", FinalVerificationFailureKindCode, FinalVerificationFailureKindToolMissing, FinalVerificationFailureKindTimeout, FinalVerificationFailureKindCancelled, FinalVerificationFailureKindInvalidCommand}
 	for _, kind := range validKinds {
 		detail := &PlanDetail{
 			State:         State{Plan: PlanState{ID: "plan", FinalVerification: &FinalVerification{FailureKind: kind}}},

@@ -309,7 +309,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 	if changes == nil {
 		return encoded, nil
 	}
-	hasStateChanges := changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanParking || changes.clearPlanFinalizationFailure || changes.clearSingleMergeResolution || changes.planFinalizationFailure != nil || changes.finalVerification != nil || changes.planReview.kind != planReviewUnchanged
+	hasStateChanges := changes.correctionContract != nil || changes.clearWorkspaceDependencyFailure || changes.clearWorkspaceDependencyFingerprint || changes.clearWorkspaceRebaseIntent || changes.clearPlanCurrentSlice || changes.clearPlanParking || changes.clearPlanFinalizationFailure || changes.clearSingleMergeResolution || changes.planFinalizationFailure != nil || changes.finalVerification != nil || changes.planReview.kind != planReviewUnchanged
 	hasSliceChanges := len(changes.clearSliceBlockerNotes) > 0 || len(changes.clearSliceExecutionBoundaries) > 0
 	if projection.kind == artifactJSONState && !hasStateChanges || projection.kind == artifactJSONSlices && !hasSliceChanges || projection.kind == artifactJSONNone {
 		return encoded, nil
@@ -338,7 +338,7 @@ func lowerArtifactJSONChanges(encoded []byte, projection artifactJSONChanges) ([
 
 func removeOmittedArtifactJSONFields(encoded []byte, projection artifactJSONChanges) ([]byte, error) {
 	changes := projection.changes
-	if projection.kind != artifactJSONState || changes == nil || changes.finalVerification == nil || changes.finalVerification.FailureKind != "" && changes.finalVerification.ExitCode != nil {
+	if projection.kind != artifactJSONState || changes == nil || changes.correctionContract == nil && changes.finalVerification == nil && changes.planReview.kind != planReviewReplaced {
 		return encoded, nil
 	}
 	var root map[string]any
@@ -346,12 +346,29 @@ func removeOmittedArtifactJSONFields(encoded []byte, projection artifactJSONChan
 		return nil, fmt.Errorf("remove omitted artifact fields: %w", err)
 	}
 	plan, _ := root["plan"].(map[string]any)
-	verification, _ := plan["final_verification"].(map[string]any)
-	if changes.finalVerification.FailureKind == "" {
-		delete(verification, "failure_kind")
+	if changes.correctionContract != nil {
+		plan["final_verification_contract"] = changes.correctionContract
+		plan["final_verification_corrections"] = changes.correctionAudits
+		delete(plan, "final_verification")
 	}
-	if changes.finalVerification.ExitCode == nil {
-		delete(verification, "exit_code")
+	if changes.planReview.kind == planReviewReplaced && changes.planReview.review.VerificationContractDigest == "" {
+		review, _ := plan["review"].(map[string]any)
+		delete(review, "verification_contract_digest")
+	}
+	verification, _ := plan["final_verification"].(map[string]any)
+	if changes.finalVerification != nil {
+		if changes.finalVerification.ContractDigest == "" {
+			delete(verification, "contract_digest")
+		}
+		if changes.finalVerification.Comparison == nil {
+			delete(verification, "comparison")
+		}
+		if changes.finalVerification.FailureKind == "" {
+			delete(verification, "failure_kind")
+		}
+		if changes.finalVerification.ExitCode == nil {
+			delete(verification, "exit_code")
+		}
 	}
 	cleaned, err := json.Marshal(root)
 	if err != nil {

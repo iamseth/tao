@@ -102,6 +102,56 @@ type showMergeInProgress struct {
 	Phase runstatus.Phase `json:"phase"`
 }
 
+// This local show projection is deliberately separate from share-safe reports.
+func renderFinalContractHistory(out io.Writer, detail *plan.PlanDetail) error {
+	p := detail.State.Plan
+	text := func(s string) string {
+		if len(s) > 512 {
+			s = s[:512] + "…"
+		}
+		return fmt.Sprintf("%+q", s)
+	}
+	if c := p.FinalVerificationContract; c != nil {
+		if err := writef(out, "Final contract: revision %d; comparison permitted: %t\n  Command: %s; cwd: %s\n", c.Revision, c.ComparisonPermitted, text(c.Command), text(c.CWD)); err != nil {
+			return err
+		}
+	}
+	if f := p.FinalVerification; f != nil {
+		if err := writef(out, "Final verification: %s; failure kind: %s\n  Reason: %s\n", text(f.Result), text(string(f.FailureKind)), text(f.Details)); err != nil {
+			return err
+		}
+		if f.Comparison != nil {
+			if err := writeln(out, "Comparison observations (diagnostic, not proof of environment equivalence):"); err != nil {
+				return err
+			}
+			for i, observation := range f.Comparison.Runs {
+				if i >= 3 {
+					break
+				}
+				if err := writef(out, "  %s\n", text("head "+observation.HeadSHA+": "+observation.Result)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	history := p.FinalVerificationCorrections
+	if len(history) > 16 {
+		if err := writeln(out, "Earlier correction history omitted from display."); err != nil {
+			return err
+		}
+		history = history[len(history)-16:]
+	}
+	for _, audit := range history {
+		if err := writef(out, "Correction revision %d (audit only): %s\n  Removed coverage: %s\n  Deferred checks: %s\n  Superseded repairs: %s\n", audit.NewContract.Revision, text(audit.Ruling), text(strings.Join(audit.CoverageRemoved, ", ")), text(strings.Join(audit.DeferredChecks, ", ")), text(strings.Join(audit.SupersededSlices, ", "))); err != nil {
+			return err
+		}
+	}
+	if len(p.FinalVerificationCorrections) > 0 {
+		return writef(out, "Completed work preserved; lifetime repair attempts: %d/%d (superseded attempts still count). Every correction requires passing current verification and fresh review; reduced coverage is not build-equivalent.\n", plan.VerificationRepairAttemptCount(detail), plan.VerificationRepairAttemptCap)
+	}
+	return nil
+}
+
 func (a App) renderPlanDetail(out io.Writer, loaded planview.Plan) error {
 	return a.renderPlanDetailWithThresholds(out, loaded, plan.DefaultAgentBudgetThresholds())
 }
@@ -167,6 +217,9 @@ func (a App) renderPlanDetailWithMerge(out io.Writer, loaded planview.Plan, thre
 				return err
 			}
 		}
+	}
+	if err := renderFinalContractHistory(out, detail); err != nil {
+		return err
 	}
 	if recovery := derived.FinalizationRecovery; recovery != nil {
 		if err := writef(out, "Finalization failure: %s (%s)\n", recovery.Phase, recovery.Category); err != nil {

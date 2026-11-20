@@ -291,6 +291,22 @@ func TestBatchCandidateDiscoveryBlocksInvalidApprovedProposalAndKeepsLegacyEligi
 	}
 }
 
+func TestBatchCandidateDiscoveryBlocksAwaitingContract(t *testing.T) {
+	detail := batchReadyDetail("plan-a", "tao/plan-a")
+	detail.State.Plan.FinalVerificationContract = &plan.FinalVerificationContract{Revision: 1, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+	repo := &batchRepository{
+		summaries: []plan.PlanSummary{{ID: "plan-a", Status: plan.StatusReviewed, Reviewed: true, ReviewVerdict: plan.ReviewVerdictApprove}},
+		details:   map[string]*plan.PlanDetail{"plan-a": detail},
+	}
+	got, err := (BatchCandidateDiscovery{Repository: repo, Merge: newTestService(Service{Git: &fakeGitClient{}}), Health: func(context.Context, plan.Repo) error { return nil }}).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !blockersContain(got.Blockers, "plan-a", "passing final verification required") {
+		t.Fatalf("unverified contract not blocked: %+v", got.Blockers)
+	}
+}
+
 func TestBatchOrderStableOverlapAndAncestry(t *testing.T) {
 	t.Parallel()
 	candidates := []BatchCandidate{

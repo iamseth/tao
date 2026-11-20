@@ -79,6 +79,9 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - blocked_invalid_verification_command: 1
   - blocked_out_of_scope_gate_failure: 1
   - blocked_verification_environment: 1
+  - final_verification_unknown: 1
+  - final_verification_invalid_contract: 1
+  - final_verification_prerequisite_missing: 1
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -142,6 +145,9 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - blocked_invalid_verification_command: 1
   - blocked_out_of_scope_gate_failure: 1
   - blocked_verification_environment: 1
+  - final_verification_unknown: 1
+  - final_verification_invalid_contract: 1
+  - final_verification_prerequisite_missing: 1
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -209,6 +215,9 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - blocked_invalid_verification_command: 1
   - blocked_out_of_scope_gate_failure: 1
   - blocked_verification_environment: 1
+  - final_verification_unknown: 1
+  - final_verification_invalid_contract: 1
+  - final_verification_prerequisite_missing: 1
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -274,6 +283,9 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - blocked_invalid_verification_command: 1
   - blocked_out_of_scope_gate_failure: 1
   - blocked_verification_environment: 1
+  - final_verification_unknown: 1
+  - final_verification_invalid_contract: 1
+  - final_verification_prerequisite_missing: 1
 - quality reliability histogram:
   - verification_failed: 1
 
@@ -337,6 +349,9 @@ Unattended (observed) counts matured plans that reached merge with sufficient at
   - blocked_invalid_verification_command: 1
   - blocked_out_of_scope_gate_failure: 1
   - blocked_verification_environment: 1
+  - final_verification_unknown: 1
+  - final_verification_invalid_contract: 1
+  - final_verification_prerequisite_missing: 1
 - quality reliability histogram:
   - verification_failed: 1
 

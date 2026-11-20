@@ -136,6 +136,13 @@ func (d BatchCandidateDiscovery) Discover(ctx context.Context) (BatchPreflightRe
 		if plan.PlanIsMerged(detail.Events) || (summary.Status == plan.StatusCompleted && !plan.PlanIsPullRequestComplete(detail)) {
 			continue
 		}
+		if detail.State.Plan.FinalVerificationContract != nil {
+			if err := requireApproved(detail); err != nil {
+				d.addBlocker(&result, &candidate, "approval", err)
+				result.Candidates = append(result.Candidates, candidate)
+				continue
+			}
+		}
 		if plan.PlanIsPullRequestComplete(detail) {
 			ref, integrated, probeErr := d.Merge.integratedByAncestry(ctx, git, detail)
 			if probeErr != nil {

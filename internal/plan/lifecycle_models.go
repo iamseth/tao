@@ -310,6 +310,8 @@ type PlanSequence = Sequence
 
 // PlanState is the mutable queue state for a plan.
 type PlanState struct {
+	FinalVerificationCorrections []FinalVerificationCorrectionAudit `json:"final_verification_corrections,omitempty"`
+
 	Parking              *Parking              `json:"parking,omitempty"`
 	ID                   string                `json:"id"`
 	Title                string                `json:"title"`
@@ -331,11 +333,12 @@ type PlanState struct {
 	// PRFeedbackConsumedThreadIDs is append-only conversion evidence keyed by
 	// GitHub thread node ID. It is independent of the current triage snapshot so
 	// resolved and later-returning threads cannot be converted twice.
-	PRFeedbackConsumedThreadIDs []string                 `json:"pr_feedback_consumed_thread_ids,omitempty"`
-	Review                      *PlanReview              `json:"review,omitempty"`
-	MergeCommitIntent           *SingleMergeCommitIntent `json:"merge_commit_intent"`
-	FinalVerification           *FinalVerification       `json:"final_verification,omitempty"`
-	FinalizationFailure         *FinalizationFailure     `json:"finalization_failure,omitempty"`
+	PRFeedbackConsumedThreadIDs []string                   `json:"pr_feedback_consumed_thread_ids,omitempty"`
+	Review                      *PlanReview                `json:"review,omitempty"`
+	MergeCommitIntent           *SingleMergeCommitIntent   `json:"merge_commit_intent"`
+	FinalVerificationContract   *FinalVerificationContract `json:"final_verification_contract,omitempty"`
+	FinalVerification           *FinalVerification         `json:"final_verification,omitempty"`
+	FinalizationFailure         *FinalizationFailure       `json:"finalization_failure,omitempty"`
 }
 
 // PullRequest records GitHub pull request identity. Legacy PullRequestIntent
@@ -427,12 +430,15 @@ type FinalVerificationFailureKind string
 
 // Failure kinds classify repository-wide gate results stored in final-verification evidence.
 const (
-	FinalVerificationFailureKindCode           FinalVerificationFailureKind = "code"
-	FinalVerificationFailureKindBaseline       FinalVerificationFailureKind = "baseline"
-	FinalVerificationFailureKindToolMissing    FinalVerificationFailureKind = "tool_missing"
-	FinalVerificationFailureKindTimeout        FinalVerificationFailureKind = "timeout"
-	FinalVerificationFailureKindCancelled      FinalVerificationFailureKind = "cancelled"
-	FinalVerificationFailureKindInvalidCommand FinalVerificationFailureKind = "invalid_command"
+	FinalVerificationFailureKindUnknown             FinalVerificationFailureKind = "unknown"
+	FinalVerificationFailureKindInvalidContract     FinalVerificationFailureKind = "invalid_contract"
+	FinalVerificationFailureKindPrerequisiteMissing FinalVerificationFailureKind = "prerequisite_missing"
+	FinalVerificationFailureKindCode                FinalVerificationFailureKind = "code"
+	FinalVerificationFailureKindBaseline            FinalVerificationFailureKind = "baseline"
+	FinalVerificationFailureKindToolMissing         FinalVerificationFailureKind = "tool_missing"
+	FinalVerificationFailureKindTimeout             FinalVerificationFailureKind = "timeout"
+	FinalVerificationFailureKindCancelled           FinalVerificationFailureKind = "cancelled"
+	FinalVerificationFailureKindInvalidCommand      FinalVerificationFailureKind = "invalid_command"
 )
 
 // FinalVerificationBaseline records matching failure evidence at the plan base.
@@ -446,6 +452,8 @@ type FinalVerificationBaseline struct {
 // FinalVerification records broad repository verification performed after all
 // slices settle and before a completed branch is reviewed.
 type FinalVerification struct {
+	ContractDigest  string                       `json:"contract_digest,omitempty"`
+	Comparison      *FinalVerificationComparison `json:"comparison,omitempty"`
 	Command         string                       `json:"command,omitempty"`
 	CWD             string                       `json:"cwd"`
 	HeadSHA         string                       `json:"head_sha,omitempty"`
@@ -488,15 +496,16 @@ type ReviewCommitMessage struct {
 
 // PlanReview records the persisted fresh-session review for a completed plan.
 type PlanReview struct {
-	Status        string               `json:"status,omitempty"`
-	Verdict       string               `json:"verdict,omitempty"`
-	Summary       string               `json:"summary,omitempty"`
-	FindingsCount int                  `json:"findings_count,omitempty"`
-	Findings      []ReviewFinding      `json:"findings,omitempty"`
-	CommitMessage *ReviewCommitMessage `json:"commit_message,omitempty"`
-	Base          string               `json:"base,omitempty"`
-	Head          string               `json:"head,omitempty"`
-	Agent         string               `json:"agent,omitempty"`
+	VerificationContractDigest string               `json:"verification_contract_digest,omitempty"`
+	Status                     string               `json:"status,omitempty"`
+	Verdict                    string               `json:"verdict,omitempty"`
+	Summary                    string               `json:"summary,omitempty"`
+	FindingsCount              int                  `json:"findings_count,omitempty"`
+	Findings                   []ReviewFinding      `json:"findings,omitempty"`
+	CommitMessage              *ReviewCommitMessage `json:"commit_message,omitempty"`
+	Base                       string               `json:"base,omitempty"`
+	Head                       string               `json:"head,omitempty"`
+	Agent                      string               `json:"agent,omitempty"`
 	// Via is an optional bounded provenance label naming who or what relayed
 	// the review; it is provenance only, never approval or merge authority.
 	Via        string    `json:"via,omitempty"`

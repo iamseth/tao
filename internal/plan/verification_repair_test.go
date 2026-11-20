@@ -9,6 +9,20 @@ import (
 	"github.com/iamseth/tao/internal/testenv"
 )
 
+func TestAutomaticRepairAppendRejectsLegacyCode(t *testing.T) {
+	detail := completedReopenDetail()
+	detail.Dir = t.TempDir()
+	detail.State.Workspace = &Workspace{HeadSHA: "head"}
+	detail.State.Plan.FinalVerification = &FinalVerification{Command: "make verify", HeadSHA: "head", Result: "failed", FailureKind: FinalVerificationFailureKindCode, Fingerprint: "legacy"}
+	request := VerificationRepairRequest{Automatic: true, Binding: VerificationRepairBinding{Command: "make verify", HeadSHA: "head", Fingerprint: "legacy"}, CreatedAt: time.Now().UTC()}
+	if err := testRecord(detail.Dir, detail).AppendVerificationRepair(request); err == nil || !strings.Contains(err.Error(), "automatic verification repair refused") {
+		t.Fatalf("append: %v", err)
+	}
+	if VerificationRepairAttemptCount(detail) != 0 {
+		t.Fatal("refusal consumed repair attempt")
+	}
+}
+
 func TestBaselineVerificationRecovery(t *testing.T) {
 	t.Parallel()
 	detail := completedReopenDetail()
@@ -115,6 +129,9 @@ func TestAppendVerificationRepairRefusesEvidenceWithoutCodeAuthority(t *testing.
 		name string
 		kind FinalVerificationFailureKind
 	}{
+		{name: "unknown", kind: FinalVerificationFailureKindUnknown},
+		{name: "invalid contract", kind: FinalVerificationFailureKindInvalidContract},
+		{name: "prerequisite missing", kind: FinalVerificationFailureKindPrerequisiteMissing},
 		{name: "tool missing", kind: FinalVerificationFailureKindToolMissing},
 		{name: "timeout", kind: FinalVerificationFailureKindTimeout},
 		{name: "cancelled", kind: FinalVerificationFailureKindCancelled},
@@ -138,6 +155,32 @@ func TestAppendVerificationRepairRefusesEvidenceWithoutCodeAuthority(t *testing.
 				t.Fatalf("repair count after refusal = %d", got)
 			}
 		})
+	}
+}
+
+func TestVerificationRecoveryCorrectedAwaiting(t *testing.T) {
+	detail := completedReopenDetail()
+	detail.State.Plan.FinalVerificationContract = &FinalVerificationContract{Revision: 2, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+	detail.State.Plan.FinalVerificationCorrections = []FinalVerificationCorrectionAudit{{NewContract: *detail.State.Plan.FinalVerificationContract}}
+	detail.State.Plan.FinalVerification = nil
+	got := DeriveVerificationRecovery(detail)
+	if got.Kind != PlanActionReverify || !strings.Contains(got.Reason, "corrected contract awaiting verification") || !strings.Contains(got.Reason, "fresh review") {
+		t.Fatalf("recovery: %+v", got)
+	}
+	if action := DeriveNextAction(detail).Primary; action.Kind != PlanActionReverify {
+		t.Fatalf("derived action: %+v", action)
+	}
+}
+
+func TestVerificationRecoveryCorrectionGuidance(t *testing.T) {
+	for _, kind := range []FinalVerificationFailureKind{FinalVerificationFailureKindUnknown, FinalVerificationFailureKindInvalidContract, FinalVerificationFailureKindPrerequisiteMissing, FinalVerificationFailureKindInvalidCommand} {
+		detail := completedReopenDetail()
+		detail.State.Workspace = &Workspace{HeadSHA: "head"}
+		detail.State.Plan.FinalVerification = &FinalVerification{Command: "false", HeadSHA: "head", Result: "failed", FailureKind: kind, Fingerprint: "failure"}
+		got := DeriveVerificationRecovery(detail)
+		if got.Kind != PlanActionResolveVerification || got.Command != "" || !strings.Contains(got.Instruction, "tao edit final-verification") || !strings.Contains(got.Reason, string(kind)) {
+			t.Fatalf("%s: %+v", kind, got)
+		}
 	}
 }
 

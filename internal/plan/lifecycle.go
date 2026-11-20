@@ -275,6 +275,12 @@ func sliceWorkSettled(detail *PlanDetail) bool {
 	if detail == nil || automaticSliceCompletionError(detail) != nil {
 		return false
 	}
+	for i := range detail.Slices.Slices {
+		slice := &detail.Slices.Slices[i]
+		if slice.VerificationSupersession != nil && !auditedRepairSuperseded(detail, slice) {
+			return false
+		}
+	}
 	if slicesComplete(detail) {
 		return true
 	}
@@ -346,7 +352,7 @@ func slicesComplete(detail *PlanDetail) bool {
 		// Allowlist the terminal statuses so a slice in any non-terminal or
 		// unknown state (pending, in_progress, blocked, planned, invalid, "")
 		// keeps the plan from projecting as slice-complete.
-		if slice.Status != StatusCompleted && slice.Status != StatusSkipped {
+		if slice.Status != StatusCompleted && slice.Status != StatusSkipped && !auditedRepairSuperseded(detail, &slice) {
 			return false
 		}
 	}

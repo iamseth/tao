@@ -9,7 +9,9 @@ import (
 // plan detail. Its typed methods mutate the detail and retain the matching
 // intent until payload preparation; callers cannot supply JSON paths.
 type artifactChangeSet struct {
-	detail *PlanDetail
+	detail             *PlanDetail
+	correctionContract *FinalVerificationContract
+	correctionAudits   []FinalVerificationCorrectionAudit
 
 	clearWorkspaceDependencyFailure     bool
 	clearWorkspaceDependencyFingerprint bool
@@ -249,9 +251,22 @@ func slicesJSONChanges(changes *artifactChangeSet) artifactJSONChanges {
 	return artifactJSONChanges{kind: artifactJSONSlices, changes: changes}
 }
 
+func (c *artifactChangeSet) ReplaceFinalVerificationCorrection(contract FinalVerificationContract, audits []FinalVerificationCorrectionAudit) {
+	c.correctionContract = cloneFinalVerificationContract(&contract)
+	c.correctionAudits = cloneCorrectionAudits(audits)
+	c.detail.State.Plan.FinalVerificationContract = cloneFinalVerificationContract(&contract)
+	c.detail.State.Plan.FinalVerificationCorrections = cloneCorrectionAudits(audits)
+	c.detail.State.Plan.FinalVerification = nil
+}
+
 func (c *artifactChangeSet) applyState(state *State) {
 	if c == nil || state == nil {
 		return
+	}
+	if c.correctionContract != nil {
+		state.Plan.FinalVerificationContract = cloneFinalVerificationContract(c.correctionContract)
+		state.Plan.FinalVerificationCorrections = cloneCorrectionAudits(c.correctionAudits)
+		state.Plan.FinalVerification = nil
 	}
 	if c.clearWorkspaceDependencyFailure || c.clearWorkspaceDependencyFingerprint || c.clearWorkspaceRebaseIntent {
 		if state.Workspace == nil {
@@ -370,6 +385,9 @@ func validatePlanReviewChangeDeclaration(baseline, intended *PlanReview, changes
 	if declared == planReviewReplaced {
 		return nil
 	}
+	if baseline.VerificationContractDigest != "" && intended.VerificationContractDigest == "" {
+		return fmt.Errorf("persist state: PlanReview.VerificationContractDigest changed from non-zero to zero without ReplacePlanReview")
+	}
 	if baseline.Verdict != "" && intended.Verdict == "" {
 		return fmt.Errorf("persist state: PlanReview.Verdict changed from non-zero to zero without ReplacePlanReview")
 	}
@@ -405,6 +423,11 @@ func lowerStateJSONChanges(root map[string]any, changes *artifactChangeSet) erro
 		}
 	}
 	plan := jsonObject(root, "plan")
+	if changes.correctionContract != nil {
+		plan["final_verification"] = nil
+		plan["final_verification_contract"] = changes.correctionContract
+		plan["final_verification_corrections"] = changes.correctionAudits
+	}
 	if changes.clearPlanParking {
 		plan["parking"] = nil
 	}
@@ -467,6 +490,7 @@ func replacementReviewJSON(review PlanReview) (map[string]any, error) {
 	if err := json.Unmarshal(encoded, &object); err != nil {
 		return nil, fmt.Errorf("lower review replacement: %w", err)
 	}
+	object["verification_contract_digest"] = review.VerificationContractDigest
 	object["status"] = review.Status
 	object["verdict"] = review.Verdict
 	object["summary"] = review.Summary

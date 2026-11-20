@@ -4,6 +4,7 @@ import "time"
 
 // Event types identify lifecycle transitions and diagnostics appended to events.jsonl.
 const (
+	EventTypeFinalVerificationCorrected = "final_verification_corrected"
 	EventTypeSliceStarted               = "slice_started"
 	EventTypeSliceCompleted             = "slice_completed"
 	EventTypeSliceBlocked               = "slice_blocked"

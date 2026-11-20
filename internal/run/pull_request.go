@@ -298,6 +298,9 @@ func pullRequestPreflight(run PullRequestRun) (string, string, error) {
 	if run.Detail == nil {
 		return "", "", fmt.Errorf("pull request preflight requires plan detail")
 	}
+	if err := plan.RequireCurrentFinalVerification(run.Detail); err != nil {
+		return "", "", err
+	}
 	review := plan.CurrentReview(run.Detail)
 	if review == nil || !review.IsApproved() {
 		return "", "", fmt.Errorf("pull request preflight requires a current approved review")

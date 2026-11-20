@@ -537,7 +537,7 @@ func representativeScorecard() insights.Scorecard {
 					},
 				},
 				Reliability: insights.ReliabilityOutcomes{
-					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}, {Label: "blocked_lint_test_files", Count: 2}, {Label: "blocked_other", Count: 3}, {Label: "blocked_contract_conflict", Count: 1}, {Label: "blocked_invalid_verification_command", Count: 1}, {Label: "blocked_out_of_scope_gate_failure", Count: 1}, {Label: "blocked_verification_environment", Count: 1}},
+					Infrastructure: []insights.LabelCount{{Label: "session_timeout", Count: 1}, {Label: "blocked_lint_test_files", Count: 2}, {Label: "blocked_other", Count: 3}, {Label: "blocked_contract_conflict", Count: 1}, {Label: "blocked_invalid_verification_command", Count: 1}, {Label: "blocked_out_of_scope_gate_failure", Count: 1}, {Label: "blocked_verification_environment", Count: 1}, {Label: "final_verification_unknown", Count: 1}, {Label: "final_verification_invalid_contract", Count: 1}, {Label: "final_verification_prerequisite_missing", Count: 1}},
 					Quality:        []insights.LabelCount{{Label: "verification_failed", Count: 1}},
 				},
 			},
@@ -994,6 +994,7 @@ func TestInsightsMechanicalAmendCollection(t *testing.T) {
 				{Type: "plan_created", PlanID: id, Timestamp: now.AddDate(0, -2, 0), Agent: "pi"},
 				plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypeRunContext, PlanID: id}, "automatic", "run_context"),
 				{Type: plan.EventTypeSliceStarted, PlanID: id},
+				{Type: "final_verification_corrected", PlanID: id, Reason: "private-correction-audit", FailureKind: plan.FinalVerificationFailureKindCode, Result: "failed"},
 				plan.WithInterventionAttribution(plan.Event{Type: plan.EventTypePlanMerged, PlanID: id, Timestamp: now.AddDate(0, -1, 0)}, "automatic", "merge_complete"),
 			} {
 				if err := plan.AppendEvent(detail.Dir, e); err != nil {
@@ -1006,6 +1007,9 @@ func TestInsightsMechanicalAmendCollection(t *testing.T) {
 			}
 			if len(report.Scorecard.Cohorts) != 1 {
 				t.Fatalf("cohorts: %+v", report.Scorecard)
+			}
+			if got := report.Scorecard.Cohorts[0].Outcomes.Reliability.Quality; len(got) != 0 {
+				t.Fatalf("correction created quality failures: %+v", got)
 			}
 			rate := report.Scorecard.Cohorts[0].Outcomes.Quality.Unattended
 			want := 0

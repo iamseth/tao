@@ -142,7 +142,7 @@ func TestScorecardQualityReliabilityAndBounds(t *testing.T) {
 		{Type: "agent_metrics", Metrics: &plan.AgentMetrics{Role: "unrecognized", Status: "failed", OutputTokens: -1, Cost: -1}},
 		{Type: "agent_metrics", Metrics: &plan.AgentMetrics{Role: plan.AgentRolePlanning, Agent: "pi", ProviderID: "provider"}},
 	}
-	for _, kind := range []plan.FinalVerificationFailureKind{"code", "baseline", "tool_missing", "timeout", "cancelled", "invalid_command"} {
+	for _, kind := range []plan.FinalVerificationFailureKind{"code", "baseline", "tool_missing", "timeout", "cancelled", "invalid_command", "unknown", "invalid_contract", "prerequisite_missing"} {
 		events = append(events, plan.Event{Type: "final_verification", Result: "failed", FailureKind: kind}, plan.Event{Type: "final_verification", Result: "passed", FailureKind: kind})
 	}
 	findings := []plan.ReviewFinding{{Severity: "HIGH"}, {Severity: "high"}}
@@ -167,7 +167,7 @@ func TestScorecardQualityReliabilityAndBounds(t *testing.T) {
 	if len(got.severities) != 16 || got.severities["high"] != 2 || got.severities["other"] != 16 {
 		t.Fatalf("severities = %+v", got.severities)
 	}
-	wantReliability := map[string]int{"blocked_unreachable_service": 1, "session_timeout": 1, "slice_resume_failed": 1, "verification_command_invalid": 1, "budget_exceeded": 1, "finalization_head_drift": 1, "provider_failure": 1, "changes_requested": 1, "final_verification_code": 1, "final_verification_baseline": 1, "final_verification_tool_missing": 1, "final_verification_timeout": 1, "final_verification_cancelled": 1, "final_verification_invalid_command": 1}
+	wantReliability := map[string]int{"blocked_unreachable_service": 1, "session_timeout": 1, "slice_resume_failed": 1, "verification_command_invalid": 1, "budget_exceeded": 1, "finalization_head_drift": 1, "provider_failure": 1, "changes_requested": 1, "final_verification_code": 1, "final_verification_baseline": 1, "final_verification_tool_missing": 1, "final_verification_timeout": 1, "final_verification_cancelled": 1, "final_verification_invalid_command": 1, "final_verification_unknown": 1, "final_verification_invalid_contract": 1, "final_verification_prerequisite_missing": 1}
 	if !reflect.DeepEqual(got.reliability, wantReliability) {
 		t.Fatalf("reliability = %+v", got.reliability)
 	}
@@ -404,6 +404,8 @@ func TestStructuredBlockerReliability(t *testing.T) {
 	}
 	consumeEvent(&data, plan.Event{Type: "plan_created", BlockerCategory: "contract_conflict"}, 5)
 	consumeEvent(&data, plan.Event{Type: "final_verification", Result: "failed", FailureKind: plan.FinalVerificationFailureKindCode}, 6)
+	// Correction is audit-only: it neither adds quality failures nor erases the old one.
+	consumeEvent(&data, plan.Event{Type: "final_verification_corrected", Result: "failed", FailureKind: plan.FinalVerificationFailureKindCode}, 7)
 	observation := observePlan(sourceIdentity{}, plan.PlanSummary{}, data, time.Now())
 	observation.treatment = NormalizePlannerLabel("pi")
 	observation.matured = true
@@ -416,13 +418,16 @@ func TestStructuredBlockerReliability(t *testing.T) {
 
 func TestBaselineFailureCountsAsInfrastructure(t *testing.T) {
 	data := planData{sessions: make(map[string][]plan.AgentMetricEvent)}
-	consumeEvent(&data, plan.Event{Type: "final_verification", Result: "failed", FailureKind: plan.FinalVerificationFailureKindBaseline}, 1)
+	for i, kind := range []plan.FinalVerificationFailureKind{plan.FinalVerificationFailureKindBaseline, plan.FinalVerificationFailureKindUnknown, plan.FinalVerificationFailureKindInvalidContract, plan.FinalVerificationFailureKindPrerequisiteMissing} {
+		consumeEvent(&data, plan.Event{Type: "final_verification", Result: "failed", FailureKind: kind}, i+1)
+	}
+	consumeEvent(&data, plan.Event{Type: "final_verification_corrected", Result: "failed", FailureKind: plan.FinalVerificationFailureKindCode}, 9)
 	observation := observePlan(sourceIdentity{}, plan.PlanSummary{Status: plan.StatusInProgress}, data, time.Now())
 	observation.treatment = NormalizePlannerLabel("pi")
 	observation.matured = true
 	scorecard := buildScorecard([]planObservation{observation})
 	reliability := scorecard.Cohorts[0].Outcomes.Reliability
-	if !reflect.DeepEqual(reliability.Infrastructure, []LabelCount{{Label: "final_verification_baseline", Count: 1}}) || len(reliability.Quality) != 0 {
+	if !reflect.DeepEqual(reliability.Infrastructure, []LabelCount{{Label: "final_verification_baseline", Count: 1}, {Label: "final_verification_invalid_contract", Count: 1}, {Label: "final_verification_prerequisite_missing", Count: 1}, {Label: "final_verification_unknown", Count: 1}}) || len(reliability.Quality) != 0 {
 		t.Fatalf("reliability = %+v", reliability)
 	}
 }

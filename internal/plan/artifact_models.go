@@ -28,6 +28,8 @@ type Execution struct {
 
 // Slice is one independently reviewable unit of agent work.
 type Slice struct {
+	VerificationSupersession *FinalVerificationSupersession `json:"verification_supersession,omitempty"`
+
 	ID                  string                     `json:"id"`
 	Title               string                     `json:"title"`
 	Status              string                     `json:"status"`

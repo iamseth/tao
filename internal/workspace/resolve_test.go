@@ -303,6 +303,11 @@ func TestManagedWorktreeRecoveryCommandRoutesFinalVerificationByClassification(t
 		{name: "cancelled", kind: plan.FinalVerificationFailureKindCancelled, wantInstruction: "Resolve the repository verification cancellation"},
 		{name: "invalid command", kind: plan.FinalVerificationFailureKindInvalidCommand, wantInstruction: "Correct the repository verification command"},
 		{name: "legacy unclassified", wantCommand: "tao run --reverify plan-a"},
+		{name: "awaiting contract", wantCommand: "tao run --reverify plan-a"},
+		{name: "corrected awaiting contract", wantCommand: "tao run --reverify plan-a"},
+		{name: "unknown", kind: plan.FinalVerificationFailureKindUnknown, wantInstruction: "tao edit final-verification"},
+		{name: "invalid contract", kind: plan.FinalVerificationFailureKindInvalidContract, wantInstruction: "tao edit final-verification"},
+		{name: "prerequisite missing", kind: plan.FinalVerificationFailureKindPrerequisiteMissing, wantInstruction: "Diagnose"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -312,6 +317,13 @@ func TestManagedWorktreeRecoveryCommandRoutesFinalVerificationByClassification(t
 				Command: "make verify", HeadSHA: "head-a", Result: "failed", FailureKind: test.kind, Fingerprint: "failure-a",
 			}
 
+			if strings.Contains(test.name, "awaiting contract") {
+				if test.name == "corrected awaiting contract" {
+					detail.State.Plan.FinalVerificationCorrections = []plan.FinalVerificationCorrectionAudit{{NewContract: plan.FinalVerificationContract{Revision: 2}}}
+				}
+				detail.State.Plan.FinalVerification = nil
+				detail.State.Plan.FinalVerificationContract = &plan.FinalVerificationContract{Revision: 1, Command: "true", CWD: ".", Purpose: "test", Coverage: []string{"test"}, Provenance: "owner"}
+			}
 			command, instruction := managedWorktreeRecoveryCommand(detail)
 			if command != test.wantCommand || !strings.Contains(instruction, test.wantInstruction) {
 				t.Fatalf("managedWorktreeRecoveryCommand() = command %q instruction %q", command, instruction)

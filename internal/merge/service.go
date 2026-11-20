@@ -1122,7 +1122,7 @@ func (s Service) tryRecordExternalMerge(ctx context.Context, git GitClient, deta
 	if err := s.requireReworkSinceRecordedMerge(ctx, git, detail, options); err != nil {
 		return false, err
 	}
-	if !options.Force {
+	if !options.Force || detail.State.Plan.FinalVerificationContract != nil {
 		if err := requireApproved(detail); err != nil {
 			return false, err
 		}
@@ -1622,7 +1622,7 @@ func (s Service) CheckPreMergeGate(ctx context.Context, detail *plan.PlanDetail,
 	if err := plan.RequireNotAbandoned(detail); err != nil {
 		return err
 	}
-	if options.Force {
+	if options.Force && detail.State.Plan.FinalVerificationContract == nil {
 		return nil
 	}
 	if err := requireApproved(detail); err != nil {
@@ -1860,6 +1860,9 @@ func mergePlanWorktreeIdentity(detail *plan.PlanDetail) workspace.PlanWorktreeId
 }
 
 func requireApproved(detail *plan.PlanDetail) error {
+	if err := plan.RequireCurrentFinalVerification(detail); err != nil {
+		return &NotApprovedError{PlanID: detail.State.Plan.ID, Reason: err.Error()}
+	}
 	derived := plan.AnalyzeRunCapabilities(detail)
 	planID := detail.State.Plan.ID
 	if !derived.Complete {
