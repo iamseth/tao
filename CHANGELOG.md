@@ -9,6 +9,18 @@ stable release.
 
 ## [Unreleased]
 
+### Week of 2026-11-16
+
+#### Added
+- You can define a revisioned final-verification contract so automatic repair is based on reproducible comparison evidence, not unexplained failures. Use `tao edit final-verification` to preview or confirm a correction; corrections invalidate stale verification and review authority.
+- You can configure repository-scoped `commit_secret_path_allow_prefixes` to let legitimate paths pass specific secret-path heuristics during commits. Credential checks and other commit safety rules still apply.
+
+#### Changed
+- Unattended note-run drivers can distinguish an ordinary merge handoff with exit code `7`. It is advisory only; normal merge safeguards still apply.
+
+#### Fixed
+- Validation now suggests coupled-file amendments only for pending or blocked slices, so proposed fixes are actionable.
+
 ### Week of 2026-11-09
 
 #### Added
