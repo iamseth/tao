@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/monitor"
 	"github.com/iamseth/tao/internal/monitor/rowlabel"
 	"github.com/iamseth/tao/internal/plan"
@@ -130,6 +131,9 @@ func (a App) newMonitorCollectorWithHistory(showInvalid bool, completedWindow ti
 		return nil, errors.New("monitor repository inventory is unavailable")
 	}
 	collector := monitor.NewCollector(inventory)
+	collector.SingleMergeRecoveryInspector = func(ctx context.Context, root string, detail *plan.PlanDetail) (plan.SingleMergeIntentRecovery, error) {
+		return mergepkg.NewService(root, a.mergeRunner()).InspectSingleMergeIntentRecovery(ctx, detail)
+	}
 	collector.Now = a.now
 	collector.ShowInvalid = showInvalid
 	collector.IncludeCompletedWithin = completedWindow

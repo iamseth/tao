@@ -13,6 +13,7 @@
 - This is a Go module (`github.com/iamseth/tao`) targeting Go `1.27.2` in `go.mod`.
 - CLI entrypoint is `cmd/tao/main.go`; command parsing lives in `internal/cli`.
 - Shared monitor row label projection and status roles live in `internal/monitor/rowlabel`; TTY/color detection lives in `internal/term`, and the shared palette and themes live in `internal/theme`.
+- internal/monitor is a presentation-only read model: it must not import internal/merge, internal/run, or internal/agent, and it receives single-merge recovery classification only through Collector.SingleMergeRecoveryInspector, wired by internal/cli.
 - Cross-process plan run locks live in `internal/plan`; the run header view model and renderer live in `internal/runheader`.
 - Plan file loading, validation, summaries, and time formatting live in `internal/plan`.
 - Read-only plan deltas and review-base resolution live in `internal/plandelta`; `internal/tui` owns Changes mirror types, with stateless mapping in `internal/cli`.

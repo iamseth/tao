@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
+	"github.com/iamseth/tao/internal/testenv"
 	"github.com/iamseth/tao/internal/theme"
 )
 
@@ -68,6 +71,91 @@ func (monitorRegistryStub) NotesDir(taodata.Repo) string                  { retu
 func (monitorRegistryStub) PlansDir(taodata.Repo) string                  { return "" }
 func (monitorRegistryStub) PlanningRefusalsDir(taodata.Repo) string       { return "" }
 func (monitorRegistryStub) PlannerRoutesDir(taodata.Repo) string          { return "" }
+
+func TestMonitorCollectorWiresSingleMergeRecoveryInspector(t *testing.T) {
+	app := newTestApp(App{Registry: func() NoteRegistry { return monitorRegistryStub{} }})
+	collector, err := app.newMonitorCollectorWithHistory(false, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concrete, ok := collector.(monitor.Collector)
+	if !ok || concrete.SingleMergeRecoveryInspector == nil {
+		t.Fatalf("production collector has no single-merge inspector: %T", collector)
+	}
+}
+
+func TestMonitorClassifiesSingleMergeRecoveryWithRealGit(t *testing.T) {
+	testenv.SkipIfShort(t)
+	root := initTestGitRepo(t)
+	initRunGit(t, root, "config", "user.name", "Test")
+	initRunGit(t, root, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(root, "initial.txt"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initRunGit(t, root, "add", "initial.txt")
+	initRunGit(t, root, "commit", "-m", "initial")
+	parent := lifecycleGitOutput(t, root, "rev-parse", "HEAD")
+	initRunGit(t, root, "branch", "tao/plan-a")
+	plansDir := t.TempDir()
+	planDir := filepath.Join(plansDir, "plan-a")
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	state := plan.State{
+		Schema: "tao.plan.state.v1", Status: plan.StatusReviewed, CreatedAt: now, UpdatedAt: now,
+		Repo: plan.Repo{Name: "repo", Root: root, Branch: "main", BaseCommit: parent},
+		Plan: plan.PlanState{
+			ID: "plan-a", Title: "Pending merge", CompletedSlices: []string{"001-work"},
+			MergeCommitIntent: &plan.SingleMergeCommitIntent{
+				Message: "feat(merge): apply plan", PlanID: "plan-a", SourceHead: parent,
+				DefaultBranch: "main", DefaultParent: parent, CreatedAt: now,
+			},
+		},
+		Workspace: &plan.Workspace{Strategy: plan.WorkspaceStrategyCurrent, Root: root, Path: root, Branch: "tao/plan-a", BaseBranch: "main"},
+	}
+	slices := plan.SlicesFile{
+		Schema: "tao.plan.slices.v1", PlanID: "plan-a", Execution: plan.Execution{Mode: "serial"},
+		Slices: []plan.Slice{{ID: "001-work", Title: "Work", Status: plan.StatusCompleted}},
+	}
+	for name, value := range map[string]any{"state.json": state, "slices.json": slices} {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(planDir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry := taodata.RepoInventoryEntry{
+		Repo: taodata.Repo{ID: "repo", Name: "repo", Root: root}, PlansDir: plansDir, RuntimeStatusDir: t.TempDir(),
+	}
+	var out bytes.Buffer
+	app := newTestApp(App{
+		Out: &out, Err: &out,
+		Registry:          func() NoteRegistry { return monitorRegistryStub{entries: []taodata.RepoInventoryEntry{entry}} },
+		MonitorIsTerminal: func(io.Writer) bool { return false },
+	})
+	collector, err := app.newMonitorCollectorWithHistory(false, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"SETTLE MERGE", "RESTART MERGE"} {
+		if action == "RESTART MERGE" {
+			initRunGit(t, root, "commit", "--allow-empty", "-m", "advance main")
+		}
+		snapshot, err := collector.Collect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Rows) != 1 || snapshot.Rows[0].PlanID != "plan-a" {
+			t.Fatalf("monitor rows = %+v, want plan-a", snapshot.Rows)
+		}
+		if got := snapshot.Rows[0].NextAction; got != action {
+			t.Fatalf("monitor row action = %q, want %s", got, action)
+		}
+	}
+}
 
 func TestMonitorUsesRegistryRepositoryOutputAndClockSeams(t *testing.T) {
 	now := time.Date(2026, 7, 29, 6, 0, 0, 0, time.UTC)

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	mergepkg "github.com/iamseth/tao/internal/merge"
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
@@ -176,14 +175,17 @@ type Snapshot struct {
 
 // Collector combines metadata inventory, plan summaries, and runtime records.
 type Collector struct {
-	Inventory              RepositoryInventory
-	NewPlanLister          PlanListerFactory
-	NewStatusReader        RuntimeStatusReaderFactory
-	ReadRunLock            RunLockReader
-	Now                    func() time.Time
-	ShowInvalid            bool
-	IncludeCompletedWithin time.Duration
-	IncludeAllCompleted    bool
+	// SingleMergeRecoveryInspector is an injected read-only observation seam.
+	// Nil means no classification; it never grants merge or recovery authority.
+	SingleMergeRecoveryInspector func(ctx context.Context, root string, detail *plan.PlanDetail) (plan.SingleMergeIntentRecovery, error)
+	Inventory                    RepositoryInventory
+	NewPlanLister                PlanListerFactory
+	NewStatusReader              RuntimeStatusReaderFactory
+	ReadRunLock                  RunLockReader
+	Now                          func() time.Time
+	ShowInvalid                  bool
+	IncludeCompletedWithin       time.Duration
+	IncludeAllCompleted          bool
 }
 
 // NewCollector returns a filesystem-backed collector without repository health probes.
@@ -245,7 +247,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 				_, merging = LiveMergeOwnerFor(planDir(entry, summary), summary.ID, entry.Repo.ID, c.runLockReader(), reader, now)
 			}
 			if !merging {
-				summary = observeSingleMergeRecovery(ctx, entry, lister, summary, now)
+				summary = c.observeSingleMergeRecovery(ctx, entry, lister, summary, now)
 			}
 			row := planRow(entry, summary)
 			row.MergeInProgress = merging
@@ -269,7 +271,10 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 	return snapshot, nil
 }
 
-func observeSingleMergeRecovery(ctx context.Context, entry taodata.RepoInventoryEntry, lister PlanLister, summary plan.PlanSummary, now time.Time) plan.PlanSummary {
+func (c Collector) observeSingleMergeRecovery(ctx context.Context, entry taodata.RepoInventoryEntry, lister PlanLister, summary plan.PlanSummary, now time.Time) plan.PlanSummary {
+	if c.SingleMergeRecoveryInspector == nil {
+		return summary
+	}
 	switch summary.NextAction.Primary.Kind {
 	case plan.PlanActionRecoverMerge, plan.PlanActionRebaseAndReview:
 	default:
@@ -289,7 +294,7 @@ func observeSingleMergeRecovery(ctx context.Context, entry taodata.RepoInventory
 	if root == "" {
 		root = strings.TrimSpace(detail.State.Repo.Root)
 	}
-	observation, err := mergepkg.NewService(root, nil).InspectSingleMergeIntentRecovery(ctx, detail)
+	observation, err := c.SingleMergeRecoveryInspector(ctx, root, detail)
 	if err != nil {
 		return summary
 	}

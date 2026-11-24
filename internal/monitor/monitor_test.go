@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -15,8 +15,6 @@ import (
 	"github.com/iamseth/tao/internal/plan"
 	"github.com/iamseth/tao/internal/runstatus"
 	"github.com/iamseth/tao/internal/taodata"
-
-	"github.com/iamseth/tao/internal/testenv"
 )
 
 func TestParkingKeepsTerminalRowsDiscoverable(t *testing.T) {
@@ -183,14 +181,7 @@ func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoun
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runMonitorGit(t, root, "init", "-b", "main")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runMonitorGit(t, root, "add", "README.md")
-	runMonitorGit(t, root, "commit", "-m", "initial")
-	parent := monitorGitOutput(t, root, "rev-parse", "HEAD")
-	runMonitorGit(t, root, "branch", "tao/plan-a", parent)
+	parent := strings.Repeat("a", 40)
 
 	plansDir := filepath.Join(t.TempDir(), "plans")
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -217,7 +208,7 @@ func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoun
 	writeMonitorJSON(t, filepath.Join(planDir, "state.json"), state)
 	writeMonitorJSON(t, filepath.Join(planDir, "slices.json"), slicesFile)
 
-	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo", Root: root}, PlansDir: plansDir}
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo", Root: root + "/entry"}, PlansDir: plansDir}
 	for _, test := range []struct {
 		name        string
 		lock        *plan.RunLock
@@ -240,7 +231,15 @@ func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoun
 			if test.record != nil {
 				reader.records["plan-a"] = *test.record
 			}
+			inspections := 0
 			collector := Collector{
+				SingleMergeRecoveryInspector: func(ctx context.Context, gotRoot string, detail *plan.PlanDetail) (plan.SingleMergeIntentRecovery, error) {
+					inspections++
+					if ctx == nil || gotRoot != entry.Repo.Root || !reflect.DeepEqual(detail.State, state) || !reflect.DeepEqual(detail.Slices, slicesFile) {
+						t.Fatalf("inspector root/detail = %q / %+v", gotRoot, detail)
+					}
+					return plan.SingleMergeIntentRecovery{Verdict: plan.SingleMergeRecoverySettleExisting, Reason: "recorded source and default boundary"}, nil
+				},
 				Inventory:       fakeInventory{entries: []taodata.RepoInventoryEntry{entry}},
 				NewPlanLister:   func(taodata.RepoInventoryEntry) PlanLister { return lister },
 				NewStatusReader: func(taodata.RepoInventoryEntry) RuntimeStatusReader { return reader },
@@ -268,6 +267,9 @@ func TestCollectorWithFileRepositoryRecommendsMergeForExactSingleMergeIntentBoun
 			}
 			if row.NextAction != test.wantAction {
 				t.Errorf("next action = %q, want %q", row.NextAction, test.wantAction)
+			}
+			if inspections != test.wantLoads {
+				t.Errorf("inspector calls = %d, want %d", inspections, test.wantLoads)
 			}
 			if lister.getCalls != test.wantLoads {
 				t.Errorf("GetPlan calls = %d, want %d", lister.getCalls, test.wantLoads)
@@ -389,24 +391,11 @@ func TestCollectorLiveMergeActionKinds(t *testing.T) {
 }
 
 func TestCollectorWithFileRepositoryRecommendsRestartForStaleSingleMergeIntent(t *testing.T) {
-	testenv.SkipIfShort(t)
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runMonitorGit(t, root, "init", "-b", "main")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("initial\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runMonitorGit(t, root, "add", "README.md")
-	runMonitorGit(t, root, "commit", "-m", "initial")
-	parent := monitorGitOutput(t, root, "rev-parse", "HEAD")
-	runMonitorGit(t, root, "branch", "tao/plan-a", parent)
-	if err := os.WriteFile(filepath.Join(root, "default.txt"), []byte("advanced\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runMonitorGit(t, root, "add", "default.txt")
-	runMonitorGit(t, root, "commit", "-m", "advance default")
+	parent := strings.Repeat("a", 40)
 
 	plansDir := filepath.Join(t.TempDir(), "plans")
 	planDir := filepath.Join(plansDir, "plan-a")
@@ -433,9 +422,34 @@ func TestCollectorWithFileRepositoryRecommendsRestartForStaleSingleMergeIntent(t
 	writeMonitorJSON(t, filepath.Join(planDir, "state.json"), state)
 	writeMonitorJSON(t, filepath.Join(planDir, "slices.json"), slicesFile)
 
-	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo", Root: root}, PlansDir: plansDir}
+	entry := taodata.RepoInventoryEntry{Repo: taodata.Repo{ID: "repo-id", Name: "repo"}, PlansDir: plansDir}
 	collector := NewCollector(fakeInventory{entries: []taodata.RepoInventoryEntry{entry}})
 	collector.Now = func() time.Time { return now }
+	lister := &countingMergePlanLister{FileRepository: plan.NewFileRepository(plansDir)}
+	collector.NewPlanLister = func(taodata.RepoInventoryEntry) PlanLister { return lister }
+	uninspected, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lister.getCalls != 0 {
+		t.Fatalf("nil inspector loaded detail %d times", lister.getCalls)
+	}
+	collector.SingleMergeRecoveryInspector = func(context.Context, string, *plan.PlanDetail) (plan.SingleMergeIntentRecovery, error) {
+		return plan.SingleMergeIntentRecovery{Verdict: plan.SingleMergeRecoveryRestartable}, errors.New("inspection unavailable")
+	}
+	failed, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lister.getCalls != 1 || !reflect.DeepEqual(failed, uninspected) {
+		t.Fatalf("inspector error changed snapshot: %+v, want %+v (loads=%d)", failed, uninspected, lister.getCalls)
+	}
+	collector.SingleMergeRecoveryInspector = func(_ context.Context, gotRoot string, detail *plan.PlanDetail) (plan.SingleMergeIntentRecovery, error) {
+		if gotRoot != root || !reflect.DeepEqual(detail.State, state) || !reflect.DeepEqual(detail.Slices, slicesFile) {
+			t.Fatalf("inspector root/detail = %q / %+v", gotRoot, detail)
+		}
+		return plan.SingleMergeIntentRecovery{Verdict: plan.SingleMergeRecoveryRestartable, Reason: "default branch advanced cleanly"}, nil
+	}
 	snapshot, err := collector.Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -453,7 +467,7 @@ func TestCollectorWithFileRepositoryRecommendsRestartForStaleSingleMergeIntent(t
 	event, err := json.Marshal(plan.Event{
 		Type: plan.EventTypeSingleMergeIntentRestarted, Timestamp: now.Add(time.Minute), PlanID: "plan-a",
 		Branch: "tao/plan-a", PriorHead: parent, BaselineBranch: "main",
-		BaselineHead: monitorGitOutput(t, root, "rev-parse", "main"), Message: "Stale single-plan merge intent restarted",
+		BaselineHead: strings.Repeat("b", 40), Message: "Stale single-plan merge intent restarted",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1171,26 +1185,6 @@ func rowsByPlan(rows []Row) map[string]Row {
 		result[row.PlanID] = row
 	}
 	return result
-}
-
-func runMonitorGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // Test arguments are fixed or created within the test.
-	cmd.Dir = dir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
-	}
-}
-
-func monitorGitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // Test arguments are fixed or created within the test.
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
-	}
-	return strings.TrimSpace(string(output))
 }
 
 func writeMonitorJSON(t *testing.T, path string, value any) {
