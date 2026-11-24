@@ -53,12 +53,6 @@ type detailInspectionView struct {
 	err      string
 }
 
-type detailInspectionUpdate struct {
-	key    string
-	result DetailInspection
-	err    error
-}
-
 func boundedDetailInspection(result DetailInspection) DetailInspection {
 	bounded := DetailInspection{Findings: make([]DetailFinding, 0, min(len(result.Findings), detailInspectionMaxFindings))}
 	for _, finding := range result.Findings {

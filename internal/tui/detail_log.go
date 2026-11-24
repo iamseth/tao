@@ -24,6 +24,56 @@ type detailFollowUpdate struct {
 	err  error
 }
 
+func (a App) startDetailLog(state *loopState) {
+	detail := state.detail
+	seed, err := a.Details.ReadLogTail(detail.row.PlanDir, 0)
+	if err != nil {
+		detail.followError = err.Error()
+		return
+	}
+	detail.log = tailDetailLog(seed, detailLogTailLines)
+	detail.sliceLogs, detail.activeLogSlice = projectSliceLogs(seed, detailLogKeepLines)
+	detail.activityOffset = detail.maxOffset(detailTabActivity, state.size)
+	queue := state.ensureUpdates()
+	stream := make(chan detailFollowUpdate, 16)
+	ctx, planDir := detail.ctx, detail.row.PlanDir
+	go followDetailLog(ctx, a.Details, planDir, seed, stream)
+	go forwardDetailLog(ctx, detail, stream, queue)
+}
+
+// Only the private stream closes. Completion needs no state change or frame.
+func forwardDetailLog(ctx context.Context, detail *detailState, stream <-chan detailFollowUpdate, queue chan<- loopUpdate) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update, ok := <-stream:
+			if !ok {
+				return
+			}
+			if !publishLoopUpdate(ctx, queue, func(state *loopState) bool {
+				if ctx.Err() != nil || state.detail != detail {
+					return false
+				}
+				if update.err != nil {
+					detail.followError = update.err.Error()
+				} else {
+					wasFollowing := detail.activityOffset == detail.maxOffset(detailTabActivity, state.size)
+					detail.appendLog(update.text)
+					if wasFollowing {
+						detail.activityOffset = detail.maxOffset(detailTabActivity, state.size)
+					} else {
+						detail.clampOffsets(state.size)
+					}
+				}
+				return true
+			}) {
+				return
+			}
+		}
+	}
+}
+
 func renderActivityPane(log, followError string, width, height, offset int) []string {
 	lines := RenderLogPane(log, 0, int(^uint(0)>>1))
 	if len(lines) == 0 {

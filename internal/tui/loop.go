@@ -119,6 +119,7 @@ type confirmPrompt struct {
 }
 
 type loopState struct {
+	updates          chan loopUpdate
 	trends           trendsState
 	snapshot         monitor.Snapshot
 	noteSnapshot     note.Snapshot
@@ -249,6 +250,7 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		return err
 	}
 
+	state.ensureUpdates()
 	defer state.closeDetail()
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -260,9 +262,8 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 		select {
 		case <-ctx.Done():
 			return nil
-		case update := <-state.trends.updates:
-			state.acceptTrends(update)
-			if err := a.writeFrame(state); err != nil {
+		case update := <-state.updates:
+			if err := a.applyLoopUpdate(&state, update); err != nil {
 				return err
 			}
 		case result := <-input:
@@ -278,54 +279,6 @@ func (a App) Run(ctx context.Context) (resultErr error) {
 				return err
 			}
 			close(result.resume)
-		case update, ok := <-state.detailUpdates():
-			if !ok {
-				state.detail.updates = nil
-				continue
-			}
-			if update.err != nil {
-				state.detail.followError = update.err.Error()
-			} else {
-				wasFollowing := state.detail.activityOffset == state.detail.maxOffset(detailTabActivity, state.size)
-				state.detail.appendLog(update.text)
-				if wasFollowing {
-					state.detail.activityOffset = state.detail.maxOffset(detailTabActivity, state.size)
-				} else {
-					state.detail.clampOffsets(state.size)
-				}
-			}
-			if err := a.writeFrame(state); err != nil {
-				return err
-			}
-		case update := <-state.changesUpdates():
-			a.acceptDetailChanges(&state, update)
-			if err := a.writeFrame(state); err != nil {
-				return err
-			}
-		case update := <-state.fileDiffUpdates():
-			a.acceptDetailFileDiff(&state, update)
-			if err := a.writeFrame(state); err != nil {
-				return err
-			}
-		case update, ok := <-state.inspectionUpdates():
-			if !ok {
-				state.detail.inspectionUpdates = nil
-				continue
-			}
-			if update.key != state.detail.inspectionKey {
-				continue
-			}
-			state.detail.inspectionUpdates = nil
-			if update.err != nil {
-				state.detail.inspection = detailInspectionView{status: detailInspectionFailed, err: cells.Truncate(singleLineDetail(update.err.Error()), detailInspectionMaxText)}
-			} else {
-				result := boundedDetailInspection(update.result)
-				state.detail.inspection = detailInspectionView{status: detailInspectionReady, findings: result.Findings}
-			}
-			state.detail.clampOffsets(state.size)
-			if err := a.writeFrame(state); err != nil {
-				return err
-			}
 		case tick := <-a.Ticker.C():
 			a.refreshTrends(loopCtx, &state)
 			snapshot, err := a.Collector.Collect(ctx)
@@ -735,18 +688,8 @@ func (a App) openDetail(ctx context.Context, state *loopState, row monitor.Row) 
 	}
 	detail.plan = loaded
 	detail.reconcileSliceSelection()
-	a.startDetailInspection(detail)
-	seed, err := a.Details.ReadLogTail(row.PlanDir, 0)
-	if err != nil {
-		detail.followError = err.Error()
-		return
-	}
-	detail.log = tailDetailLog(seed, detailLogTailLines)
-	detail.sliceLogs, detail.activeLogSlice = projectSliceLogs(seed, detailLogKeepLines)
-	detail.activityOffset = detail.maxOffset(detailTabActivity, state.size)
-	updates := make(chan detailFollowUpdate, 16)
-	detail.updates = updates
-	go followDetailLog(detailCtx, a.Details, row.PlanDir, seed, updates)
+	a.startDetailInspection(state)
+	a.startDetailLog(state)
 }
 
 func (a App) movePlanDetail(ctx context.Context, state *loopState, delta int) {
@@ -773,38 +716,6 @@ func (a App) movePlanDetail(ctx context.Context, state *loopState, delta int) {
 	}
 }
 
-func (a App) startDetailInspection(detail *detailState) {
-	key := detailInspectionKey(detail.plan)
-	if key == detail.inspectionKey {
-		return
-	}
-	if detail.inspectionCancel != nil {
-		detail.inspectionCancel()
-		detail.inspectionCancel = nil
-	}
-	detail.inspectionKey = key
-	detail.inspectionUpdates = nil
-	if a.Inspector == nil || detail.plan == nil {
-		detail.inspection = detailInspectionView{status: detailInspectionUnavailable}
-		return
-	}
-	inspectionCtx, cancel := context.WithCancel(detail.ctx)
-	detail.inspectionCancel = cancel
-	detail.inspection = detailInspectionView{status: detailInspectionLoading}
-	updates := make(chan detailInspectionUpdate, 1)
-	detail.inspectionUpdates = updates
-	loaded := detail.plan
-	go func() {
-		result, err := a.Inspector.Inspect(inspectionCtx, loaded)
-		update := detailInspectionUpdate{key: key, result: result, err: err}
-		select {
-		case updates <- update:
-		case <-inspectionCtx.Done():
-		}
-		close(updates)
-	}()
-}
-
 func (a App) reloadDetail(ctx context.Context, state *loopState) {
 	loaded, err := a.Details.ResolvePlan(ctx, state.detail.row.PlanDir)
 	if err != nil {
@@ -813,23 +724,9 @@ func (a App) reloadDetail(ctx context.Context, state *loopState) {
 	}
 	state.detail.plan = loaded
 	state.detail.reconcileSliceSelection()
-	a.startDetailInspection(state.detail)
+	a.startDetailInspection(state)
 	state.detail.clampOffsets(state.size)
 	state.detail.loadError = ""
-}
-
-func (s *loopState) detailUpdates() <-chan detailFollowUpdate {
-	if s.detail == nil {
-		return nil
-	}
-	return s.detail.updates
-}
-
-func (s *loopState) inspectionUpdates() <-chan detailInspectionUpdate {
-	if s.detail == nil {
-		return nil
-	}
-	return s.detail.inspectionUpdates
 }
 
 func (s *loopState) refreshDetailRow() {

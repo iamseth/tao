@@ -16,7 +16,6 @@ type trendsResult struct {
 // trendsState is owned by the input loop; collectors only send immutable results.
 type trendsState struct {
 	model      TrendsModel
-	updates    chan trendsResult
 	generation uint64
 	good       bool
 }
@@ -29,18 +28,16 @@ func (a App) refreshTrends(ctx context.Context, s *loopState) {
 		s.trends.model.Snapshot.Unavailable = "trends collector unavailable"
 		return
 	}
-	if s.trends.updates == nil {
-		s.trends.updates = make(chan trendsResult, 1)
-	}
 	s.trends.generation++
-	generation, updates := s.trends.generation, s.trends.updates
+	generation, updates := s.trends.generation, s.ensureUpdates()
 	s.trends.model.Loading = true
 	go func() {
 		snapshot, err := a.Trends.Collect(ctx)
-		select {
-		case updates <- trendsResult{generation: generation, snapshot: snapshot, err: err}:
-		case <-ctx.Done():
-		}
+		result := trendsResult{generation: generation, snapshot: snapshot, err: err}
+		publishLoopUpdate(ctx, updates, func(s *loopState) bool {
+			s.acceptTrends(result)
+			return true
+		})
 	}()
 }
 

@@ -13,7 +13,7 @@ const detailChangesMinRefresh = time.Second
 // Throttle by delivered ticks, never by collection start or completion latency.
 func (a App) refreshDetailChanges(s *loopState, tick time.Time) {
 	d := s.detail
-	if d == nil || d.activeTab != detailTabChanges || d.sliceOpen || d.snapshotUpdates != nil {
+	if d == nil || d.activeTab != detailTabChanges || d.sliceOpen || d.changesPending {
 		return
 	}
 	if !d.changesTick.IsZero() && tick.Sub(d.changesTick) < detailChangesMinRefresh {
@@ -38,8 +38,8 @@ type fileDiffUpdate struct {
 type changesLoadState struct {
 	changesGeneration, diffGeneration uint64
 	changesCancel, diffCancel         context.CancelFunc
-	snapshotUpdates                   <-chan changesUpdate
-	diffUpdates                       <-chan fileDiffUpdate
+	changesPending                    bool
+	diffPending                       bool
 	selectedPath, requestedScope      string
 	diffError                         string
 	changesForce                      bool
@@ -57,21 +57,9 @@ func (d *detailState) cancelChanges() {
 	}
 	d.changesGeneration++
 	d.diffGeneration++
-	d.snapshotUpdates = nil
-	d.diffUpdates = nil
+	d.changesPending = false
+	d.diffPending = false
 	d.changes.Updating = false
-}
-func (s *loopState) changesUpdates() <-chan changesUpdate {
-	if s.detail == nil {
-		return nil
-	}
-	return s.detail.snapshotUpdates
-}
-func (s *loopState) fileDiffUpdates() <-chan fileDiffUpdate {
-	if s.detail == nil {
-		return nil
-	}
-	return s.detail.diffUpdates
 }
 func (a App) openDetailTab(ctx context.Context, s *loopState, row monitor.Row, tab detailTab) {
 	s.closeDetail()
@@ -99,7 +87,7 @@ func (a App) startDetailChanges(s *loopState) {
 		d.changes.Status = "unavailable"
 		return
 	}
-	if d.snapshotUpdates != nil && !d.changesForce {
+	if d.changesPending && !d.changesForce {
 		return
 	}
 	force := d.changesForce
@@ -111,8 +99,8 @@ func (a App) startDetailChanges(s *loopState) {
 	generation := d.changesGeneration
 	ctx, cancel := context.WithCancel(d.ctx)
 	d.changesCancel = cancel
-	updates := make(chan changesUpdate, 1)
-	d.snapshotUpdates = updates
+	updates := s.ensureUpdates()
+	d.changesPending = true
 	d.changes.Updating = true
 	if d.changes.Status != "ready" {
 		d.changes.Status = "loading"
@@ -124,11 +112,13 @@ func (a App) startDetailChanges(s *loopState) {
 			if recover() != nil {
 				u.err = errors.New("changes loader panicked")
 			}
-			select {
-			case updates <- u:
-			case <-ctx.Done():
-			}
-			close(updates)
+			publishLoopUpdate(ctx, updates, func(s *loopState) bool {
+				if s.detail != d || ctx.Err() != nil || d.changesGeneration != generation {
+					return false
+				}
+				a.acceptDetailChanges(s, u)
+				return true
+			})
 		}()
 		result, err := a.Changes.Snapshot(ctx, loaded, scope)
 		u.err = changesLoadError(err)
@@ -163,7 +153,7 @@ func (a App) startDetailFileDiff(s *loopState, immediate bool) {
 		d.diffCancel()
 	}
 	d.diffGeneration++
-	d.diffUpdates = nil
+	d.diffPending = false
 	files := d.changes.Snapshot.Files
 	if len(files) == 0 {
 		d.selectedPath = ""
@@ -185,8 +175,8 @@ func (a App) startDetailFileDiff(s *loopState, immediate bool) {
 	generation := d.diffGeneration
 	ctx, cancel := context.WithCancel(d.ctx)
 	d.diffCancel = cancel
-	updates := make(chan fileDiffUpdate, 1)
-	d.diffUpdates = updates
+	updates := s.ensureUpdates()
+	d.diffPending = true
 	wait := a.ChangesWait
 	if wait == nil {
 		wait = waitChanges
@@ -197,11 +187,13 @@ func (a App) startDetailFileDiff(s *loopState, immediate bool) {
 			if recover() != nil {
 				u.err = errors.New("diff loader panicked")
 			}
-			select {
-			case updates <- u:
-			case <-ctx.Done():
-			}
-			close(updates)
+			publishLoopUpdate(ctx, updates, func(s *loopState) bool {
+				if s.detail != d || ctx.Err() != nil || d.diffGeneration != generation || d.changes.Snapshot.Signature != u.signature || d.selectedPath != path {
+					return false
+				}
+				a.acceptDetailFileDiff(s, u)
+				return true
+			})
 		}()
 		if !immediate && !wait(ctx, 75*time.Millisecond) {
 			u.err = context.Canceled
@@ -221,7 +213,7 @@ func (a App) acceptDetailChanges(s *loopState, u changesUpdate) {
 	if d == nil || u.generation != d.changesGeneration {
 		return
 	}
-	d.snapshotUpdates = nil
+	d.changesPending = false
 	if d.changesCancel != nil {
 		d.changesCancel()
 		d.changesCancel = nil
@@ -263,7 +255,7 @@ func (a App) acceptDetailChanges(s *loopState, u changesUpdate) {
 	if len(u.snapshot.Files) > 0 {
 		path = u.snapshot.Files[d.changes.FileIndex].Path
 	}
-	if u.force || oldSignature != u.snapshot.Signature || path != d.selectedPath || ((d.changes.DiffStatus != "ready" || d.changes.Diff.Path != path) && d.diffUpdates == nil) {
+	if u.force || oldSignature != u.snapshot.Signature || path != d.selectedPath || ((d.changes.DiffStatus != "ready" || d.changes.Diff.Path != path) && !d.diffPending) {
 		a.startDetailFileDiff(s, u.force)
 	}
 }
@@ -272,7 +264,7 @@ func (a App) acceptDetailFileDiff(s *loopState, u fileDiffUpdate) {
 	if d == nil || u.generation != d.diffGeneration || u.signature != d.changes.Snapshot.Signature || u.path != d.selectedPath {
 		return
 	}
-	d.diffUpdates = nil
+	d.diffPending = false
 	if d.diffCancel != nil {
 		d.diffCancel()
 		d.diffCancel = nil

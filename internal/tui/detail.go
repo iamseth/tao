@@ -88,28 +88,27 @@ func (m DetailModel) Palette() theme.Palette {
 
 type detailState struct {
 	changesLoadState
-	changes           DetailChangesModel
-	row               monitor.Row
-	plan              *plan.PlanDetail
-	selectedSliceID   string
-	sliceOpen         bool
-	activeTab         detailTab
-	overviewOffset    int
-	activityOffset    int
-	sliceOffset       int
-	log               string
-	sliceLogs         map[string]string
-	activeLogSlice    string
-	loadError         string
-	followError       string
-	scopeExpanded     bool
-	updates           <-chan detailFollowUpdate
-	inspection        detailInspectionView
-	inspectionKey     string
-	inspectionUpdates <-chan detailInspectionUpdate
-	inspectionCancel  context.CancelFunc
-	ctx               context.Context
-	cancel            context.CancelFunc
+	changes              DetailChangesModel
+	row                  monitor.Row
+	plan                 *plan.PlanDetail
+	selectedSliceID      string
+	sliceOpen            bool
+	activeTab            detailTab
+	overviewOffset       int
+	activityOffset       int
+	sliceOffset          int
+	log                  string
+	sliceLogs            map[string]string
+	activeLogSlice       string
+	loadError            string
+	followError          string
+	scopeExpanded        bool
+	inspection           detailInspectionView
+	inspectionKey        string
+	inspectionGeneration uint64
+	inspectionCancel     context.CancelFunc
+	ctx                  context.Context
+	cancel               context.CancelFunc
 }
 
 // RenderDetail builds one complete detail-page frame without writing it.

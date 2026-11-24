@@ -94,35 +94,36 @@ func TestChangesVisibleTickFloor(t *testing.T) {
 	tick := time.Unix(100, 0)
 	a.refreshDetailChanges(&s, tick)
 	receiveChanges(t, starts)
-	first := s.changesUpdates()
+	first := s.detail.changesGeneration
 	a.refreshDetailChanges(&s, tick.Add(1500*time.Millisecond))
-	if s.changesUpdates() != first {
+	if !s.detail.changesPending || s.detail.changesGeneration != first {
 		t.Fatal("in-flight request replaced")
 	}
 	release <- struct{}{}
-	a.acceptDetailChanges(&s, receiveChanges(t, first))
+	receiveLoopUpdate(t, &s)
 	// Delivered tick time, not completion time or the skipped in-flight tick.
 	a.refreshDetailChanges(&s, tick.Add(2*time.Second))
 	receiveChanges(t, starts)
 	release <- struct{}{}
-	a.acceptDetailChanges(&s, receiveChanges(t, s.changesUpdates()))
+	receiveLoopUpdate(t, &s)
 	a.refreshDetailChanges(&s, tick.Add(2500*time.Millisecond))
-	if s.changesUpdates() != nil {
+	if s.detail.changesPending {
 		t.Fatal("within-floor tick loaded")
 	}
 	a.handleChangesKey(&s, term.KeyEvent{Key: term.KeyRune, Rune: 'u'})
 	old := receiveChanges(t, starts)
+	oldGeneration := s.detail.changesGeneration
 	s.detail.changes.Snapshot.Scope = DetailChangesScopeWorktree
 	s.detail.changes.Pinned = true
 	a.handleChangesKey(&s, term.KeyEvent{Key: term.KeyRune, Rune: 'w'})
 	receiveChanges(t, starts)
-	if old.Err() == nil || s.detail.requestedScope != DetailChangesScopeBranch || s.detail.changes.Pinned {
+	if old.Err() == nil || !s.detail.changesPending || s.detail.changesGeneration == oldGeneration || s.detail.requestedScope != DetailChangesScopeBranch || s.detail.changes.Pinned {
 		t.Fatal("scope did not cancel/reset")
 	}
 	s.detail.activeTab = detailTabOverview
 	a.syncDetailChanges(&s)
 	a.refreshDetailChanges(&s, tick.Add(4*time.Second))
-	if s.changesUpdates() != nil {
+	if s.detail.changesPending {
 		t.Fatal("inactive tab loaded")
 	}
 	s.detail = nil
@@ -152,27 +153,29 @@ func TestChangesForceRejectsOldDiffAndReloadsEqualSignature(t *testing.T) {
 	s := loopState{detail: &detailState{ctx: ctx, plan: &plan.PlanDetail{}, activeTab: detailTabChanges, changes: DetailChangesModel{Snapshot: snapshot}}}
 	defer s.detail.cancelChanges()
 	a.startDetailFileDiff(&s, true)
-	old := receiveChanges(t, s.fileDiffUpdates())
+	old := receiveChanges(t, s.updates)
 	a.handleChangesKey(&s, term.KeyEvent{Key: term.KeyRune, Rune: 'u'})
-	a.acceptDetailFileDiff(&s, old)
+	if old(&s) {
+		t.Fatal("stale result requested redraw")
+	}
 	if s.detail.changes.Diff.Path != "" {
 		t.Fatal("force accepted canceled old diff")
 	}
-	a.acceptDetailChanges(&s, receiveChanges(t, s.changesUpdates()))
-	if s.fileDiffUpdates() == nil {
+	receiveLoopUpdate(t, &s)
+	if !s.detail.diffPending {
 		t.Fatal("force failed to reload equal-signature diff")
 	}
-	current := receiveChanges(t, s.fileDiffUpdates())
-	bad := current
+	current := receiveChanges(t, s.updates)
+	bad := fileDiffUpdate{generation: s.detail.diffGeneration, signature: snapshot.Signature, path: "a"}
 	bad.signature = "old"
 	a.acceptDetailFileDiff(&s, bad)
-	bad = current
+	bad.signature = snapshot.Signature
 	bad.path = "other"
 	a.acceptDetailFileDiff(&s, bad)
 	if s.detail.changes.Diff.Path != "" {
 		t.Fatal("signature/path guard failed")
 	}
-	a.acceptDetailFileDiff(&s, current)
+	current(&s)
 	if s.detail.changes.Diff.Path != "a" {
 		t.Fatal("current diff rejected")
 	}
@@ -223,7 +226,7 @@ func TestChangesRefreshMetadataAndSelection(t *testing.T) {
 	snapshot.Warnings = []string{"new warning"}
 	a.acceptDetailChanges(&s, changesUpdate{snapshot: snapshot})
 	m := s.detail.changes
-	if m.FileIndex != 1 || m.DiffOffset != 20 || s.fileDiffUpdates() != nil || m.UpdatedAt != snapshot.CollectedAt {
+	if m.FileIndex != 1 || m.DiffOffset != 20 || s.detail.diffPending || m.UpdatedAt != snapshot.CollectedAt {
 		t.Fatal("equal signature moved reader")
 	}
 	badges := changesBadges(m.Snapshot)
@@ -236,7 +239,7 @@ func TestChangesRefreshMetadataAndSelection(t *testing.T) {
 	s.detail.changes.DiffOffset = s.detail.maxOffset(detailTabChanges, s.size)
 	snapshot.Review.Superseded = true
 	a.acceptDetailChanges(&s, changesUpdate{snapshot: snapshot})
-	if !s.detail.changes.Pinned || !strings.Contains(changesBadges(s.detail.changes.Snapshot), "review superseded") || s.fileDiffUpdates() != nil {
+	if !s.detail.changes.Pinned || !strings.Contains(changesBadges(s.detail.changes.Snapshot), "review superseded") || s.detail.diffPending {
 		t.Fatal("equal signature lost pin or reopen metadata")
 	}
 	s.detail.changes.Pinned = false
@@ -250,22 +253,24 @@ func TestChangesRefreshMetadataAndSelection(t *testing.T) {
 	if got := changesDiffRow(s.detail.changes, 0, 80, theme.Palette{}); strings.Contains(got, "Loading") {
 		t.Fatal("stale diff replaced by placeholder")
 	}
-	old := receiveChanges(t, s.fileDiffUpdates())
+	old := receiveChanges(t, s.updates)
 	snapshot.Signature = "removed"
 	snapshot.Files = []DetailChangedFile{{Path: "a"}}
 	a.acceptDetailChanges(&s, changesUpdate{snapshot: snapshot})
-	a.acceptDetailFileDiff(&s, old)
+	if old(&s) || !s.detail.diffPending {
+		t.Fatal("old selection settled replacement")
+	}
 	if s.detail.selectedPath != "a" || s.detail.changes.Diff.Path != "" || s.detail.changes.DiffOffset != 0 {
 		t.Fatal("removed file retained stale content")
 	}
-	a.acceptDetailFileDiff(&s, receiveChanges(t, s.fileDiffUpdates()))
+	receiveLoopUpdate(t, &s)
 	// A present status without a present diff must not suppress a missing load.
 	s.detail.changes.Diff = DetailFileDiff{}
 	a.acceptDetailChanges(&s, changesUpdate{snapshot: snapshot})
-	if s.fileDiffUpdates() == nil {
+	if !s.detail.diffPending {
 		t.Fatal("absent diff was not requested")
 	}
-	a.acceptDetailFileDiff(&s, receiveChanges(t, s.fileDiffUpdates()))
+	receiveLoopUpdate(t, &s)
 	s.detail.changes.Pinned = true
 	snapshot.Signature = "empty"
 	snapshot.Files = nil

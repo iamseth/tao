@@ -75,11 +75,8 @@ func TestTrendsLoaderRefreshAfterSuccess(t *testing.T) {
 	defer cancel()
 	for range 2 {
 		a.refreshTrends(ctx, &s)
-		select {
-		case result := <-s.trends.updates:
-			s.acceptTrends(result)
-		case <-time.After(time.Second):
-			t.Fatal("missing refresh")
+		if !receiveLoopUpdate(t, &s) {
+			t.Fatal("trends update did not request redraw")
 		}
 		if s.trends.model.Loading || !s.trends.good || s.trends.model.Snapshot.RepositoryName != "fixture" {
 			t.Fatal("refresh did not settle")
@@ -87,6 +84,22 @@ func TestTrendsLoaderRefreshAfterSuccess(t *testing.T) {
 	}
 	if s.trends.generation != 2 {
 		t.Fatal("refresh not restarted")
+	}
+}
+
+func TestTrendsQueuedResultRejectsOldGeneration(t *testing.T) {
+	c := &blockingTrendsCollector{started: make(chan struct{}, 1), release: make(chan struct{}), canceled: make(chan struct{})}
+	close(c.release)
+	s := loopState{page: PageTrends}
+	(App{Trends: c}).refreshTrends(context.Background(), &s)
+	awaitTrends(t, c.started)
+	// Invalidate on the loop before applying the immutable worker result.
+	s.trends.generation++
+	if !receiveLoopUpdate(t, &s) {
+		t.Fatal("discarded trends results must preserve the existing redraw decision")
+	}
+	if !s.trends.model.Loading || s.trends.good || s.trends.model.Snapshot.RepositoryName != "" {
+		t.Fatal("old queued result mutated current trends")
 	}
 }
 

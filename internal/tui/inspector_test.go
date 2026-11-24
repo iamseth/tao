@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ type recordingInspector struct {
 	started  chan struct{}
 	canceled chan struct{}
 	block    bool
+	release  <-chan struct{}
 }
 
 func (i *recordingInspector) Inspect(ctx context.Context, _ *plan.PlanDetail) (DetailInspection, error) {
@@ -32,7 +34,11 @@ func (i *recordingInspector) Inspect(ctx context.Context, _ *plan.PlanDetail) (D
 		}
 	}
 	if i.block {
-		<-ctx.Done()
+		select {
+		case <-i.release:
+			return DetailInspection{}, nil
+		case <-ctx.Done():
+		}
 		if i.canceled != nil {
 			select {
 			case i.canceled <- struct{}{}:
@@ -99,6 +105,107 @@ func TestDetailInspectionStartsAfterLoadCancelsOnCloseAndSkipsUnchangedReload(t 
 	case <-inspector.canceled:
 	case <-time.After(30 * time.Second):
 		t.Fatal("closing detail did not cancel inspection")
+	}
+}
+
+type resultInspector struct{ err error }
+
+func (i resultInspector) Inspect(context.Context, *plan.PlanDetail) (DetailInspection, error) {
+	return DetailInspection{Findings: []DetailFinding{{Message: "ready"}}}, i.err
+}
+
+func TestInspectionQueuedSettlement(t *testing.T) {
+	for _, failure := range []error{nil, errors.New("bad\ninspection\x1b")} {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		s := loopState{detail: &detailState{ctx: ctx, plan: &plan.PlanDetail{}}}
+		app := App{Inspector: resultInspector{err: failure}}
+		app.startDetailInspection(&s)
+		if !receiveLoopUpdate(t, &s) {
+			t.Fatal("current result did not redraw")
+		}
+		want := detailInspectionReady
+		if failure != nil {
+			want = detailInspectionFailed
+		}
+		if s.detail.inspection.status != want || s.detail.inspectionCancel != nil {
+			t.Fatal("request did not settle")
+		}
+		if strings.ContainsAny(s.detail.inspection.err, "\n\x1b") {
+			t.Fatal("unsafe error")
+		}
+		app.startDetailInspection(&s)
+		if len(s.updates) != 0 || s.detail.inspection.status != want {
+			t.Fatal("unchanged reload restarted")
+		}
+	}
+}
+
+func TestInspectionSaturatedCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inspector := &recordingInspector{block: true, started: make(chan struct{}, 1), canceled: make(chan struct{}, 1)}
+	s := loopState{detail: &detailState{ctx: ctx, plan: &plan.PlanDetail{}}}
+	for range cap(s.ensureUpdates()) {
+		s.updates <- func(*loopState) bool { return false }
+	}
+	(App{Inspector: inspector}).startDetailInspection(&s)
+	awaitTrends(t, inspector.started)
+	cancel()
+	awaitTrends(t, inspector.canceled)
+	for range cap(s.updates) {
+		if receiveLoopUpdate(t, &s) {
+			t.Fatal("unexpected redraw")
+		}
+	}
+	if s.detail.inspection.status != detailInspectionLoading {
+		t.Fatal("worker mutated state")
+	}
+}
+
+func TestInspectionQueuedIdentity(t *testing.T) {
+	for _, replacement := range []string{"key", "cycle", "reopen", "cancel", "success"} {
+		t.Run(replacement, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			makeDetail := func(base string) *detailState {
+				return &detailState{ctx: ctx, plan: &plan.PlanDetail{State: plan.State{Repo: plan.Repo{BaseCommit: base}}}}
+			}
+			state := loopState{detail: makeDetail("a")}
+			app := App{Inspector: &recordingInspector{}}
+			app.startDetailInspection(&state)
+			var old loopUpdate
+			select {
+			case old = <-state.ensureUpdates():
+			case <-time.After(time.Second):
+				t.Fatal("missing inspection")
+			}
+			switch replacement {
+			case "key", "cycle":
+				state.detail.plan = makeDetail("b").plan
+				app.startDetailInspection(&state)
+				if replacement == "cycle" {
+					state.detail.plan = makeDetail("a").plan
+					app.startDetailInspection(&state)
+				}
+			case "reopen":
+				state.closeDetail()
+				state.detail = makeDetail("a")
+				app.startDetailInspection(&state)
+			case "cancel":
+				cancel()
+			}
+			before := state.detail.inspection
+			if got := old(&state); got != (replacement == "success") {
+				t.Fatalf("redraw = %v", got)
+			}
+			if replacement != "success" && state.detail.inspection.status != before.status {
+				t.Fatal("obsolete result changed state")
+			}
+			if replacement == "success" && state.detail.inspection.status != detailInspectionReady {
+				t.Fatal("current result not ready")
+			}
+		})
 	}
 }
 

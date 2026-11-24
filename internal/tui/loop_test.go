@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1992,6 +1993,212 @@ func TestRunDispatchPageChangeRefreshesTrends(t *testing.T) {
 	if !strings.Contains(output.String(), "trends collector unavailable") {
 		t.Fatal("page change did not refresh trends")
 	}
+}
+
+func TestApplyLoopUpdateRedrawAndFailure(t *testing.T) {
+	failure := errors.New("update frame failed")
+	output := &dispatchFrameWriter{failAt: 2, err: failure}
+	a := App{Output: output}
+	s := loopState{size: term.Size{Width: 40, Height: 12}}
+	for _, redraw := range []bool{false, true, false, true} {
+		before := output.frames
+		err := a.applyLoopUpdate(&s, func(s *loopState) bool { s.selected++; return redraw })
+		want := before
+		if redraw {
+			want++
+		}
+		if output.frames != want {
+			t.Fatalf("frames=%d want %d", output.frames, want)
+		}
+		if want == 2 {
+			if !errors.Is(err, failure) {
+				t.Fatalf("error=%v", err)
+			}
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.selected != 4 {
+		t.Fatal("update was not applied exactly once")
+	}
+}
+
+func TestRunQueuedTrendsTraffic(t *testing.T) {
+	for _, shutdown := range []string{"quit", "cancel", "frame failure"} {
+		t.Run(shutdown, func(t *testing.T) {
+			c := &blockingTrendsCollector{started: make(chan struct{}, 1), release: make(chan struct{}), canceled: make(chan struct{})}
+			input, keys := io.Pipe()
+			defer func() { _ = input.Close(); _ = keys.Close() }()
+			terminal := &fakeTerminal{size: term.Size{Width: 40, Height: 12}, resizes: make(chan struct{})}
+			ticker := &fakeTicker{channel: make(chan time.Time)}
+			output := &recordingWriter{writes: make(chan string, 64)}
+			failure := errors.New("queued frame failed")
+			writer := &updateFrameWriter{output: output, failure: failure}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- (App{Input: input, Output: writer, Terminal: terminal, Ticker: ticker,
+					Collector: &fakeCollector{snapshots: []monitor.Snapshot{{}}}, Trends: c}).Run(ctx)
+			}()
+			waitForFrame(t, output.writes)
+			if _, err := keys.Write([]byte("\t")); err != nil {
+				t.Fatal(err)
+			}
+			waitForFrame(t, output.writes)
+			awaitTrends(t, c.started)
+			// Frame acknowledgments synchronize acceptance before each new worker.
+			for range 3 {
+				c.release <- struct{}{}
+				waitForFrame(t, output.writes)
+				terminal.setSize(term.Size{Width: 42, Height: 14})
+				terminal.resizes <- struct{}{}
+				waitForFrame(t, output.writes)
+				if _, err := keys.Write([]byte("c")); err != nil {
+					t.Fatal(err)
+				}
+				waitForFrame(t, output.writes)
+				ticker.channel <- time.Now()
+				waitForFrame(t, output.writes)
+				awaitTrends(t, c.started)
+			}
+			switch shutdown {
+			case "quit":
+				if _, err := keys.Write([]byte("q")); err != nil {
+					t.Fatal(err)
+				}
+			case "cancel":
+				cancel()
+			case "frame failure":
+				writer.fail.Store(true)
+				c.release <- struct{}{}
+			}
+			select {
+			case err := <-done:
+				if shutdown == "frame failure" {
+					if !errors.Is(err, failure) {
+						t.Fatalf("error=%v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("loop did not exit")
+			}
+			if shutdown != "frame failure" {
+				awaitTrends(t, c.canceled)
+			}
+			if _, restored := terminal.state(); !restored || !ticker.wasStopped() {
+				t.Fatal("terminal/ticker not restored")
+			}
+		})
+	}
+}
+
+func TestInspectionFrameDecisions(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	output := &dispatchFrameWriter{}
+	app := App{Output: output, Inspector: resultInspector{}}
+	s := loopState{size: term.Size{Width: 40, Height: 12}, detail: &detailState{ctx: ctx, plan: &plan.PlanDetail{}}}
+	app.startDetailInspection(&s)
+	// Route the real feature closure through the central frame decision.
+	var update loopUpdate
+	select {
+	case update = <-s.ensureUpdates():
+	case <-time.After(time.Second):
+		t.Fatal("missing inspection")
+	}
+	if err := app.applyLoopUpdate(&s, update); err != nil {
+		t.Fatal(err)
+	}
+	if output.frames != 1 {
+		t.Fatal("current inspection did not write one frame")
+	}
+	if err := app.applyLoopUpdate(&s, update); err != nil {
+		t.Fatal(err)
+	}
+	s.detail = nil
+	if err := app.applyLoopUpdate(&s, update); err != nil {
+		t.Fatal(err)
+	}
+	if output.frames != 1 {
+		t.Fatal("settled/obsolete inspection wrote a frame")
+	}
+}
+
+func TestRunInspectionTraffic(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			release := make(chan struct{})
+			inspector := &recordingInspector{block: true, release: release, started: make(chan struct{}, 1), canceled: make(chan struct{}, 1)}
+			input, keys := io.Pipe()
+			defer func() { _ = input.Close(); _ = keys.Close() }()
+			terminal := &fakeTerminal{size: term.Size{Width: 80, Height: 20}, resizes: make(chan struct{})}
+			ticker := &fakeTicker{channel: make(chan time.Time)}
+			output := &recordingWriter{writes: make(chan string, 64)}
+			failure := errors.New("inspection frame failed")
+			writer := &updateFrameWriter{output: output, failure: failure}
+			done := make(chan error, 1)
+			go func() {
+				done <- (App{Input: input, Output: writer, Terminal: terminal, Ticker: ticker,
+					Collector: &fakeCollector{snapshots: []monitor.Snapshot{{Rows: []monitor.Row{{PlanID: "a", PlanDir: "/plans/a"}}}}},
+					Details:   &fakeDetailRepository{detail: &plan.PlanDetail{}}, Inspector: inspector}).Run(context.Background())
+			}()
+			waitForFrame(t, output.writes)
+			if _, err := keys.Write([]byte("\r")); err != nil {
+				t.Fatal(err)
+			}
+			waitForFrame(t, output.writes)
+			awaitTrends(t, inspector.started)
+			release <- struct{}{}
+			waitForFrame(t, output.writes) // queued inspection result
+			if _, err := keys.Write([]byte("\x7f")); err != nil {
+				t.Fatal(err)
+			}
+			waitForFrame(t, output.writes)
+			if _, err := keys.Write([]byte("\r")); err != nil {
+				t.Fatal(err)
+			}
+			waitForFrame(t, output.writes)
+			awaitTrends(t, inspector.started)
+			terminal.resizes <- struct{}{}
+			waitForFrame(t, output.writes)
+			if fail {
+				writer.fail.Store(true)
+				terminal.resizes <- struct{}{}
+			} else {
+				if _, err := keys.Write([]byte("q")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case err := <-done:
+				if fail && !errors.Is(err, failure) || !fail && err != nil {
+					t.Fatalf("exit: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("loop did not exit")
+			}
+			awaitTrends(t, inspector.canceled)
+			if _, restored := terminal.state(); !restored || !ticker.wasStopped() {
+				t.Fatal("terminal/ticker not restored")
+			}
+		})
+	}
+}
+
+type updateFrameWriter struct {
+	output  *recordingWriter
+	failure error
+	fail    atomic.Bool
+}
+
+func (w *updateFrameWriter) Write(p []byte) (int, error) {
+	if w.fail.Load() && strings.HasPrefix(string(p), "\x1b[1;1H") {
+		return 0, w.failure
+	}
+	return w.output.Write(p)
 }
 
 func waitForFrame(t *testing.T, writes <-chan string) string {

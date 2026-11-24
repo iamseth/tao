@@ -22,6 +22,113 @@ import (
 	"github.com/iamseth/tao/internal/theme"
 )
 
+func TestDetailLogQueuedUpdates(t *testing.T) {
+	for _, following := range []bool{false, true} {
+		t.Run(fmt.Sprint(following), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			detail := &detailState{ctx: ctx, log: strings.Repeat("seed\n", 40)}
+			s := loopState{detail: detail, size: term.Size{Width: 80, Height: 24}}
+			if following {
+				detail.activityOffset = detail.maxOffset(detailTabActivity, s.size)
+			}
+			stream := make(chan detailFollowUpdate, 3)
+			stream <- detailFollowUpdate{text: "first\n"}
+			stream <- detailFollowUpdate{text: "second\n"}
+			stream <- detailFollowUpdate{err: errors.New("stopped")}
+			close(stream)
+			done := make(chan struct{})
+			queue := s.ensureUpdates()
+			go func() { forwardDetailLog(ctx, detail, stream, queue); close(done) }()
+			for _, suffix := range []string{"first\n", "first\nsecond\n"} {
+				if !receiveLoopUpdate(t, &s) || !strings.HasSuffix(detail.log, suffix) {
+					t.Fatalf("ordered append missing: %q", detail.log)
+				}
+				want := 0
+				if following {
+					want = detail.maxOffset(detailTabActivity, s.size)
+				}
+				if detail.activityOffset != want {
+					t.Fatalf("offset = %d, want %d", detail.activityOffset, want)
+				}
+			}
+			if !receiveLoopUpdate(t, &s) || detail.followError != "stopped" {
+				t.Fatal("error must redraw")
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("forwarder did not terminate")
+			}
+			if len(queue) != 0 {
+				t.Fatal("completion must not enqueue a redraw")
+			}
+		})
+	}
+}
+
+func TestDetailLogQueuedStaleAndCanceled(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		old := &detailState{ctx: ctx}
+		s := loopState{detail: old}
+		stream := make(chan detailFollowUpdate, 1)
+		stream <- detailFollowUpdate{text: "obsolete\n"}
+		close(stream)
+		forwardDetailLog(ctx, old, stream, s.ensureUpdates())
+		if canceled {
+			cancel()
+		} else {
+			s.detail = &detailState{}
+		}
+		if receiveLoopUpdate(t, &s) || old.log != "" || s.detail.log != "" {
+			t.Fatal("abandoned update applied")
+		}
+		cancel()
+	}
+}
+
+func TestDetailLogReopenDiscardsQueuedText(t *testing.T) {
+	app := App{Details: &fakeDetailRepository{detail: &plan.PlanDetail{}, tail: "seed\n"}}
+	state := loopState{}
+	row := monitor.Row{PlanID: "same", PlanDir: "/plans/same"}
+	app.openDetail(context.Background(), &state, row)
+	old := state.detail
+	stream := make(chan detailFollowUpdate, 1)
+	stream <- detailFollowUpdate{text: "old text\n"}
+	close(stream)
+	forwardDetailLog(old.ctx, old, stream, state.ensureUpdates())
+	state.closeDetail()
+	app.openDetail(context.Background(), &state, row)
+	defer state.closeDetail()
+	if receiveLoopUpdate(t, &state) || old.log != "seed\n" || state.detail.log != "seed\n" {
+		t.Fatal("reopening the same plan accepted old text")
+	}
+}
+
+func TestDetailLogForwardCancellation(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		s := loopState{}
+		queue := s.ensureUpdates()
+		stream := make(chan detailFollowUpdate, 1)
+		if full {
+			for range cap(queue) {
+				queue <- func(*loopState) bool { return false }
+			}
+			stream <- detailFollowUpdate{text: "blocked\n"}
+		}
+		done := make(chan struct{})
+		go func() { forwardDetailLog(ctx, &detailState{}, stream, queue); close(done) }()
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("canceled forwarder leaked")
+		}
+	}
+}
+
 func TestDetailRunFeedbackRendering(t *testing.T) {
 	for tab := detailTabOverview; tab < detailTabCount; tab++ {
 		for _, width := range []int{1, 12, 32, 80} {
