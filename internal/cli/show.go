@@ -117,8 +117,17 @@ func renderFinalContractHistory(out io.Writer, detail *plan.PlanDetail) error {
 		}
 	}
 	if f := p.FinalVerification; f != nil {
-		if err := writef(out, "Final verification: %s; failure kind: %s\n  Reason: %s\n", text(f.Result), text(string(f.FailureKind)), text(f.Details)); err != nil {
+		line := "Final verification: " + text(f.Result)
+		if f.FailureKind != "" {
+			line += "; failure kind: " + text(string(f.FailureKind))
+		}
+		if err := writeln(out, line); err != nil {
 			return err
+		}
+		if f.Details != "" {
+			if err := writef(out, "  Reason: %s\n", text(f.Details)); err != nil {
+				return err
+			}
 		}
 		if f.Comparison != nil {
 			if err := writeln(out, "Comparison observations (diagnostic, not proof of environment equivalence):"); err != nil {

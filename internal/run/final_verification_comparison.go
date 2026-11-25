@@ -198,7 +198,7 @@ func (f Finalizer) compareContractFailure(ctx context.Context, detail *plan.Plan
 			failed.Result = finalVerificationFailed
 			failed.FailureKind = plan.FinalVerificationFailureKindUnknown
 			failed.ExitCode = first.ExitCode
-			_ = appender.AppendEvent(detail.Dir, plan.Event{Type: "final_verification_flake", Timestamp: now(f.execution).UTC(), PlanID: detail.State.Plan.ID, Command: c.Command, HeadSHA: v.HeadSHA, Fingerprint: finalVerificationFingerprint(failed), ExitCode: first.ExitCode, FailureKind: failed.FailureKind, Reason: verifyoutput.Reason(v.Details, "same-head retry passed", 1000)})
+			_ = appender.AppendEvent(detail.Dir, plan.Event{Type: plan.EventTypeFinalVerificationFlake, Timestamp: now(f.execution).UTC(), PlanID: detail.State.Plan.ID, Command: c.Command, HeadSHA: v.HeadSHA, Fingerprint: finalVerificationFingerprint(failed), ExitCode: first.ExitCode, FailureKind: failed.FailureKind, Reason: verifyoutput.Reason(v.Details, "same-head retry passed", 1000)})
 		}
 		return
 	}
