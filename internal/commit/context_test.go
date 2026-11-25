@@ -156,9 +156,33 @@ func TestBuildStandaloneContextFingerprintsRawUntrackedBytes(t *testing.T) {
 	}
 }
 
+func TestStandaloneDeletionRejectionReason(t *testing.T) {
+	for _, tt := range []struct {
+		path, diff, reason string
+		exclusions         []string
+		removed            bool
+	}{
+		{path: ".env", removed: true},
+		{path: "packages/secrets/id_rsa", removed: true},
+		{path: "credentials/token.txt", removed: true},
+		{path: ".env", reason: "forbidden credential path"},
+		{path: "packages/secrets/id_rsa", reason: "forbidden credential path"},
+		{path: "credentials/token.txt", reason: "secret-looking path"},
+		{path: "coverage.out", removed: true, reason: "generated artifact"},
+		{path: ".env", removed: true, exclusions: []string{".env"}, reason: "local-only path excluded by .env"},
+		{path: ".env", removed: true, diff: "+-----BEGIN RSA PRIVATE KEY-----", reason: "credential-looking diff content"}, //nolint:gosec // Test marker only, not a private key.
+	} {
+		t.Run(tt.path+tt.reason, func(t *testing.T) {
+			if got := standaloneRejectionReason(tt.path, tt.diff, tt.exclusions, tt.removed); got != tt.reason {
+				t.Fatalf("reason = %q, want %q", got, tt.reason)
+			}
+		})
+	}
+}
+
 func TestStandaloneContextSafetyPolicy(t *testing.T) {
 	policy := SafetyPolicy{AllowPrefixes: []string{"packages/secrets/"}}
-	if got := policy.standaloneRejectionReason("packages/secrets/client.go", "+safe", []string{"packages/secrets/"}); got != "local-only path excluded by packages/secrets/" {
+	if got := policy.standaloneRejectionReason("packages/secrets/client.go", "+safe", []string{"packages/secrets/"}, false); got != "local-only path excluded by packages/secrets/" {
 		t.Fatalf("local exclusion = %q", got)
 	}
 	for _, path := range []string{"packages/secrets/../secret.go", `packages\secrets\..\secret.go`, "/packages/secrets/client.go"} {
@@ -166,7 +190,7 @@ func TestStandaloneContextSafetyPolicy(t *testing.T) {
 			t.Fatalf("malformed path matched: %q", path)
 		}
 	}
-	if got := standaloneRejectionReason("packages/secrets/client.go", "+safe", nil); got != "secret-looking path" {
+	if got := standaloneRejectionReason("packages/secrets/client.go", "+safe", nil, false); got != "secret-looking path" {
 		t.Fatalf("default reason = %q", got)
 	}
 	for _, tt := range []struct{ path, diff, reason string }{

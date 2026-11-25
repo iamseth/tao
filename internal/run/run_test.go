@@ -1111,6 +1111,47 @@ func TestServiceExecuteStartsNextAutomaticSliceAfterMaxSlicesStop(t *testing.T) 
 	}
 }
 
+func TestManualCompletionProvesBoundaryRequiresConsistentLatestEvidence(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*plan.PlanDetail)
+		want   bool
+	}{
+		{"isolated", func(*plan.PlanDetail) {}, true},
+		{"legacy worktree", func(d *plan.PlanDetail) {
+			d.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = plan.WorkspaceStrategyWorktree
+		}, true},
+		{"policy slice", func(d *plan.PlanDetail) { d.Slices.Slices[0].CommitIntent.Policy = "slice" }, false},
+		{"committed", func(d *plan.PlanDetail) { d.Slices.Slices[0].Completion.Outcome = plan.SliceCompletionCommitted }, false},
+		{"mirror mismatch", func(d *plan.PlanDetail) { d.State.Workspace.HeadSHA = "other" }, false},
+		{"intent head mismatch", func(d *plan.PlanDetail) { d.Slices.Slices[0].CommitIntent.StartingHead = "other" }, false},
+		{"intent branch mismatch", func(d *plan.PlanDetail) { d.Slices.Slices[0].CommitIntent.StartingBranch = "other" }, false},
+		{"not latest", func(d *plan.PlanDetail) { d.State.Plan.CompletedSlices = append(d.State.Plan.CompletedSlices, "later") }, false},
+		{"not ready", func(d *plan.PlanDetail) { d.State.Workspace.LifecycleStatus = plan.WorkspaceStatusCleaned }, false},
+		{"current strategy", func(d *plan.PlanDetail) { d.Slices.Slices[0].ExecutionStart.WorkspaceStrategy = "current" }, false},
+		{"missing start", func(d *plan.PlanDetail) { d.Slices.Slices[0].ExecutionStart = nil }, false},
+		{"missing intent", func(d *plan.PlanDetail) { d.Slices.Slices[0].CommitIntent = nil }, false},
+		{"missing completion", func(d *plan.PlanDetail) { d.Slices.Slices[0].Completion = nil }, false},
+		{"not completed", func(d *plan.PlanDetail) { d.Slices.Slices[0].Status = plan.StatusInProgress }, false},
+		{"branch changed", func(d *plan.PlanDetail) { d.State.Workspace.Branch = "other" }, false},
+		{"unchanged head", func(d *plan.PlanDetail) { d.State.Workspace.HeadSHA = "after-manual" }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detail, _ := staleWorkspaceBoundaryDetail(t)
+			slice := &detail.Slices.Slices[0]
+			slice.ExecutionStart.WorkspaceStrategy = "isolated"
+			slice.CommitIntent.Policy = CommitPolicyNone.String()
+			slice.Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}
+			tt.mutate(detail)
+			if got := manualCompletionProvesBoundary(detail, "tao/plan-a", "after-manual"); got != tt.want {
+				t.Fatalf("manualCompletionProvesBoundary() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCompletedAutomaticSliceProvesBoundaryRequiresConsistentLatestEvidence(t *testing.T) {
 	t.Parallel()
 	newDetail := func() *plan.PlanDetail {

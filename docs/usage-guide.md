@@ -1261,7 +1261,10 @@ another direct driver from racing that recovery:
 - **Current checkout or policy `none`:** the work remains manually owned. Inspect
   and verify it, then complete it with `tao slice-complete` and the required
   notes/results inputs, or restore the recorded boundary. Tao does not claim the
-  dirt as a resumed automatic run.
+  dirt as a resumed automatic run. After a policy-`none` completion, a manual
+  commit in the recorded worktree on the same branch is accepted by the next
+  automatic run when the worktree is clean and HEAD descends from the recorded
+  boundary; that run advances the recorded HEAD.
 - **After `commit_intent`:** do not rerun implementation or create a commit by
   hand. Copy and run the exact `tao slice-complete` command printed before the
   diagnostic facts. It uses retained local inputs to recover or settle the exact
@@ -1450,7 +1453,9 @@ only filtered allowed context and a fingerprint. The active agent/model proposes
 `What:` and `Why:` sections; Tao then rechecks the live repository, validates the
 proposal, excludes `.tao/`, suspected secrets, and generated output, stages safe
 paths, appends any trusted evidence, and creates the commit. By default it is
-commit-only: no remote mutation occurs.
+commit-only: no remote mutation occurs. Purely deleting a secret-named path is
+allowed because removal cannot publish its contents, while adding or modifying
+one remains excluded.
 
 **When to use:** for an explicit standalone commit outside a run, or after
 choosing `tao run --commit-policy none`. This command is intentionally fast and

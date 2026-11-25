@@ -151,6 +151,7 @@ func BuildStandaloneContextWithPolicy(ctx context.Context, git ContextGit, repoR
 	staged := standaloneStagedPaths(status, classification.TaoStagedPaths)
 	trackedStage := pathSet(classification.TrackedStagePaths)
 	untrackedStage := pathSet(classification.UntrackedStagePaths)
+	removed := pathSet(classification.RemovedPaths)
 	result := StandaloneContext{Head: head, AllowedPaths: []string{}, RejectedPaths: []RejectedPath{}, ExclusionSources: exclusions.Sources}
 	ambiguousLines := append([]string(nil), classification.AmbiguousLines...)
 	ambiguousLines = append(ambiguousLines, standaloneAmbiguousStatusLines(status)...)
@@ -173,7 +174,7 @@ func BuildStandaloneContextWithPolicy(ctx context.Context, git ContextGit, repoR
 		}
 		reason := pathReason
 		if reason == "" {
-			reason = policy.standaloneRejectionReason(path, diff, exclusions.Patterns)
+			reason = policy.standaloneRejectionReason(path, diff, exclusions.Patterns, removed[path])
 		}
 		if len(diff) > changeDiffLimit {
 			reason = "change exceeds standalone diff safety limit"
@@ -346,11 +347,11 @@ func standaloneAmbiguousStatusLines(status string) []string {
 	return ambiguous
 }
 
-func standaloneRejectionReason(path, diff string, exclusions []string) string {
-	return (SafetyPolicy{}).standaloneRejectionReason(path, diff, exclusions)
+func standaloneRejectionReason(path, diff string, exclusions []string, removed bool) string {
+	return (SafetyPolicy{}).standaloneRejectionReason(path, diff, exclusions, removed)
 }
 
-func (p SafetyPolicy) standaloneRejectionReason(path, diff string, exclusions []string) string {
+func (p SafetyPolicy) standaloneRejectionReason(path, diff string, exclusions []string, removed bool) string {
 	exempt := p.matchedPrefix(path) != ""
 	if exempt {
 		path = strings.ReplaceAll(path, `\`, "/")
@@ -364,10 +365,10 @@ func (p SafetyPolicy) standaloneRejectionReason(path, diff string, exclusions []
 	if standaloneGeneratedPath(path) {
 		return "generated artifact"
 	}
-	if standaloneForbiddenPath(path) {
+	if !removed && standaloneForbiddenPath(path) {
 		return "forbidden credential path"
 	}
-	if secretPathPattern.MatchString(path) && !exempt {
+	if !removed && secretPathPattern.MatchString(path) && !exempt {
 		return "secret-looking path"
 	}
 	added := addedDiffLines(diff)

@@ -358,6 +358,42 @@ func TestStandaloneNoOpNeverPushes(t *testing.T) {
 	}
 }
 
+func TestStandaloneContextSecretDeletion(t *testing.T) {
+	testenv.SkipIfShort(t)
+	for _, shape := range []string{"removed", "recreated", "modified", "untracked"} {
+		t.Run(shape, func(t *testing.T) {
+			root := newStandaloneRepo(t)
+			writeStandaloneFile(t, root, ".env", "PRIVATE=value\n")
+			if shape != "untracked" {
+				runStandaloneGit(t, root, "add", "-f", ".env")
+				runStandaloneGit(t, root, "commit", "-m", "test fixture")
+			}
+			switch shape {
+			case "removed":
+				if err := os.Remove(filepath.Join(root, ".env")); err != nil {
+					t.Fatal(err)
+				}
+			case "recreated":
+				runStandaloneGit(t, root, "rm", ".env")
+				writeStandaloneFile(t, root, ".env", "PRIVATE=recreated\n")
+			case "modified":
+				writeStandaloneFile(t, root, ".env", "PRIVATE=modified\n")
+			}
+			got, err := BuildStandaloneContextWithPolicy(context.Background(), gitops.NewClient(root, nil), root, SafetyPolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if shape == "removed" {
+				if !slices.Equal(got.AllowedPaths, []string{".env"}) || !slices.Equal(got.TrackedStagePaths, []string{".env"}) || len(got.RejectedPaths) != 0 {
+					t.Fatalf("deleted path not allowed for tracked staging: %+v", got)
+				}
+			} else if len(got.AllowedPaths) != 0 || len(got.RejectedPaths) != 1 || got.RejectedPaths[0].Path != ".env" || got.RejectedPaths[0].Reason != "forbidden credential path" {
+				t.Fatalf("unsafe shape not rejected: %+v", got)
+			}
+		})
+	}
+}
+
 func newStandaloneRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

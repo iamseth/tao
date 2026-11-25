@@ -443,8 +443,13 @@ func TestCompleteVerifiedMovedFile(t *testing.T) {
 
 func TestCompleteVerifiedSecretPathPolicy(t *testing.T) {
 	testenv.SkipIfShort(t)
-	for _, path := range []string{"packages/secrets/source.go", "packages/secrets/.env", "outside/secrets.go", "ordinary.go"} {
-		t.Run(path, func(t *testing.T) {
+	for _, name := range []string{"packages/secrets/source.go", "packages/secrets/.env", "outside/secrets.go", "ordinary.go", "deleted secret"} {
+		t.Run(name, func(t *testing.T) {
+			removed := name == "deleted secret"
+			path := name
+			if removed {
+				path = "packages/secrets/.env"
+			}
 			request, root := sliceStagingFixture(t, map[string]string{path: "baseline\n"})
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0o700); err != nil {
 				t.Fatal(err)
@@ -453,9 +458,15 @@ func TestCompleteVerifiedSecretPathPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot := runtimeconfig.ResolveSettings(nil, configtypes.SettingsValues{"commit_secret_path_allow_prefixes": []byte(`["packages/secrets/"]`)}, runtimeconfig.LoadEnv(nil))
+			if removed {
+				if err := os.Remove(filepath.Join(root, path)); err != nil {
+					t.Fatal(err)
+				}
+				snapshot = runtimeconfig.LoadEnv(nil)
+			}
 			service := SliceCompletionService{RuntimeEnv: &snapshot}
 			err := service.Complete(context.Background(), request)
-			allowed := path == "packages/secrets/source.go" || path == "ordinary.go"
+			allowed := removed || path == "packages/secrets/source.go" || path == "ordinary.go"
 			if (err == nil) != allowed {
 				t.Fatalf("completion: %v", err)
 			}

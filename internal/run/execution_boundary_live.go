@@ -343,6 +343,18 @@ func inspectRecordedWorkspaceBeforeAutomaticStart(ctx context.Context, detail *p
 			return fmt.Errorf("migrate stale %s boundary: %w", label, err)
 		}
 		return nil
+	case manualCompletionProvesBoundary(detail, branch, head):
+		if ancestor, err := git.IsAncestor(ctx, workspaceState.HeadSHA, head); err == nil && ancestor {
+			record, err := planMutationRecord(execution, detail)
+			if err != nil {
+				return fmt.Errorf("migrate stale %s boundary: %w", label, err)
+			}
+			if err := record.AdvanceWorkspaceHead(branch, workspaceState.HeadSHA, head); err != nil {
+				return fmt.Errorf("migrate stale %s boundary: %w", label, err)
+			}
+			return nil
+		}
+		fallthrough
 	default:
 		return fmt.Errorf("automatic slice refused before workspace preparation: %s differs from durable workspace metadata: durable branch %q HEAD %s; live branch %q HEAD %s. Run tao workspace status %s, reconcile the worktree manually, then retry", label, workspaceState.Branch, diagnosticSHA(workspaceState.HeadSHA), branch, diagnosticSHA(head), detail.State.Plan.ID)
 	}
@@ -495,6 +507,37 @@ func recordedAutomaticWorktree(workspace *plan.Workspace) bool {
 	default:
 		return false
 	}
+}
+
+// manualCompletionProvesBoundary identifies a manual completion at the mirror.
+// Live cleanliness and descendant proof are required separately before advancing it.
+func manualCompletionProvesBoundary(detail *plan.PlanDetail, branch string, head string) bool {
+	if detail == nil || detail.State.Workspace == nil || branch == "" || head == "" {
+		return false
+	}
+	workspace := detail.State.Workspace
+	if workspace.LifecycleStatus != plan.WorkspaceStatusReady || workspace.Branch != branch ||
+		workspace.HeadSHA == "" || workspace.HeadSHA == head || len(detail.State.Plan.CompletedSlices) == 0 {
+		return false
+	}
+	completedID := detail.State.Plan.CompletedSlices[len(detail.State.Plan.CompletedSlices)-1]
+	for i := range detail.Slices.Slices {
+		slice := &detail.Slices.Slices[i]
+		if slice.ID != completedID {
+			continue
+		}
+		if slice.Status != plan.StatusCompleted || slice.ExecutionStart == nil || slice.CommitIntent == nil || slice.Completion == nil {
+			return false
+		}
+		start, intent := slice.ExecutionStart, slice.CommitIntent
+		return start.Branch == branch && start.Head == workspace.HeadSHA &&
+			(start.WorkspaceStrategy == "" || recordedWorkspaceStrategy(start.WorkspaceStrategy) == plan.WorkspaceStrategyWorktree) &&
+			intent.Policy == CommitPolicyNone.String() &&
+			(intent.StartingBranch == "" || intent.StartingBranch == start.Branch) &&
+			(intent.StartingHead == "" || intent.StartingHead == start.Head) &&
+			slice.Completion.Outcome == plan.SliceCompletionManualUncommitted
+	}
+	return false
 }
 
 // completedAutomaticSliceProvesBoundary recognizes the state shape written by

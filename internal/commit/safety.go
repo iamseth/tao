@@ -15,6 +15,8 @@ import (
 type StatusClassification struct {
 	// CommitCandidates are non-.tao, unambiguous changed paths.
 	CommitCandidates []string
+	// RemovedPaths are candidates whose every porcelain entry is a deletion.
+	RemovedPaths []string
 	// TaoStagedPaths are staged .tao paths that must be excluded from commits.
 	TaoStagedPaths []string
 	// AmbiguousLines are entries that cannot safely be reduced to one path.
@@ -42,6 +44,7 @@ func ClassifyStatus(status string, isStartingDirty func(string) bool) StatusClas
 		classification.AmbiguousLines = []string{status}
 		return classification
 	}
+	removals := make(map[string]bool)
 	for _, entry := range entries {
 		line := entry.Code + " " + entry.Path
 		path := NormalizePath(entry.Path)
@@ -55,6 +58,9 @@ func ClassifyStatus(status string, isStartingDirty func(string) bool) StatusClas
 			classification.StartingDirtyPaths = append(classification.StartingDirtyPaths, path)
 		}
 		classification.CommitCandidates = append(classification.CommitCandidates, path)
+		deletion := entry.Code == "D " || (entry.Code[1] == 'D' && strings.ContainsRune(" MAT", rune(entry.Code[0])))
+		previous, seen := removals[path]
+		removals[path] = deletion && (!seen || previous)
 		switch bucket := stagingBucket(line); bucket {
 		case stagingBucketStagedOnly:
 			classification.StagedOnlyPaths = append(classification.StagedOnlyPaths, path)
@@ -62,6 +68,11 @@ func ClassifyStatus(status string, isStartingDirty func(string) bool) StatusClas
 			classification.TrackedStagePaths = append(classification.TrackedStagePaths, path)
 		case stagingBucketUntracked:
 			classification.UntrackedStagePaths = append(classification.UntrackedStagePaths, path)
+		}
+	}
+	for _, path := range UniquePaths(classification.CommitCandidates) {
+		if removals[path] {
+			classification.RemovedPaths = append(classification.RemovedPaths, path)
 		}
 	}
 	return classification
@@ -304,6 +315,16 @@ func SafetyError(paths, ambiguous []string) error {
 
 // SafetyError preserves ambiguous and generated refusals regardless of exemptions.
 func (p SafetyPolicy) SafetyError(paths, ambiguous []string) error {
+	return p.SafetyErrorExcludingRemovals(paths, nil, ambiguous)
+}
+
+// SafetyErrorExcludingRemovals skips only secret-path heuristics for pure removals.
+// Ambiguous status and generated artifacts remain refusals for every path.
+func (p SafetyPolicy) SafetyErrorExcludingRemovals(paths, removedPaths, ambiguous []string) error {
+	removed := make(map[string]bool, len(removedPaths))
+	for _, path := range removedPaths {
+		removed[NormalizePath(path)] = true
+	}
 	ambiguous = UniqueStrings(ambiguous)
 	var secretPaths []string
 	var generatedPaths []string
@@ -312,7 +333,7 @@ func (p SafetyPolicy) SafetyError(paths, ambiguous []string) error {
 		if p.matchedPrefix(path) != "" {
 			secret = p.SuspectedSecretPath(path)
 		}
-		if secret {
+		if secret && !removed[NormalizePath(path)] {
 			secretPaths = append(secretPaths, path)
 		}
 		if GeneratedPath(NormalizePath(path)) {

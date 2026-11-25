@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,6 +210,71 @@ func TestInspectRecordedWorkspaceDoesNotAdvanceUnsafeOrUnprovenBoundary(t *testi
 			}
 			if factoryCalls != 0 || detail.State.Workspace.HeadSHA != "base" {
 				t.Fatalf("factory calls = %d, workspace = %#v; want no mutation", factoryCalls, detail.State.Workspace)
+			}
+		})
+	}
+}
+
+func TestInspectRecordedWorkspaceAdvancesManualCompletionOnlyForCleanDescendant(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name, branch, status, wantErr string
+		ancestorErr                   error
+		wantAncestry                  int
+	}{
+		{name: "descendant", branch: "tao/plan-a", wantAncestry: 1},
+		{name: "non descendant", branch: "tao/plan-a", ancestorErr: &exec.ExitError{}, wantAncestry: 1, wantErr: "differs from durable workspace metadata"},
+		{name: "ancestry error", branch: "tao/plan-a", ancestorErr: errors.New("git unavailable"), wantAncestry: 1, wantErr: "differs from durable workspace metadata"},
+		{name: "dirty", branch: "tao/plan-a", status: testenv.StatusFixture(" M file.go"), wantErr: "contains unattributed changes"},
+		{name: "protected", branch: "main", wantErr: "unsafe ready workspace branch"},
+		{name: "changed branch", branch: "tao/other", wantErr: "differs from durable workspace metadata"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			detail, root := staleWorkspaceBoundaryDetail(t)
+			detail.Slices.Slices[0].CommitIntent.Policy = CommitPolicyNone.String()
+			detail.Slices.Slices[0].Completion = &plan.SliceCompletionOutcome{Outcome: plan.SliceCompletionManualUncommitted}
+			var calls []string
+			delegate := interruptedServiceGitRunner(t, root, &calls, func() string { return tt.status }, tt.branch, "after-manual")
+			ancestryCalls, factoryCalls := 0, 0
+			runner := func(ctx context.Context, cwd, name string, args []string, stdout, stderr io.Writer) error {
+				if name == "git" && runGitKey(args) == "merge-base --is-ancestor base after-manual" {
+					ancestryCalls++
+					return tt.ancestorErr
+				}
+				return delegate(ctx, cwd, name, args, stdout, stderr)
+			}
+			record := &workspaceBoundaryAdvanceRecord{detail: detail, currentBranch: "tao/plan-a", currentHead: "base"}
+			execution := runExecution{
+				Config: ExecutionConfig{ResolvedRunOptions: ResolvedRunOptions{ExecutionMode: ExecutionModeIsolated, CommitPolicy: CommitPolicySlice}},
+				Dependencies: RunDependencies{CommandRunner: runner, PlanRecordFactory: func(*plan.PlanDetail) (PlanMutationRecord, error) {
+					factoryCalls++
+					return record, nil
+				}},
+			}
+			err := inspectRecordedWorkspaceBeforeAutomaticStart(context.Background(), detail, execution)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want %q", err, tt.wantErr)
+				}
+				if tt.wantErr == "differs from durable workspace metadata" && !strings.Contains(err.Error(), "tao workspace status plan-a") {
+					t.Fatalf("missing recovery guidance: %v", err)
+				}
+				if factoryCalls != 0 || len(record.calls) != 0 || detail.State.Workspace.HeadSHA != "base" {
+					t.Fatal("refusal mutated boundary")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := inspectRecordedWorkspaceBeforeAutomaticStart(context.Background(), detail, execution); err != nil {
+					t.Fatal(err)
+				}
+				if factoryCalls != 1 || len(record.calls) != 1 || record.calls[0] != [3]string{"tao/plan-a", "base", "after-manual"} || detail.State.Workspace.HeadSHA != "after-manual" {
+					t.Fatalf("unexpected advancement: %#v, factory calls %d", record, factoryCalls)
+				}
+			}
+			if ancestryCalls != tt.wantAncestry {
+				t.Fatalf("ancestry calls = %d, want %d", ancestryCalls, tt.wantAncestry)
 			}
 		})
 	}

@@ -625,6 +625,44 @@ func TestSliceCompletionCommitsEnvExampleTemplate(t *testing.T) {
 	}
 }
 
+func TestSliceCompletionRemovesSecretSymlink(t *testing.T) {
+	testenv.SkipIfShort(t)
+	request := verifiedCompletionFixture(t, CommitPolicySlice, "true")
+	detail := request.Record.Detail()
+	root := detail.Slices.Slices[0].ExecutionRoot
+	if err := os.Symlink("missing-target", filepath.Join(root, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	runCommitTestGitCommand(t, root, "add", "-f", ".env")
+	runCommitTestGitCommand(t, root, "commit", "-m", "add baseline symlink")
+	head := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
+	detail.Slices.Slices[0].ExecutionStart.Head = head
+	detail.State.Workspace.HeadSHA = head
+	detail.Dir = t.TempDir()
+	var err error
+	request.Record, err = plan.NewPlanRecord(detail.Dir, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Record.PersistArtifacts(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	if err := (SliceCompletionService{}).Complete(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(runCommitTestGitOutput(t, root, "show", "--format=", "--name-only", "HEAD")); got != ".env" {
+		t.Fatalf("committed paths = %q", got)
+	}
+	for _, event := range reloadVerifiedCompletion(t, request).Detail().Events {
+		if event.Type == "commit_secret_path_exempted" {
+			t.Fatalf("deletion exemption event: %+v", event)
+		}
+	}
+}
+
 func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 	testenv.SkipIfShort(t)
 	t.Parallel()
@@ -632,9 +670,13 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 		name          string
 		path          string
 		tracked       bool
+		removed       bool
+		added         string
 		wantErrorText string
 	}{
 		{name: "suspected secret", path: ".env.local", wantErrorText: "suspected secret path: .env.local"},
+		{name: "deleted generated artifact", path: "coverage.out", tracked: true, removed: true, wantErrorText: "generated artifact path: coverage.out"},
+		{name: "deleted secret with added secret", path: ".env", tracked: true, removed: true, added: ".env.local", wantErrorText: "commit safety checks refused to auto-commit file(s): suspected secret path: .env.local; review and commit manually"},
 		{name: "generated artifact", path: "coverage.out", tracked: true, wantErrorText: "generated artifact path: coverage.out"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -662,8 +704,17 @@ func TestSliceCompletionRefusesUnsafePathsBeforeStagingOrCommit(t *testing.T) {
 			if err := record.PersistArtifacts(); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(root, tc.path), []byte("unsafe completion input\n"), 0o600); err != nil {
+			if tc.removed {
+				if err := os.Remove(filepath.Join(root, tc.path)); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(filepath.Join(root, tc.path), []byte("unsafe completion input\n"), 0o600); err != nil {
 				t.Fatal(err)
+			}
+			if tc.added != "" {
+				if err := os.WriteFile(filepath.Join(root, tc.added), []byte("new secret\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			headBefore := strings.TrimSpace(runCommitTestGitOutput(t, root, "rev-parse", "HEAD"))
 			statusBefore := runCommitTestGitOutput(t, root, "status", "--short")

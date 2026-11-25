@@ -312,7 +312,7 @@ func (s SliceCompletionService) inspectVerifiedCompletion(ctx context.Context, r
 	}
 	if policy == CommitPolicySlice.String() {
 		paths := commitcontract.UniquePaths(classification.CommitCandidates)
-		if err := safety.SafetyError(paths, nil); err != nil {
+		if err := safety.SafetyErrorExcludingRemovals(paths, commitcontract.UniquePaths(classification.RemovedPaths), nil); err != nil {
 			return result, err
 		}
 		s.recordSecretPathExemptions(request, safety, paths, head)

@@ -230,7 +230,7 @@ func (s SliceCompletionService) finishSliceCompletion(ctx context.Context, git g
 	if err != nil {
 		return err
 	}
-	if err := safety.SafetyError(paths, nil); err != nil {
+	if err := safety.SafetyErrorExcludingRemovals(paths, commitcontract.UniquePaths(classification.RemovedPaths), nil); err != nil {
 		return fmt.Errorf("slice commit refused: %w", err)
 	}
 	if err := checkFrozenVerificationWorktree(ctx, git, intent); err != nil {

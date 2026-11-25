@@ -6,6 +6,63 @@ import (
 	"testing"
 )
 
+func TestRemovalSafety(t *testing.T) {
+	for _, tc := range []struct {
+		status  string
+		removed bool
+	}{
+		{"D  deployments/.template/.env\x00", true},
+		{" D config/.env\x00", true},
+		{"MD secrets/token.txt\x00", true},
+		{"AD .env\x00", true},
+		{"TD .env\x00", true},
+		{"A  .env\x00", false},
+		{" M .env\x00", false},
+		{" T .env\x00", false},
+		{"?? .env\x00", false},
+		{"DD .env\x00", false},
+		{"D  .env\x00?? .env\x00", false},
+		{"?? .env\x00D  .env\x00", false},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			got := ClassifyStatus(tc.status, nil)
+			want := UniquePaths(got.CommitCandidates)
+			if !tc.removed {
+				want = nil
+			}
+			if !slices.Equal(got.RemovedPaths, want) {
+				t.Fatalf("removals = %q, want %q", got.RemovedPaths, want)
+			}
+			err := (SafetyPolicy{}).SafetyErrorExcludingRemovals(got.CommitCandidates, got.RemovedPaths, got.AmbiguousLines)
+			if tc.removed {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "suspected secret path") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+	policy := SafetyPolicy{}
+	if err := policy.SafetyErrorExcludingRemovals([]string{".env"}, []string{"./.env"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		paths, removed, ambiguous []string
+		want                      string
+	}{
+		{[]string{"coverage.out"}, []string{"coverage.out"}, nil, "generated artifact path: coverage.out"},
+		{[]string{".env"}, []string{".env"}, []string{"bad status"}, "ambiguous git status entry: bad status"},
+	} {
+		if err := policy.SafetyErrorExcludingRemovals(tc.paths, tc.removed, tc.ambiguous); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("error = %v", err)
+		}
+	}
+	if got := ClassifyStatus("D  .tao/.env\x00", nil); len(got.RemovedPaths) != 0 {
+		t.Fatalf("metadata removals: %+v", got)
+	}
+}
+
 func TestMetadataPathCompatibility(t *testing.T) {
 	for _, path := range []string{".tao", "./.tao/state.json", "sub/../.tao/state.json"} {
 		if !IsTaoMetadataPath(path) {
